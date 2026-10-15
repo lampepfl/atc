@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # atc: install, update and run ATC from the jars published on GitHub releases.
 #
-#   curl -fsSL https://raw.githubusercontent.com/noti0na1/atc/refs/heads/main/atc -o atc
+#   curl -fsSL https://raw.githubusercontent.com/lampepfl/atc/refs/heads/main/atc -o atc
 #   chmod +x atc && ./atc setup      # installs ~/.local/bin/atc, downloads the latest release
 #   atc -C ~/my-project              # runs ATC (any argument that is not a wrapper command)
 #
@@ -9,7 +9,7 @@
 # ./start.sh, which builds and runs the checkout instead of a release.
 set -euo pipefail
 
-OWNER_REPO="noti0na1/atc"
+OWNER_REPO="lampepfl/atc"
 SCRIPT_SOURCE_URL="https://raw.githubusercontent.com/${OWNER_REPO}/refs/heads/main/atc"
 # The jars go beside ATC's own config (~/.atc/config.json, keys.properties), in
 # their own directory so uninstall can remove them without touching those.

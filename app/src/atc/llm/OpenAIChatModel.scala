@@ -9,6 +9,7 @@ import com.openai.models.chat.completions.*
 import com.openai.models.completions.CompletionUsage
 
 import java.util.Locale
+import scala.annotation.nowarn
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
@@ -156,7 +157,8 @@ object OpenAIChatModel:
     if text.nonEmpty then b.content(text) else b.content(absent)
     if turn._refusal().isNull then b.refusal(absent)
     if turn._audio().isNull then b.audio(absent)
-    if turn._functionCall().isNull then b.functionCall(absent)
+    // The SDK deprecates the legacy `function_call` field but still copies it from a response as `null`.
+    (if turn._functionCall().isNull then b.functionCall(absent)): @nowarn("cat=deprecation")
     turn.toolCalls().toScala.foreach: calls =>
       val restored = calls.asScala.toList.zipWithIndex.map: (call, i) =>
         val withExtra =
