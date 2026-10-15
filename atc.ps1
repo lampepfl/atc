@@ -1,6 +1,6 @@
 # atc.ps1: install, update and run ATC on Windows from the files published on GitHub releases.
 #
-#   irm https://raw.githubusercontent.com/noti0na1/atc/refs/heads/main/atc.ps1 -OutFile atc.ps1
+#   irm https://raw.githubusercontent.com/lampepfl/atc/refs/heads/main/atc.ps1 -OutFile atc.ps1
 #   powershell -ExecutionPolicy Bypass -File .\atc.ps1 setup   # installs atc, downloads the latest release
 #   atc -C C:\my-project                                       # runs ATC (any argument that is not a command)
 #
@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $ProgressPreference = 'SilentlyContinue'
 
-$OwnerRepo = 'noti0na1/atc'
+$OwnerRepo = 'lampepfl/atc'
 $ScriptSourceUrl = "https://raw.githubusercontent.com/$OwnerRepo/refs/heads/main/atc.ps1"
 $ReleaseApiUrl = "https://api.github.com/repos/$OwnerRepo/releases/latest"
 $OnWindows = [Environment]::OSVersion.Platform -eq 'Win32NT'

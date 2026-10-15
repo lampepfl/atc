@@ -90,8 +90,8 @@ fake_asset_curl() { # <flags> <url> -o <file>
   cp "$ASSETS_DIR/$(basename "$url")" "$out"
 }
 
-APP_URL="https://github.com/noti0na1/atc/releases/download/v0.2.0/atc.jar"
-LIB_URL="https://github.com/noti0na1/atc/releases/download/v0.2.0/atc-lib.jar"
+APP_URL="https://github.com/lampepfl/atc/releases/download/v0.2.0/atc.jar"
+LIB_URL="https://github.com/lampepfl/atc/releases/download/v0.2.0/atc-lib.jar"
 APP_DIGEST="sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 LIB_DIGEST="sha256:fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"
 

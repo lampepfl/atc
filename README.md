@@ -1,6 +1,6 @@
 # ATC: A Minimal Agent With Tracked Capabilities
 
-[![Scala CI](https://github.com/noti0na1/atc/actions/workflows/scala.yml/badge.svg)](https://github.com/noti0na1/atc/actions/workflows/scala.yml)
+[![Scala CI](https://github.com/lampepfl/atc/actions/workflows/scala.yml/badge.svg)](https://github.com/lampepfl/atc/actions/workflows/scala.yml)
 
 ATC (Agent with Tracked Capabilities) is a terminal coding agent that uses a Scala 3 REPL
 and a capability-typed API for file access, commands, HTTP requests and user interaction.
@@ -96,11 +96,11 @@ access within a block the extra permission cannot escape. You decide in a pop-up
 You need JDK 17 or newer.
 
 **macOS and Linux.** The `atc` wrapper script downloads the jars of the latest
-[GitHub release](https://github.com/noti0na1/atc/releases), checks them against the
+[GitHub release](https://github.com/lampepfl/atc/releases), checks them against the
 digests GitHub records, and runs them:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noti0na1/atc/refs/heads/main/atc -o atc
+curl -fsSL https://raw.githubusercontent.com/lampepfl/atc/refs/heads/main/atc -o atc
 chmod +x atc
 ./atc setup      # installs ~/.local/bin/atc, puts it on PATH, downloads the latest release
 ```
@@ -118,7 +118,7 @@ Windows support is best effort. In PowerShell, with JDK 17+ installed, download 
 same way:
 
 ```powershell
-irm https://raw.githubusercontent.com/noti0na1/atc/refs/heads/main/atc.ps1 -OutFile atc.ps1
+irm https://raw.githubusercontent.com/lampepfl/atc/refs/heads/main/atc.ps1 -OutFile atc.ps1
 powershell -ExecutionPolicy Bypass -File .\atc.ps1 setup   # installs atc in %USERPROFILE%\.atc\bin and puts it on PATH
 ```
 
