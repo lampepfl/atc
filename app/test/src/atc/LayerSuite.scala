@@ -512,6 +512,15 @@ class LayerSuite extends munit.FunSuite:
     val w = World(project = """{ "denyCommands": ["curl*"], "classifiedModel": null, "mode": "readonly" }""")
     assertEquals(ProjectTrust.pending(w.cwd, w.globalPath.getParent.nn), None)
 
+  test("the trust prompt shows every command, host and key it trusts"):
+    val commands = (1 to 25).map(i => s"tool$i").toList
+    val hosts = (1 to 15).map(i => s"h$i.example").toList
+    val w = World(project = ujson.write(ujson.Obj("commands" -> commands, "hosts" -> hosts)))
+    Files.writeString(Config.keysPath(w.cwd), (1 to 14).map(i => s"K$i=v").mkString("\n"))
+    val rows = ProjectTrust.pending(w.cwd, w.globalPath.getParent.nn).get.grants.describe.mkString("\n")
+    for entry <- commands ++ hosts ++ (1 to 14).map(i => s"K$i") do assert(rows.contains(entry), entry)
+    assert(!rows.contains("more"), rows)
+
   // ── order and sources ───────────────────────────────────────────
 
   test("layers are reported in order, and a path named twice is read once"):

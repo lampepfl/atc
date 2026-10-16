@@ -646,8 +646,8 @@ A project layer's `commands`, `hosts` and `classifiedModel`, and its `keys.prope
 reach beyond its own files, and a cloned repository can ship them. `ProjectTrust` records a
 SHA-256 fingerprint of exactly these per project root in `~/.atc/trusted-projects.json`
 (owner-only); `Config.load` leaves them out while the fingerprint is not recorded, so every
-reload agrees with the decision. `Setup.load` shows what they grant, escaped like permission
-details, and offers Trust, Run without these grants, or Quit; it says whether the config is
+reload agrees with the decision. `Setup.load` shows every entry they grant, escaped like
+permission details, and offers Trust, Run without these grants, or Quit; it says whether the config is
 new or has changed since it was trusted. A `-p` run warns and goes without them unless
 `--approve-all` is given, which takes them unrecorded. Configs ATC writes itself (`--init`,
 the offered starter config) are trusted as they are written, and a `/model`, `/effort` or

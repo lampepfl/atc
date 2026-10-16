@@ -27,15 +27,13 @@ object ProjectTrust:
   ):
     def isEmpty: Boolean = commands.isEmpty && hosts.isEmpty && classifiedModel.isEmpty && keys.isEmpty
 
-    /** What the user is asked to trust, one row per kind. */
+    /** What the user is asked to trust, one row per kind, with every entry. */
     def describe: List[String] =
-      def listed(values: List[String], shown: Int) =
-        values.take(shown).mkString(", ") + (if values.sizeIs > shown then s" and ${values.size - shown} more" else "")
       List(
-        Option.when(commands.nonEmpty)(s"pre-approves the commands ${listed(commands, 20)}"),
-        Option.when(hosts.nonEmpty)(s"allows the hosts ${listed(hosts, 12)}"),
+        Option.when(commands.nonEmpty)(s"pre-approves the commands ${commands.mkString(", ")}"),
+        Option.when(hosts.nonEmpty)(s"allows the hosts ${hosts.mkString(", ")}"),
         classifiedModel.map(model => s"sends classified data to the model $model"),
-        Option.when(keys.nonEmpty)(s"binds the keys ${listed(keys, 12)} in .atc/keys.properties"),
+        Option.when(keys.nonEmpty)(s"binds the keys ${keys.mkString(", ")} in .atc/keys.properties"),
       ).flatten
 
   /** Grants of the project at `root` the user has not trusted, and whether an earlier
