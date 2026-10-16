@@ -201,14 +201,17 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
     )
 
   test("a secret-dependent stack overflow inside map cannot be caught by agent code"):
-    assertNoOracle(
+    // `map` keeps the error, and the validator rejects the extractor arm, which
+    // would also catch the stop signal.
+    val attack =
       """val c = readClassified("secrets/s.txt")
         |object CatchIt { def unapply(t: Throwable): Boolean = true }
         |def deep(n: Int): Int = deep(n + 1) + 1
         |def bit(ch: Char): Boolean =
         |  try { c.map(s => if s(0) == ch then deep(0) else 0); false }
-        |  catch case CatchIt() => true""".stripMargin
-    )
+        |  catch case CatchIt() => true
+        |println(s"bits ${bit('s')} ${bit('z')}")""".stripMargin
+    assertFails(run(attack), "catch-extractor")
 
   test("a NonLocalReturnControl thrown directly inside map is kept inside the classified value"):
     assertNoOracle(

@@ -127,7 +127,6 @@ object CodeValidator:
     // the classified value. A typed catch of Throwable/Error/a fatal type is rejected here; a
     // bare catch-all is caught by the cross-line `catch-all` rule below. A typed catch of a
     // non-fatal type (`case _: Exception`, a RuntimeException subtype, ...) stays allowed.
-    // NonFatal(e) is not usable under safe mode.
     // The fatal type may appear anywhere in the ascription, so a parenthesised
     // (`case _: (Throwable)`) or union (`case _: (RuntimeException | Throwable)`)
     // type does not slip past. The scan of the ascription stops before the arm
@@ -294,6 +293,8 @@ object CodeValidator:
   private val FatalTypeRe = (raw"\b" + typeNameAlternatives(FatalTypeNames)).r
   private val FatalImportAliasDescription: String =
     "Renaming Throwable/Error/a fatal type on import is forbidden; it would defeat the ban on catching fatal throwables"
+  private val CatchExtractorDescription: String =
+    "A catch arm must be a typed pattern such as case e: IllegalStateException; an extractor or identifier pattern (case NonFatal(e), case Handler()) runs code that can match fatal errors and the sandbox stop signal"
   private val CatchHandlerDescription: String =
     "The handler of `catch` must be written as `case` arms; a handler value (a PartialFunction) cannot be checked for catching fatal errors"
 
@@ -361,21 +362,29 @@ object CodeValidator:
     * Only `case`s belonging to a `catch` are considered, so `match` arms and
     * `.recover { case _ => }` are untouched. An arm is a bare catch-all when its
     * head is `_` or a lower-case binder followed by `=>` or `if`, which also catches
-    * the ThreadDeath stop signal and fatal errors. `case _: T` is typed instead, and
-    * extractors start upper-case. Braceless regions end at `finally`, a depth-0 `}`,
-    * or a line indented no deeper than the `catch` that does not start with `case`.
-    * A braceless nested `match` with a `case _` inside such an arm is an accepted
-    * false positive; braced nested matches are never flagged.
+    * the ThreadDeath stop signal and fatal errors. `case _: T` is typed instead. Any
+    * other arm is an extractor or identifier pattern (`case NonFatal(e)`, `case a op b`,
+    * `case Stop`), whose `unapply` or `equals` is code that can match any throwable.
+    * Braceless regions end at `finally`, a depth-0 `}`, or a line indented no deeper
+    * than the `catch` that does not start with `case`. A braceless nested `match` with
+    * a `case _` inside such an arm is an accepted false positive; braced nested matches
+    * are never flagged.
     *
-    * Returns the character offsets of the offending `case` keywords (`catchAlls`), every
-    * typed arm as its offset and the text of its ascription (`typedArms`), and the offsets
-    * of `catch` handlers that are not `case` arms at all (`handlers`: a PartialFunction
-    * value hides its arms from every rule here). */
-  private final case class CatchScan(catchAlls: List[Int], typedArms: List[(Int, String)], handlers: List[Int])
+    * Returns the character offsets of the offending `case` keywords (`catchAlls`, and
+    * `extractors`), every typed arm as its offset and the text of its ascription
+    * (`typedArms`), and the offsets of `catch` handlers that are not `case` arms at all
+    * (`handlers`: a PartialFunction value hides its arms from every rule here). */
+  private final case class CatchScan(
+    catchAlls: List[Int],
+    extractors: List[Int],
+    typedArms: List[(Int, String)],
+    handlers: List[Int]
+  )
   private def scanCatches(code: String): CatchScan =
-    if !code.contains("catch") then return CatchScan(Nil, Nil, Nil) // no catch, no scan
+    if !code.contains("catch") then return CatchScan(Nil, Nil, Nil, Nil) // no catch, no scan
     val len = code.length
     val hits = mutable.ListBuffer[Int]()
+    val extractors = mutable.ListBuffer[Int]()
     val typedArms = mutable.ListBuffer[(Int, String)]()
     val handlers = mutable.ListBuffer[Int]()
     def skipWs(from: Int): Int =
@@ -408,6 +417,7 @@ object CodeValidator:
       * or a typed arm, whose ascription is recorded for the rules that need to read it. */
     def checkArm(caseOffset: Int, i0: Int): Unit =
       if isBareCatchAll(i0) then hits += caseOffset
+      else if !isTypedPattern(i0) then extractors += caseOffset
       else
         val colon = code.indexOf(':', i0)
         if colon >= 0 && colon < code.indexOf("=>", i0).max(colon + 1) then
@@ -428,6 +438,50 @@ object CodeValidator:
           else if isIdentStart(c) && c.isLower then from(identEnd(k), true)
           else false // upper-case extractor, a `.`-path, or a literal: not a bare catch-all
       from(skipWs(i0), false)
+    /** Whether the arm whose pattern starts at `i0` holds only binders (`_`, a lower-case
+      * name, `@`), alternatives, parentheses and type ascriptions. A `|` or `,` at the
+      * level of an ascription ends it, since `case _: A | B() =>` is two alternatives. An
+      * identifier followed by `(` is an extractor even inside an ascription. */
+    def isTypedPattern(i0: Int): Boolean =
+      val operatorChars = "!#%&*+-/:<=>?@\\^|~"
+      var k = i0
+      var depth = 0
+      var typeDepth = -1 // the depth of the ascription being read, or -1 outside one
+      var typed = true
+      var done = false
+      while k < len && typed && !done do
+        val c = code.charAt(k)
+        if depth == 0 && ((c == '=' && k + 1 < len && code.charAt(k + 1) == '>') || keywordAt(code, k, "if")) then
+          done = true
+        else if c == '(' || c == '[' then
+          depth += 1
+          k += 1
+        else if c == ')' || c == ']' then
+          depth -= 1
+          if typeDepth > depth then typeDepth = -1
+          k += 1
+        else if isIdentStart(c) then
+          val end = identEnd(k)
+          val next = skipWs(end)
+          val following = if next < len then code.charAt(next) else ' '
+          if following == '(' then typed = false
+          else if typeDepth < 0 && (!(c.isLower || c == '_') || following == '.') then typed = false
+          k = end
+        else if operatorChars.contains(c) then
+          var end = k
+          while end < len && operatorChars.contains(code.charAt(end)) do end += 1
+          code.substring(k, end) match
+            case ":" => typeDepth = depth
+            case "|" => if typeDepth == depth then typeDepth = -1
+            case "@" => () // a binder, or an annotation inside an ascription
+            case _ => if typeDepth < 0 then typed = false // an infix extractor
+          k = end
+        else if c == ',' then
+          if typeDepth == depth then typeDepth = -1
+          k += 1
+        else if isSpace(c) || typeDepth >= 0 then k += 1
+        else typed = false // a literal or a `.`-path
+      typed
     /** Braced form: arms are the depth-1 `case`s inside `catch { ... }`. */
     def scanBraced(open: Int): Unit =
       var k = open + 1
@@ -500,7 +554,7 @@ object CodeValidator:
             scanBraceless(j, ind)
         i = end
       else i += 1
-    CatchScan(hits.toList, typedArms.toList, handlers.toList)
+    CatchScan(hits.toList, extractors.toList, typedArms.toList, handlers.toList)
 
   private val stringStrippedPatterns: Set[String] = Set("directive-using", "directive-import", "language-import")
 
@@ -620,7 +674,8 @@ object CodeValidator:
     val fatalArms = catches.typedArms.collect:
       case (offset, typed) if typed.contains('\n') && FatalTypeRe.findFirstIn(typed).isDefined =>
         at("catch-fatal", CatchFatalDescription, offset)
-    val catchIssues = catches.catchAlls.map(at("catch-all", CatchAllDescription, _)) ++ fatalArms ++
+    val catchIssues = catches.catchAlls.map(at("catch-all", CatchAllDescription, _)) ++
+      catches.extractors.map(at("catch-extractor", CatchExtractorDescription, _)) ++ fatalArms ++
       catches.handlers.map(at("catch-handler", CatchHandlerDescription, _))
     val aliases = importAliasOffsets(stripped)
     val importAliases =

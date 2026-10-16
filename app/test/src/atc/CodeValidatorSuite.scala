@@ -508,12 +508,38 @@ class CodeValidatorSuite extends munit.FunSuite:
   test("no-fp: an arm typed inside an enclosing pattern does not pull in later code"):
     // The ascription scan used to run past the arm's closing `)` to the end of the
     // snippet, so any later mention of a fatal type name was reported on this arm.
-    assertAllowed(
-      "case class Wrapped(e: Exception)\n" +
-        "try f() catch { case Wrapped(e: Exception) => 1 }\n" +
-        "val noted = List.empty[Throwable]"
-    )
     assertAllowed("try f() catch { case e @ (_: Exception) => 1 }\nval noted = List.empty[Throwable]")
+    assertAllowed("try f() catch { case (e: Exception) => 1 }\nval noted = List.empty[Throwable]")
+
+  // ── Extractor and identifier arms ───────────────────────────────
+
+  test("reject an extractor arm: its unapply can match fatal errors and the stop signal"):
+    val catchIt = "object CatchIt { def unapply(t: Throwable): Boolean = true }\n"
+    assertRejected(catchIt + "try f() catch case CatchIt() => true", "catch-extractor")
+    assertRejected(
+      catchIt + "try f() catch { case _: IllegalStateException => 1; case CatchIt() => 2 }",
+      "catch-extractor"
+    )
+    assertRejected(catchIt + "try f() catch case e @ CatchIt() => true", "catch-extractor")
+    assertRejected("try f() catch case Wrapped(e: Exception) => 1", "catch-extractor")
+    assertRejected("try f() catch case x.Wrapped(e) => 1", "catch-extractor")
+    assertRejected("try f()\ncatch\n  case CatchIt() =>\n    true", "catch-extractor")
+  test("reject an extractor arm that follows a typed alternative"):
+    // `case _: A | B() =>` is two alternatives, not an ascription of `A | B()`.
+    assertRejected("try f() catch case _: IllegalStateException | CatchIt() => 2", "catch-extractor")
+  test("reject an infix extractor and a stable identifier arm"):
+    assertRejected("try f() catch case a &&& b => 6", "catch-extractor")
+    assertRejected("try f() catch case a :+: b => 6", "catch-extractor")
+    assertRejected("try f() catch case Stop => 5", "catch-extractor")
+  test("reject NonFatal(e) in a catch arm: agent code can define its own NonFatal"):
+    assertRejected("try read(\"x\") catch case NonFatal(e) => \"d\"", "catch-extractor")
+  test("allow typed alternatives, parenthesised and qualified typed arms"):
+    assertAllowed("try read(\"x\") catch case _: IllegalStateException | _: IllegalArgumentException => \"d\"")
+    assertAllowed("try read(\"x\") catch case e @ (_: IllegalStateException | _: RuntimeException) => \"d\"")
+    assertAllowed("try read(\"x\") catch case _: (IllegalStateException | IllegalArgumentException) => \"d\"")
+    assertAllowed("try read(\"x\") catch case e: java.util.NoSuchElementException => \"d\"")
+    assertAllowed("try read(\"x\") catch case e: Exception if e.getMessage != null => \"d\"")
+    assertAllowed("try read(\"x\") catch { case e: Exception => List(1) match { case Some(x) => x } }")
 
   test("reject backquoted getClass") { assertRejected("x.`getClass`", "reflect-getclass") }
   test("allow getClass inside a string") { assertAllowed("""val s = "x.getClass"""") }
@@ -529,8 +555,8 @@ class CodeValidatorSuite extends munit.FunSuite:
     assertAllowed("try read(\"x\") catch case _: RuntimeException => \"d\"")
   test("allow catch of Exception (InterruptedException is banned separately)"):
     assertAllowed("try read(\"x\") catch case _: Exception => \"d\"")
-  test("validator does not flag NonFatal (though safe mode rejects it; prefer case _: Exception)"):
-    assertAllowed("try read(\"x\") catch case NonFatal(e) => \"d\"")
+  test("allow NonFatal outside a catch arm"):
+    assertAllowed("scala.util.Try(read(\"x\")).recover { case NonFatal(e) => \"d\" }")
   test("allow a typed catch with a binder"):
     assertAllowed("try read(\"x\") catch case e: IllegalStateException => e.getMessage")
   test("allow a match with a wildcard arm (not a catch)"):

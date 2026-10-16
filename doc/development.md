@@ -374,6 +374,11 @@ lexical check, with possible false positives and false negatives. Keep it small;
 code here does not establish that the code is safe. Disabling safe mode removes the
 compiler's API restrictions.
 
+Every catch arm must be a typed pattern (`case e: IllegalStateException =>`) of a type that
+is not fatal. A bare catch-all, a catch of `Throwable` or `Error`, and an extractor or
+identifier arm (`case NonFatal(e) =>`, whose `unapply` agent code can define) could catch
+the `ThreadDeath` stop signal, so a loop could outlast an interrupt or a timeout.
+
 `SandboxLoader` shares `scala.*` and `atc.lib.*` with the application, excluding compiler
 implementation packages. Other classes resolve through the JDK platform loader. Class
 resources are hidden so REPL instrumentation does not redefine the shared API classes.
