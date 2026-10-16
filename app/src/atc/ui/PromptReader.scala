@@ -1,5 +1,7 @@
 package atc.ui
 
+import atc.platform.OwnerOnlyFiles
+
 import org.jline.keymap.KeyMap
 import org.jline.reader.{
   Binding,
@@ -376,11 +378,8 @@ private[atc] object PromptReader:
     if Files.isSymbolicLink(resolved) then
       throw IllegalArgumentException(s"refusing a symbolic link as the history file: $path")
     if !Files.exists(resolved, LinkOption.NOFOLLOW_LINKS) then
-      val ownerOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
-      try Files.createFile(resolved, ownerOnly)
-      catch
-        case _: UnsupportedOperationException => Files.createFile(resolved)
-        case _: FileAlreadyExistsException => () // a concurrent ATC created it; validate below
+      try OwnerOnlyFiles.create(resolved, Array.emptyByteArray)
+      catch case _: FileAlreadyExistsException => () // a concurrent ATC created it; validate below
     if !Files.isRegularFile(resolved, LinkOption.NOFOLLOW_LINKS) then
       throw IllegalArgumentException(s"history path is not a regular file: $path")
     val posix = Files.getFileAttributeView(

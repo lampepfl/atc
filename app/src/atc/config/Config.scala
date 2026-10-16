@@ -1,15 +1,11 @@
 package atc.config
 
 import atc.{Debug, Resources, TextFiles}
-import atc.platform.PlatformPath
+import atc.platform.{OwnerOnlyFiles, PlatformPath}
 
 import upickle.default.*
 
-import java.nio.file.{
-  AtomicMoveNotSupportedException, FileAlreadyExistsException, Files, LinkOption, Path, StandardCopyOption,
-  StandardOpenOption
-}
-import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.{FileAlreadyExistsException, Files, LinkOption, Path, StandardOpenOption}
 import java.util.Locale
 
 /** One model of a provider: the id the provider knows it by, plus the
@@ -349,7 +345,7 @@ object Config:
     else
       Option(target.getParent).foreach(Files.createDirectories(_))
       try
-        if ownerOnly then writeOwnerOnly(target, content)
+        if ownerOnly then OwnerOnlyFiles.create(target, TextFiles.strictUtf8(content))
         else Files.writeString(target, content, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
         Some(target)
       catch case _: FileAlreadyExistsException => None // another atc created it meanwhile; leave it alone
@@ -395,34 +391,6 @@ object Config:
       )
       true
 
-  private val OwnerOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
-
-  /** Create `target` with owner-only access on POSIX file systems, falling back
-    * to a regular (new-file) write when POSIX permissions are unavailable. */
-  private[config] def writeOwnerOnly(target: Path, content: String): Unit =
-    try Files.createFile(target, OwnerOnly)
-    catch case _: UnsupportedOperationException => Files.createFile(target)
-    Files.writeString(target, content)
-
-  /** Replace `target` with `content` through a temporary file beside it, moved into place
-    * atomically where the file system allows. On POSIX file systems the new file is readable
-    * by its owner only, or with `keepPermissions` has the permissions `target` had. */
-  private[atc] def replaceFile(target: Path, content: String, keepPermissions: Boolean): Unit =
-    val dir = target.toAbsolutePath.nn.getParent.nn
-    Files.createDirectories(dir)
-    val prefix = s".${target.getFileName}."
-    val temp =
-      try Files.createTempFile(dir, prefix, ".tmp", OwnerOnly).nn
-      catch case _: UnsupportedOperationException => Files.createTempFile(dir, prefix, ".tmp").nn
-    try
-      Files.writeString(temp, content)
-      if keepPermissions then
-        try Files.setPosixFilePermissions(temp, Files.getPosixFilePermissions(target))
-        catch case _: UnsupportedOperationException => ()
-      try Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-      catch case _: AtomicMoveNotSupportedException => Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
-    finally Files.deleteIfExists(temp)
-
   /** Set one top-level key of a config file, keeping the rest of the text as
     * it is (a config is hand-formatted: blank lines, several patterns per
     * line, and serializing it again would lose that). See [[ObjectText.withTopLevel]]. */
@@ -437,7 +405,8 @@ object Config:
       try Files.readString(path).nn
       catch case e: Exception => throw IllegalArgumentException(s"Cannot read config $path: ${Debug.message(e)}")
     val updated = update(text)
-    if updated != text then replaceFile(path.toRealPath().nn, updated, keepPermissions = true)
+    if updated != text then
+      OwnerOnlyFiles.replace(path.toRealPath().nn, TextFiles.strictUtf8(updated), keepPermissions = true)
 
   /** The starter global config written by `--init-global`, with every preset provider. */
   def globalTemplate: String = globalTemplateWith(ProviderPreset.all)

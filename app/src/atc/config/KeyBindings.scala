@@ -1,6 +1,7 @@
 package atc.config
 
 import atc.{Debug, ProcessEnvironment, TextFiles}
+import atc.platform.OwnerOnlyFiles
 import atc.ui.Ansi
 
 import java.io.StringReader
@@ -88,12 +89,14 @@ object KeyBindings:
     val line = s"$name=${value.replace("\\", "\\\\")}"
     if !Files.exists(path) then
       Option(path.getParent).foreach(Files.createDirectories(_))
-      Config.writeOwnerOnly(path, s"# API keys for the providers in config.json, one NAME=value per line.\n$line\n")
+      val text = s"# API keys for the providers in config.json, one NAME=value per line.\n$line\n"
+      OwnerOnlyFiles.create(path, TextFiles.strictUtf8(text))
     else
       val lines = TextFiles.splitLines(TextFiles.stripBom(Files.readString(path).nn)).lines
       val binds = s"^\\s*${Pattern.quote(name)}\\s*[=:\\s]".r
       val kept = lines.filterNot(l => binds.findFirstIn(l + " ").isDefined)
-      Config.replaceFile(path.toRealPath().nn, (kept :+ line).mkString("", "\n", "\n"), keepPermissions = false)
+      val text = (kept :+ line).mkString("", "\n", "\n")
+      OwnerOnlyFiles.replace(path.toRealPath().nn, TextFiles.strictUtf8(text), keepPermissions = false)
 
   /** Read existing `keys.properties` files from most to least specific. Warn if
     * a file containing API keys is readable by other users. */

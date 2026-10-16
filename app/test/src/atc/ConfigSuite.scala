@@ -3,6 +3,7 @@ package atc
 import atc.config.*
 import atc.perms.{Access, Decision, GlobMatcher, Mode, Policy}
 
+import java.nio.charset.CharacterCodingException
 import java.nio.file.{Files, Path}
 
 /** ATC's configuration: JSON parsing, layered merge, file-rule construction,
@@ -758,6 +759,24 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(Files.readString(file), """{ "model": "a", "effort": "high" }""")
     Config.editFile(file)(ObjectText.withMember(_, List("effort"), None))
     assertEquals(Files.readString(file), """{ "model": "a" }""")
+
+  test("a config or key write with a lone surrogate fails and leaves the file unchanged"):
+    val dir = Files.createTempDirectory("atc-strict-utf8").nn
+    val config = writeCfg(dir, "config.json", """{ "model": "a" }""")
+    val keys = dir.resolve("keys.properties").nn
+    try
+      intercept[CharacterCodingException](Config.editFile(config)(_ + "\uD800"))
+      assertEquals(Files.readString(config), """{ "model": "a" }""")
+      intercept[CharacterCodingException](KeyBindings.bind(keys, "A_KEY", "\uD800"))
+      assert(!Files.exists(keys))
+      KeyBindings.bind(keys, "A_KEY", "one")
+      val bound = Files.readString(keys)
+      intercept[CharacterCodingException](KeyBindings.bind(keys, "A_KEY", "two\uD800"))
+      assertEquals(Files.readString(keys), bound)
+      val entries = Files.list(dir).nn
+      try assertEquals(entries.count(), 2L)
+      finally entries.close()
+    finally List(config, keys, dir).foreach(Files.deleteIfExists)
 
   test("notifications accepts the known methods only"):
     assertEquals(upickle.default.read[Config]("{}").notifications, "auto")

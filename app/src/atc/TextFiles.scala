@@ -1,5 +1,7 @@
 package atc
 
+import java.nio.CharBuffer
+import java.nio.charset.StandardCharsets.UTF_8
 import scala.collection.mutable
 
 /** Small, platform-independent text conventions. Line splitting accepts LF, CRLF,
@@ -27,6 +29,14 @@ object TextFiles:
 
   /** Drop one leading Unicode byte-order mark, leaving embedded marks alone. */
   def stripBom(text: String): String = text.substring(bomLength(text))
+
+  /** `text` as UTF-8. A lone surrogate throws `MalformedInputException`, as in `Files.writeString`,
+    * where `getBytes` would write `?` in its place. */
+  def strictUtf8(text: String): Array[Byte] =
+    val encoded = UTF_8.newEncoder().nn.encode(CharBuffer.wrap(text)).nn
+    val bytes = new Array[Byte](encoded.remaining)
+    encoded.get(bytes)
+    bytes
 
   /** One line ending and its position in the containing string. */
   final case class LineEnding(index: Int, text: String)

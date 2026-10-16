@@ -1,17 +1,16 @@
 package atc.llm
 
-import atc.Debug
+import atc.{Debug, TextFiles}
 import atc.config.Config
+import atc.platform.OwnerOnlyFiles
 
 import com.sun.net.httpserver.{HttpExchange, HttpServer}
 import upickle.default.*
 
 import java.io.IOException
 import java.net.{BindException, InetAddress, InetSocketAddress, URLDecoder, URLEncoder}
-import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path, StandardOpenOption}
-import java.nio.file.attribute.PosixFilePermissions
 import java.security.{MessageDigest, SecureRandom}
 import java.time.Duration
 import java.util.Base64
@@ -61,10 +60,7 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
     * the same single-use refresh token. */
   private def locked[T](step: => T): T =
     val path = file.resolveSibling(s"${file.getFileName}.lock").nn
-    val options = java.util.Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE)
-    val channel =
-      try FileChannel.open(path, options, OwnerOnly).nn
-      catch case _: UnsupportedOperationException => FileChannel.open(path, options).nn
+    val channel = OwnerOnlyFiles.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
     Using.resource(channel)(c => Using.resource(c.lock().nn)(_ => step))
 
   private def refresh(saved: SignIn): SignIn =
@@ -194,7 +190,7 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
 
   /** Replace the file atomically, readable by its owner only. */
   private def save(t: SignIn): SignIn =
-    Config.replaceFile(file, write(t), keepPermissions = false)
+    OwnerOnlyFiles.replace(file, TextFiles.strictUtf8(write(t)), keepPermissions = false)
     t
 
 object ChatGPTAuth:
@@ -207,7 +203,6 @@ object ChatGPTAuth:
   private val Originator = "atc"
   private val Timeout = Duration.ofSeconds(30)
   private val RefreshMargin = Duration.ofMinutes(5)
-  private val OwnerOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
   private val JsonType = okhttp3.MediaType.get("application/json")
   private val FormType = okhttp3.MediaType.get("application/x-www-form-urlencoded")
 

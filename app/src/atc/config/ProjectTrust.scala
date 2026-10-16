@@ -1,7 +1,7 @@
 package atc.config
 
-import atc.Debug
-import atc.platform.PlatformPath
+import atc.{Debug, TextFiles}
+import atc.platform.{OwnerOnlyFiles, PlatformPath}
 
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
@@ -87,7 +87,7 @@ object ProjectTrust:
   private def record(root: Path, fingerprint: String, atcDir: Path): Unit =
     val store = read(atcDir).updated(key(root), fingerprint)
     val text = ujson.write(ujson.Obj.from(store.toList.sortBy(_._1).map((k, v) => k -> ujson.Str(v))), indent = 2)
-    Config.replaceFile(atcDir.resolve(StoreFile).nn, text + "\n", keepPermissions = false)
+    OwnerOnlyFiles.replace(atcDir.resolve(StoreFile).nn, TextFiles.strictUtf8(text + "\n"), keepPermissions = false)
 
   /** `layer` without the settings that need trust. */
   def withoutGrants(layer: ConfigLayer): ConfigLayer =

@@ -1,6 +1,7 @@
 package atc.config
 
-import atc.Debug
+import atc.{Debug, TextFiles}
+import atc.platform.OwnerOnlyFiles
 
 import upickle.default.*
 
@@ -267,7 +268,8 @@ final class ModelListStore(path: Path):
     try
       val saved =
         Saved(provider.api, provider.baseUrl, models.map(m => Model(m.modelId, m.settings.copy(webSearch = None))))
-      Config.replaceFile(path, write(all().updated(provider.provider, saved)), keepPermissions = false)
+      val text = write(all().updated(provider.provider, saved))
+      OwnerOnlyFiles.replace(path, TextFiles.strictUtf8(text), keepPermissions = false)
     catch case NonFatal(_) => ()
 
 object ModelListStore:
