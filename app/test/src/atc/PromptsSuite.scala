@@ -44,3 +44,12 @@ class PromptsSuite extends munit.FunSuite:
     val source = Prompts.interfaceSource
     assert(source.contains("def httpPostClassified"), source.take(200))
     assert(!source.contains("API reference unavailable"), "the Interface.scala resource was not bundled")
+    val prompt = Prompts.system(
+      AgentEnvironment("/p", "test-os"),
+      TestEnv(prefix = "atc-prompt").policy,
+      classifiedModelConfigured = false,
+      safeMode = true,
+      respectGitignore = true,
+      extra = None,
+    )
+    assert(prompt.contains(s"```scala\n$source\n```"), "the API source must reach the prompt verbatim")
