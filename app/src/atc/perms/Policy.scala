@@ -219,7 +219,8 @@ final class Policy(
     mode.allowsExec && commandDenied(commandLine).isEmpty &&
       commandPatterns(scope(scopeId)).exists(GlobMatcher.matchesCommand(commandLine, _))
 
-  def requestExec(parentId: ScopeId, commands: List[String], reason: String): ScopeId =
+  def requestExec(parentId: ScopeId, requested: List[String], reason: String): ScopeId =
+    val commands = normalized(requested)
     val parent = scope(parentId)
     if !mode.allowsExec then
       throw SecurityException(s"Access denied: the sandbox is in ${mode.label} mode; commands cannot be run")
@@ -245,7 +246,8 @@ final class Policy(
     mode.allowsNetwork && hostDenied(host).isEmpty &&
       hostPatterns(scope(scopeId)).exists(GlobMatcher.matchesHost(host, _))
 
-  def requestNet(parentId: ScopeId, hosts: List[String], reason: String): ScopeId =
+  def requestNet(parentId: ScopeId, requested: List[String], reason: String): ScopeId =
+    val hosts = normalized(requested)
     val parent = scope(parentId)
     if !mode.allowsNetwork then
       throw SecurityException(s"Access denied: the sandbox is in ${mode.label} mode; the network is not reachable")
@@ -259,6 +261,10 @@ final class Policy(
         base.synchronized(base.hosts ++= missing)
       }
     openScope(parent, hosts = missing)
+
+  /** Requested patterns trimmed, without blanks or duplicates, and sorted, so that the
+    * prompt and the decision notes list them in the same order. */
+  private def normalized(patterns: List[String]): List[String] = patterns.map(_.trim).filter(_.nonEmpty).distinct.sorted
 
   /** Refuse a `request*` whose patterns collide with the deny list, before the
     * user is asked: a request is a widening, and the deny list is exactly what

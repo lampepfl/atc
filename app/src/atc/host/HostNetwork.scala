@@ -22,8 +22,7 @@ private[host] trait HostNetwork:
     user: UserIO,
     parent: Network
   ): T =
-    val patterns = hosts.toList.map(_.trim).filter(_.nonEmpty).distinct.sorted
-    inScope(policy.requestNet(scopeOf(parent), patterns, reason))(id => op(using NetworkImpl(id)))
+    inScope(policy.requestNet(scopeOf(parent), hosts.toList, reason))(id => op(using NetworkImpl(id)))
 
   private lazy val http = HttpClient.newBuilder().nn
     .followRedirects(HttpClient.Redirect.NEVER).nn

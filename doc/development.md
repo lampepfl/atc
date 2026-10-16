@@ -509,13 +509,12 @@ Denial throws before a child scope is opened. The compiler's lifetime checks and
 host's scope IDs therefore enforce complementary parts of the same request contract.
 
 Permission requests display numbered command or host rows, and a `note` row when a command
-pattern holds `*`, which allows any arguments and so, for an interpreter, any code. The host
-sorts and deduplicates
-requested patterns so the displayed order agrees with decision notes. `Policy.sessionGrants`
-provides the current grant list; `/perms revoke` selects from it and `Policy.revoke` removes
-the selected grant from future checks. Configuration rules and open-scope semantics remain
-separate. Revoking a command grant does not terminate an existing process; `/kill` does that.
-The agent receives a queued notice after a user revokes a grant.
+pattern holds `*`, which allows any arguments and so, for an interpreter, any code. The
+policy sorts and deduplicates requested patterns so the displayed order agrees with decision
+notes. `Policy.sessionGrants` provides the current grant list; `/perms revoke` selects from it
+and `Policy.revoke` removes the selected grant from future checks. Configuration rules and
+open-scope semantics remain separate. Revoking a command grant does not terminate an existing
+process; `/kill` does that. The agent receives a queued notice after a user revokes a grant.
 
 `Decision.Revise(instructions)` records user feedback without granting access or opening a
 scope. The pending request throws a permission error. `ToolOutput` appends the complete,

@@ -26,8 +26,7 @@ private[host] trait HostProcesses:
     requestExec(commands, "")(op)
 
   def requestExec[T](commands: Iterable[String], reason: String)(op: Exec ?=> T)(using user: UserIO, parent: Exec): T =
-    val patterns = commands.toList.map(_.trim).filter(_.nonEmpty).distinct.sorted
-    inScope(policy.requestExec(scopeOf(parent), patterns, reason))(id => op(using ExecImpl(id)))
+    inScope(policy.requestExec(scopeOf(parent), commands.toList, reason))(id => op(using ExecImpl(id)))
 
   def exec(command: String)(using Exec, FileSystem): ProcessResult = exec(command, Nil, ExecOptions())
 
@@ -87,6 +86,7 @@ private[host] trait HostProcesses:
     target
 
   private def processBuilders(pipeline: CommandLine.Pipeline, dir: Path): List[ProcessBuilder] =
+    val keys = keyVariables()
     pipeline.stages.map: stage =>
       val argv = WindowsExecutable.resolve(stage.argv, dir)
       val builder = ProcessBuilder(argv.asJava).directory(dir.toFile).nn
@@ -94,7 +94,6 @@ private[host] trait HostProcesses:
       // in these variables, and the key variables hold ATC's credentials. They belong
       // to ATC, not to commands the agent starts, which could print them. Windows names
       // ignore case, but this map's keys keep the system's spelling (`Path`, not `PATH`).
-      val keys = keyVariables()
       builder.environment().nn.keySet().nn.removeIf: name =>
         LauncherEnvironment.isInternal(name) ||
           keys.exists(key => if Platform.isWindows then key.equalsIgnoreCase(name) else key == name)
@@ -157,7 +156,6 @@ private[host] trait HostProcesses:
         )
       nextProcessId += 1
       val id = nextProcessId
-      val port = output
       val managed = Processes.ManagedProcess.start(
         prepared.pbs,
         prepared.stageLines,
@@ -166,7 +164,7 @@ private[host] trait HostProcesses:
         closeStdinAfter = false,
         live = None,
         keepHead = false,
-        onExit = code => port.processExited(id, code),
+        onExit = code => output.processExited(id, code),
       )
       val handle = ProcessImpl(id, managed, output, scopeOf(ex), policy)
       spawned(id) = handle
