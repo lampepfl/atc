@@ -1226,7 +1226,9 @@ lists, history search) while they hold it, and skips it in the final display `do
 Enter replaces the word with the selected name before accepting. A line that ↑/↓ recalled from
 history is not listed until it is edited, so the arrows keep browsing history. Answers, block
 input and dumb terminals get no list. Enter runs the selection, so no alias may be a prefix
-of another command's name.
+of another command's name. A line is a command when its first word starts with `/` and holds
+no other `/`: a mistyped name is reported as an unknown command, and a line that starts with
+an absolute path goes to the agent.
 
 During a turn, Enter submits a correction and unsent text is shown in the status line.
 Bracketed pastes are collected without submitting individual lines, and the footer shows the

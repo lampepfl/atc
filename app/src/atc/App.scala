@@ -228,7 +228,7 @@ final class App(args: Cli.Args, val tui: Tui):
         case Some(line) if line.trim.isEmpty => ()
         // Typed out of habit; not listed in /help.
         case Some(line) if App.QuitWords.contains(line.trim.toLowerCase(Locale.ROOT)) => running = false
-        case Some(line) if line.trim.startsWith("/") => running = commands.run(line.trim)
+        case Some(line) if SlashCommand.isCommandLine(line) => running = commands.run(line.trim)
         case Some(line) => afterTurn(runTurn(line))
 
   /** After Ctrl-C, a correction typed during the turn goes back to the prompt: starting

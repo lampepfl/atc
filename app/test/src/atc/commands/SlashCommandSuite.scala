@@ -28,6 +28,15 @@ class SlashCommandSuite extends munit.FunSuite:
     assertEquals(parse("/run val X = 1\nX + 1"), Right((Run, "val X = 1\nX + 1")))
     assertEquals(parse("/scala"), Right((Run, "")))
 
+  test("a line starting with an absolute path is a request; a mistyped command is still a command"):
+    assert(!isCommandLine("/Users/me/project/Main.scala fails to compile, fix it"))
+    assert(!isCommandLine("  /etc/hosts"))
+    assert(isCommandLine("/hlep"))
+    assert(isCommandLine(" /model gpt-5"))
+    assert(isCommandLine("/save ~/notes/session.json"))
+    assert(isCommandLine("/run val ratio = a / b"))
+    assert(!isCommandLine("fix /tmp/x"))
+
   test("parse reports an unknown command by what was typed"):
     assertEquals(parse("/bogus 1 2"), Left("/bogus"))
     assertEquals(parse("/helpme"), Left("/helpme"))
