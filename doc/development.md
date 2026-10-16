@@ -1292,22 +1292,18 @@ agent's questions say `Esc cancel`, and permission requests, which Esc denies, s
 Every menu is a `ListMenu`, drawn in a live region and read in raw mode; `MenuState` holds
 what it shows apart from the terminal, and `MenuKey` decodes keys with `KeyReader`'s escape
 parsing. A pop-up's menu (a permission request, a question, a confirmation) has no title
-row: its question stands above it, and its rows, then the answer it leaves (`› Yes`), are
-indented to the question's text. A slash command's menu shows its title, then at most twelve
-rows, fewer when the screen is short, so the whole menu stays shorter than the screen; the
-window scrolls with the cursor and says how many rows are out of view above and below. A
-longer list is filtered by typing, every word matching, with the filter and the number of
-matches on a line of its own; Backspace edits it and Esc clears it before it leaves the
-menu. Ticks belong to items, so they survive a change of filter, the ticked items open
-first, and the title counts them. PgUp, PgDn, Home and End move by a page or to the ends. A
-menu opens on the value in use (`/model`, `/effort`, `/classifiedmodel`) or, in a
-`menuLoop`, on the row last chosen. When it ends, one line says what was chosen; leaving it
-leaves nothing. The footer shows its keys, or the menu's last row when there is no footer.
-Menus read focus reports, and a resize redraws them at the new size. A menu turns bracketed
-paste on while it reads and takes nothing inside a paste as a key; the turn's key reader
-leaves paste mode after a pop-up, which may have read the paste's end. Enter counts only
-300 ms after a menu opens (`ListMenu.EnterDelayNanos`), so a newline typed or pasted just
-before a permission request cannot choose its first row, Allow once.
+row: its question stands above it, and its rows and the answer it leaves (`› Yes`) are
+indented to the question's text. A slash command's menu shows its title and at most twelve
+rows, fewer on a short screen, so the whole menu stays shorter than the screen; the window
+scrolls with the cursor and counts the rows out of view. A longer list is filtered by
+typing, every word matching. Ticks belong to items, so they survive a change of filter, and
+the ticked items open first. A menu opens on the value in use or, in a `menuLoop`, on the
+row last chosen; when it ends, one line says what was chosen. Menus read focus reports, and
+a resize redraws them at the new size. A menu turns bracketed paste on while it reads and
+takes nothing inside a paste as a key, and Enter counts only 300 ms after it opens
+(`ListMenu.EnterDelayNanos`), so a newline typed or pasted just before a permission request
+cannot choose its first row, Allow once. The turn's key reader leaves paste mode after a
+pop-up, which may have read the paste's end.
 
 While the main prompt holds a single word starting with `/`, `PromptReader` lists the
 matching `SlashCommand.table` rows in JLine's `post` area under the buffer, with an exact
@@ -1360,29 +1356,23 @@ they would land mid-line. Between turns they use `LineReader.printAbove` while t
 reads, so they do not overwrite the user's input.
 
 `Notifier` sends the `notifications` alert when a turn ends, a permission request or
-question opens, or the tool budget runs out. `Alerts` schedules it after
-`QuestionDelayMillis`, or `TurnDelayMillis` for a finished turn, unless the terminal is
-known to be focused, and drops it on focus coming back or on any key, answer or Ctrl-C:
-the turn's key reader, the prompt highlighter (a changed buffer) and the end of a pop-up
-count as input. The terminal's focus reports (`ESC[?1004h`) come through JLine's focus
-widgets at the prompt and through the key reader during a turn. Reporting is on only while
-one of those raw-mode readers runs (`callback-init` to `callback-finish` for the line
-reader, `KeyReader.start` to `KeyReader.stop`), because between reads the terminal is in
-line mode and its driver would echo a report as `^[[I`. Losing focus sends nothing early.
-Focus is known only once the terminal has sent a report, since JLine assumes support for
-every `xterm*` type and such a terminal may send none; until then only keys count. There are
-no alerts for `-p` runs or dumb terminals.
-
-The alert title is `atc · <directory>`. A turn's alert shows the start of its last prose
-block as plain text (`Notifier.plainText`), or the outcome with the error or duration when
-the turn did not finish normally (`Alerts.turnText`). Permission alerts name the request and
-its details, and question alerts show the question. Terminal alerts are OSC 9, 99 (kitty) or
-777 sequences, chosen from `TERM` and `TERM_PROGRAM` and wrapped for tmux passthrough; they
-are written as style text so they leave the line tracking alone. System alerts start
-`osascript`, a Base64-encoded PowerShell toast script or `notify-send` on a daemon thread,
-passing the text as arguments (after `--` for `notify-send`, so a body starting with `-` is
-not an option) or quoted script data, and ring the bell if the command cannot start. Alert
-text is sanitized, put on one line and capped at 200 characters.
+question opens, or the tool budget runs out. `Alerts` holds it for `QuestionDelayMillis`, or
+`TurnDelayMillis` for a finished turn, and drops it when the user types, answers, presses
+Ctrl-C or focuses the terminal; nothing is sent while the terminal is known to be focused.
+Focus reports (`ESC[?1004h`) are on only while a raw-mode reader runs (the prompt's line
+reader or `KeyReader`), because in line mode the terminal driver would echo them as `^[[I`.
+Focus counts only once the terminal has sent a report, since JLine assumes support for every
+`xterm*` type and such a terminal may send none. There are no alerts for `-p` runs or dumb
+terminals. Under the title `atc · <directory>`, a turn's alert shows the start of its last
+prose block, or the outcome with the error or duration when the turn did not finish
+normally (`Alerts.turnText`); permission and question alerts show the request or the
+question. Terminal alerts are OSC 9, 99 (kitty) or 777 sequences, chosen from `TERM` and
+`TERM_PROGRAM`, wrapped for tmux passthrough and written as style text so they leave the
+line tracking alone. System alerts start `osascript`, a Base64-encoded PowerShell toast
+script or `notify-send` on a daemon thread, passing the text as arguments (after `--` for
+`notify-send`, so a body starting with `-` is not an option) or quoted script data, and ring
+the bell if the command cannot start. Alert text is sanitized, put on one line and capped at
+200 characters.
 
 `StatusLine.refreshTitle` sets the window title (OSC 0) from `busy` and the pop-up depth
 whenever the status refreshes, on one line, writing only changes. The previous title is
