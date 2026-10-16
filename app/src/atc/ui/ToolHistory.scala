@@ -43,9 +43,10 @@ private[atc] final class ToolHistory(maxChars: Int = 8 * 1024 * 1024, maxEntries
     while entries.size > maxEntries || entries.size > 1 && entries.map(_.size).sum > maxChars do entries = entries.tail
     entry
 
-  def list: List[String] = entries.toList.map: e =>
+  /** One line per retained result, its fields separated by `dot`. */
+  def list(dot: String): List[String] = entries.toList.map: e =>
     val firstLine = e.code.linesIterator.nextOption().getOrElse("").take(80)
-    s"${e.id}. ${if e.success then "ok" else "failed"} · ${e.millis} ms · $firstLine"
+    s"${e.id}. ${if e.success then "ok" else "failed"} $dot ${e.millis} ms $dot $firstLine"
   def get(id: Int): Option[Entry] = entries.find(_.id == id)
   def latest: Option[Entry] = entries.lastOption
   def clear(): Unit = entries = Vector.empty

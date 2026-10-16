@@ -151,7 +151,7 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
     if labels.isEmpty then None
     else
       val state = MenuState(labels.toIndexedSeq, multi, initial, checked)
-      val keys = ListMenu.hint(state, escape)
+      val keys = ListMenu.hint(state, escape, screen.g.dot)
       val region = screen.synchronized:
         screen.stopSpinner()
         screen.ensureNewline()
@@ -178,10 +178,10 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
           case MenuState.Outcome.Chosen(items) =>
             val answer =
               if multi then Format.plural(items.size, "item") + " ticked" else items.headOption.fold("")(labels(_))
+            val chosen = s"${screen.g.chosen} ${Ansi.sanitize(answer)}"
             val line =
-              if title.isEmpty then indent + styled(s"› ${Ansi.sanitize(answer)}", Cyan)
-              else
-                indent + styled("? ", Cyan, Bold) + Ansi.sanitize(title) + styled(s" › ${Ansi.sanitize(answer)}", Cyan)
+              if title.isEmpty then indent + styled(chosen, Cyan)
+              else indent + styled("? ", Cyan, Bold) + Ansi.sanitize(title) + styled(s" $chosen", Cyan)
             region.redraw(List(line), force = true)
             region.freeze()
           case _ => region.clear()
@@ -226,11 +226,11 @@ private[ui] object ListMenu:
   /** How long after a menu opens Enter is ignored. */
   val EnterDelayNanos: Long = 300_000_000L
 
-  /** The keys a menu takes, for the footer. */
-  def hint(state: MenuState, escape: String): String =
-    val choose = if state.multi then "Space tick · Enter save" else "Enter choose"
-    val filter = if state.filterable then " · type to filter" else ""
-    s"Arrows move · $choose$filter · Esc $escape"
+  /** The keys a menu takes, for the footer, separated by `dot`. */
+  def hint(state: MenuState, escape: String, dot: String): String =
+    val choose = if state.multi then s"Space tick $dot Enter save" else "Enter choose"
+    val filter = if state.filterable then s" $dot type to filter" else ""
+    s"Arrows move $dot $choose$filter $dot Esc $escape"
 
   /** The menu's lines for a terminal of `height` rows, and how many item rows are in view.
     * The region cuts each line to one row. The window leaves room for the title, the filter

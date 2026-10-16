@@ -34,6 +34,8 @@ final case class Glyphs(
   unticked: String,
   above: String,
   below: String,
+  /** Marks the choice a menu leaves behind (`› Yes`). */
+  chosen: String,
   spinner: IndexedSeq[String]
 )
 object Glyphs:
@@ -60,6 +62,7 @@ object Glyphs:
     unticked = "◯",
     above = "▲",
     below = "▼",
+    chosen = "›",
     spinner = IndexedSeq("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"),
   )
   val ascii: Glyphs = Glyphs(
@@ -85,5 +88,6 @@ object Glyphs:
     unticked = "[ ]",
     above = "^",
     below = "v",
+    chosen = ">",
     spinner = IndexedSeq("|", "/", "-", "\\"),
   )

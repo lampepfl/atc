@@ -106,6 +106,7 @@ class ListMenuSuite extends munit.FunSuite:
   private def choose(
     input: String,
     delayMillis: Long = 0,
+    glyphs: Glyphs = Glyphs.unicode,
     out: ByteArrayOutputStream = ByteArrayOutputStream(),
   ): Option[List[Int]] =
     val bytes = ByteArrayInputStream(input.getBytes(UTF_8))
@@ -116,7 +117,7 @@ class ListMenuSuite extends munit.FunSuite:
         bytes.read()
     val terminal = DumbTerminal("test", "xterm-256color", source, out, UTF_8)
     terminal.setSize(Size.of(80, 24): Sized)
-    val screen = Screen(terminal, plain = false, Glyphs.unicode)
+    val screen = Screen(terminal, plain = false, glyphs)
     val alerts = Alerts(terminal, plain = false, _ => ())
     val status = StatusLine(screen, () => true, () => true, () => 0)
     ListMenu(screen, status, alerts).run("Allow?", List("Allow once", "Deny"), multi = false, 0, Set.empty, "deny")
@@ -139,3 +140,10 @@ class ListMenuSuite extends munit.FunSuite:
     val on = text.indexOf("\u001b[?2004h")
     assert(on >= 0 && on < text.indexOf("Allow once"), text.replace("\u001b", "ESC"))
     assert(text.indexOf("\u001b[?2004l", on) > on, text.replace("\u001b", "ESC"))
+
+  test("with ASCII glyphs a menu writes only ASCII"):
+    val out = ByteArrayOutputStream()
+    assertEquals(choose("\r", delayMillis = 500, glyphs = Glyphs.ascii, out = out), Some(List(0)))
+    val text = out.toString(UTF_8)
+    assert(text.forall(_ < 128), text.filter(_ >= 128))
+    assert(Ansi.Sgr.replaceAllIn(text, "").contains("Allow? > Allow once"), text.replace("\u001b", "ESC"))

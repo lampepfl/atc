@@ -109,8 +109,8 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     val history = tool.history
     val parts = argument.trim.split("\\s+").toList.filter(_.nonEmpty)
     if parts.isEmpty then
-      if history.list.isEmpty then info("No retained tool output.")
-      else history.list.foreach(println)
+      if history.latest.isEmpty then info("No retained tool output.")
+      else history.list(g.dot).foreach(println)
     else if parts.size > 2 || parts.lift(1).exists(value => !value.toIntOption.exists(_ >= 1)) then
       error("Use /output <id|last> [line], with a positive line number.")
     else
