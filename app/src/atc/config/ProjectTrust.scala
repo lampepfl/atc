@@ -7,13 +7,15 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
 import java.util.HexFormat
+import scala.collection.mutable
 
 /** Whether the user trusts what a project's configuration adds beyond its own files: the
-  * commands and hosts its `.atc/config.json` pre-approves, the classified model it names and
-  * the bindings of its `.atc/keys.properties`. A cloned repository can ship both files, so
-  * [[Config.load]] leaves these out until the user has trusted them. Trust is a fingerprint of
-  * exactly these grants, kept per project in `trusted-projects.json` beside the global config,
-  * so a change to them (a `git pull`, say) is put to the user again and other edits are not. */
+  * commands and hosts its `.atc/config.json` pre-approves, the classified model it names, the
+  * provider web search it turns on and the bindings of its `.atc/keys.properties`. A cloned
+  * repository can ship both files, so [[Config.load]] leaves these out until the user has
+  * trusted them. Trust is a fingerprint of exactly these grants, kept per project in
+  * `trusted-projects.json` beside the global config, so a change to them (a `git pull`, say) is
+  * put to the user again and other edits are not. */
 object ProjectTrust:
   val StoreFile = "trusted-projects.json"
 
@@ -23,9 +25,11 @@ object ProjectTrust:
     hosts: List[String],
     classifiedModel: Option[String],
     keys: List[String],
+    webSearch: Boolean,
     fingerprint: String,
   ):
-    def isEmpty: Boolean = commands.isEmpty && hosts.isEmpty && classifiedModel.isEmpty && keys.isEmpty
+    def isEmpty: Boolean =
+      commands.isEmpty && hosts.isEmpty && classifiedModel.isEmpty && keys.isEmpty && !webSearch
 
     /** What the user is asked to trust, one row per kind, with every entry. */
     def describe: List[String] =
@@ -34,6 +38,7 @@ object ProjectTrust:
         Option.when(hosts.nonEmpty)(s"allows the hosts ${hosts.mkString(", ")}"),
         classifiedModel.map(model => s"sends classified data to the model $model"),
         Option.when(keys.nonEmpty)(s"binds the keys ${keys.mkString(", ")} in .atc/keys.properties"),
+        Option.when(webSearch)("turns on the provider's web search, which the allowed hosts do not limit"),
       ).flatten
 
   /** Grants of the project at `root` the user has not trusted, and whether an earlier
@@ -86,10 +91,23 @@ object ProjectTrust:
 
   /** `layer` without the settings that need trust. */
   def withoutGrants(layer: ConfigLayer): ConfigLayer =
-    val json = ujson.Obj.from(layer.json.value.filterNot((k, v) => Removed(k) && !v.isNull))
+    val json = new ujson.Obj(ujson.copy(layer.json).obj)
+    for key <- Removed if json.value.get(key).exists(!_.isNull) do json.value.remove(key)
+    for entry <- webSearchEntries(json) do entry.remove("webSearch")
     layer.copy(json = json, config = ConfigLayer.settings(json, layer.path.fold("")(_.toString)))
 
   private val Removed = Set("commands", "hosts", "classifiedModel")
+
+  /** The top-level object and the model entries of `json` that turn web search on. */
+  private def webSearchEntries(json: ujson.Obj): List[mutable.Map[String, ujson.Value]] =
+    val models =
+      for
+        providers <- json.value.get("providers").flatMap(_.objOpt).toList
+        provider <- providers.values.flatMap(_.objOpt)
+        entries <- provider.get("models").flatMap(_.objOpt).toList
+        entry <- entries.values.flatMap(_.objOpt)
+      yield entry
+    (json.value :: models).filter(_.get("webSearch").contains(ujson.True))
 
   private def readConfig(root: Path): ujson.Obj =
     val config = Config.projectPath(root)
@@ -104,14 +122,24 @@ object ProjectTrust:
     def strings(key: String) = json.value.get(key).flatMap(_.arrOpt).fold(Nil)(_.toList.flatMap(_.strOpt))
     val keys = bindings.toList.sortBy(_._1)
     val classified = json.value.get("classifiedModel").flatMap(_.strOpt)
+    val webSearch = webSearchEntries(json).nonEmpty
+    // Web search enters only when it is on, so that fingerprints recorded without it still match.
     val granted = ujson.Obj(
       "commands" -> ujson.Arr.from(strings("commands")),
       "hosts" -> ujson.Arr.from(strings("hosts")),
       "classifiedModel" -> classified.fold[ujson.Value](ujson.Null)(ujson.Str(_)),
       "keys" -> ujson.Obj.from(keys.map((name, value) => name -> ujson.Str(value))),
     )
+    if webSearch then granted("webSearch") = ujson.True
     val digest = MessageDigest.getInstance("SHA-256").nn.digest(ujson.write(granted).getBytes(UTF_8))
-    Grants(strings("commands"), strings("hosts"), classified, keys.map(_._1), HexFormat.of().nn.formatHex(digest))
+    Grants(
+      strings("commands"),
+      strings("hosts"),
+      classified,
+      keys.map(_._1),
+      webSearch,
+      HexFormat.of().nn.formatHex(digest),
+    )
 
   private def key(root: Path): String = PlatformPath.portable(PlatformPath.canonical(root))
 

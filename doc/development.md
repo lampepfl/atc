@@ -642,23 +642,25 @@ first role. Project rules are anchored to the directory containing
 | Mode and numeric limits | Granting layers set values; project layers may only tighten them |
 | Safe mode, gitignore visibility | Project layers may enable, but cannot disable, an enabled restriction |
 
-A project layer's `commands`, `hosts` and `classifiedModel`, and its `keys.properties`,
-reach beyond its own files, and a cloned repository can ship them. `ProjectTrust` records a
-SHA-256 fingerprint of exactly these per project root in `~/.atc/trusted-projects.json`
-(owner-only); `Config.load` leaves them out while the fingerprint is not recorded, judging
-that on the same reading of the files that the layer and the keys come from, so every reload
-agrees with the decision. `Setup.load` shows every entry they grant, escaped like
-permission details, and offers Trust, Run without these grants, or Quit; it says whether the config is
-new or has changed since it was trusted. Trust records the fingerprint of what was shown, so a
-file that changed meanwhile stays untrusted. A `-p` run warns and goes without them unless
-`--approve-all` is given, which takes them unrecorded. Configs ATC writes itself (`--init`,
-the offered starter config) are trusted as they are written, unless the directory already
-waited for trust, such as for a `keys.properties` the repository shipped: the prompt then
-shows the starter config's grants with it. Neither writes the home directory's
-`.atc/config.json`, which is the global config, nor through a symbolic link at `.atc`, its
-`config.json` or its `.gitignore`. A `/model`, `/effort` or `/classifiedmodel` save keeps a
-trusted project trusted. Other edits, such as a new
-`model`, do not change the fingerprint.
+A project layer's `commands`, `hosts` and `classifiedModel`, a `webSearch: true` at its top
+level or on a model entry, and its `keys.properties` reach beyond its own files, and a cloned
+repository can ship them. Provider web search is an outbound channel that `hosts` and
+`denyHosts` do not govern. `ProjectTrust` records a SHA-256 fingerprint of exactly these per
+project root in `~/.atc/trusted-projects.json` (owner-only); web search enters it only when
+on, so fingerprints recorded without it still match. `Config.load` leaves them out while the
+fingerprint is not recorded, judging that on the same reading of the files that the layer and
+the keys come from, so every reload agrees with the decision. `Setup.load` shows every entry
+they grant, escaped like permission details, and offers Trust, Run without these grants, or
+Quit; it says whether the config is new or has changed since it was trusted. Trust records
+the fingerprint of what was shown, so a file that changed meanwhile stays untrusted. A `-p`
+run warns and goes without them unless `--approve-all` is given, which takes them unrecorded.
+Configs ATC writes itself (`--init`, the offered starter config) are trusted as they are
+written, unless the directory already waited for trust, such as for a `keys.properties` the
+repository shipped: the prompt then shows the starter config's grants with it. Neither writes
+the home directory's `.atc/config.json`, which is the global config, nor through a symbolic
+link at `.atc`, its `config.json` or its `.gitignore`. A `/model`, `/effort`,
+`/classifiedmodel` or `/config` save keeps a trusted project trusted. Other edits, such as a
+new `model`, do not change the fingerprint.
 
 Only explicitly defined project settings narrow a value. `executionTimeoutMs` defaults to
 300000; a JSON `null` clears it and means no limit. Reading a layer
@@ -671,7 +673,8 @@ patterns, model references and provider settings before execution.
 
 `/config` (`ConfigCommands`) changes only `predictInput`, `notifications`, `webSearch`,
 `autoCompactThreshold` and `compactKeepRatio`: settings outside `PolicyKeys`, so none can
-loosen the sandbox, and a project config may set them. Every change goes into a `session`
+loosen the sandbox, and a project config may set them; one that turns `webSearch` on needs
+trust. Every change goes into a `session`
 layer that `Models` keeps in memory and appends after the files on each reload, so a
 `/providers` edit does not drop it. Saving to the project config in force or to the global
 config also writes that file with `Config.setTopLevel`; a failed reload restores the file.

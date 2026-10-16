@@ -511,6 +511,11 @@ class LayerSuite extends munit.FunSuite:
   test("a project config that only narrows needs no trust"):
     val w = World(project = """{ "denyCommands": ["curl*"], "classifiedModel": null, "mode": "readonly" }""")
     assertEquals(ProjectTrust.pending(w.cwd, w.globalPath.getParent.nn), None)
+    val off = World(
+      global = """{ "providers": { "p": { "api": "echo" } } }""",
+      project = """{ "webSearch": false, "providers": { "p": { "models": { "m": { "webSearch": false } } } } }""",
+    )
+    assertEquals(ProjectTrust.pending(off.cwd, off.globalPath.getParent.nn), None)
 
   test("the trust prompt shows every command, host and key it trusts"):
     val commands = (1 to 25).map(i => s"tool$i").toList
@@ -520,6 +525,35 @@ class LayerSuite extends munit.FunSuite:
     val rows = ProjectTrust.pending(w.cwd, w.globalPath.getParent.nn).get.grants.describe.mkString("\n")
     for entry <- commands ++ hosts ++ (1 to 14).map(i => s"K$i") do assert(rows.contains(entry), entry)
     assert(!rows.contains("more"), rows)
+
+  test("a project's web search counts only once the user trusts it"):
+    val w = World(
+      global = """{ "files": [ { "path": ".", "access": "write" } ],
+                   "providers": { "p": { "api": "echo", "models": { "m": {} } } } }""",
+      project = """{ "webSearch": true,
+                    "providers": { "p": { "models": { "m": { "webSearch": true }, "n": {} } } } }""",
+    )
+    val atcDir = w.globalPath.getParent.nn
+    val untrusted = Config.load(w.cwd, None, w.globalPath)
+    assertEquals(untrusted.settings.webSearch, None)
+    assertEquals(untrusted.catalog.find("m").settings.webSearch, None)
+    assertEquals(untrusted.catalog.find("n").ref, "p/n", "the models it adds still apply")
+    val pending = ProjectTrust.pending(w.cwd, atcDir).get
+    assertEquals(
+      pending.grants.describe,
+      List("turns on the provider's web search, which the allowed hosts do not limit")
+    )
+    ProjectTrust.trust(pending, atcDir)
+    val trusted = Config.load(w.cwd, None, w.globalPath)
+    assertEquals(trusted.settings.webSearch, Some(true))
+    assertEquals(trusted.catalog.find("m").settings.webSearch, Some(true))
+    // a model entry alone that turns it on needs trust as well
+    val entry = World(
+      global = """{ "providers": { "p": { "api": "echo", "models": { "m": {} } } } }""",
+      project = """{ "providers": { "p": { "models": { "m": { "webSearch": true } } } } }""",
+    )
+    assert(ProjectTrust.pending(entry.cwd, entry.globalPath.getParent.nn).get.grants.webSearch)
+    assertEquals(Config.load(entry.cwd, None, entry.globalPath).catalog.find("m").settings.webSearch, None)
 
   test("what is trusted is what the prompt showed, not a later version of the files"):
     val w = World(project = """{ "commands": ["make test"] }""")

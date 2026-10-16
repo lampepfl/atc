@@ -377,9 +377,9 @@ reach, refuses `rm -rf *`, `sudo` and bare shells, and grants no files, commands
 The [project config](app/resources/atc/project-template.json) opens a project, and because
 it lives inside the repository it can open *that repository* but no files beyond it, cannot
 loosen the limits the global config sets, and cannot change a provider's address or key.
-What it adds beyond its own files (pre-approved commands and hosts, a classified model, the
-keys in its `.atc/keys.properties`) applies only after ATC has shown it to you and you chose
-to trust it; ATC asks again when that part changes.
+What it adds beyond its own files (pre-approved commands and hosts, a classified model,
+provider web search, the keys in its `.atc/keys.properties`) applies only after ATC has
+shown it to you and you chose to trust it; ATC asks again when that part changes.
 `/config` changes the settings that leave the sandbox alone (input prediction,
 notifications, web search, compaction) for the session or in either file. The exact merge
 rules are in [doc/development.md](doc/development.md#configuration-semantics).

@@ -1,7 +1,7 @@
 package atc.commands
 
 import atc.{App, Debug}
-import atc.config.{Config, Origin}
+import atc.config.{Config, Origin, ProjectTrust}
 import atc.platform.PlatformPath
 
 import java.nio.file.{Files, Path}
@@ -109,8 +109,11 @@ final class ConfigCommands(app: App):
   private def apply(setting: Setting, value: ujson.Value, scope: Scope): Unit =
     val original = scope.path.filter(Files.exists(_)).map(p => p -> Files.readString(p).nn)
     val created = if scope.path.contains(Config.globalPath) then Config.ensureGlobal() else Nil
+    // The user's own setting, such as web search, must not make a trusted project ask again.
+    val trusted = scope.name == "project" && ProjectTrust.pending(app.cwd, Config.globalDir).isEmpty
     try
       scope.path.foreach(Config.setTopLevel(_, setting.key, value))
+      if trusted then ProjectTrust.trust(app.cwd, Config.globalDir)
       models.setForSession(setting.key, value)
       app.useSettings(models.configuration.settings)
       val shown = setting.current(models.configuration.settings)
@@ -119,6 +122,7 @@ final class ConfigCommands(app: App):
       case NonFatal(e) =>
         original.foreach((p, text) => Files.writeString(p, text))
         created.foreach(Files.deleteIfExists)
+        if trusted then ProjectTrust.trust(app.cwd, Config.globalDir)
         tui.error(s"Nothing changed: ${Debug.message(e)}")
 
   /** The note on a saved value, and on a later config file that sets it too and so
