@@ -57,7 +57,7 @@ object Setup:
       case ready: FirstRun.Outcome.Ready =>
         saveKeyAndModels(ready)
         Config.writeGlobalConfig(global, List(ready.provider))
-        Models.rememberLast(ready.model.ref)
+        Models.rememberLast(Config.globalDir, ready.model.ref)
         tui.success(
           s"Wrote ${PlatformPath.display(global)}${
               if ready.key.isDefined then s" and ${PlatformPath.display(Config.globalKeysPath)}" else ""

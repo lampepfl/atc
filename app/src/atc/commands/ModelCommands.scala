@@ -1,6 +1,6 @@
 package atc.commands
 
-import atc.{App, Debug, Models}
+import atc.{App, Debug}
 import atc.config.{Config, ModelConfig, ModelSpec, ObjectText, Origin, ProjectTrust}
 import atc.llm.ChatModel
 import atc.platform.PlatformPath
@@ -53,7 +53,7 @@ final class ModelCommands(app: App):
       val model = models.client(spec)
       model.effort = model.defaultEffort
       agent.model = model
-      Models.rememberLast(spec.ref)
+      models.rememberLast(spec.ref)
       app.updateStatus()
       app.predictor.start()
       val saved = remember("model", Some(ujson.Str(models.catalog.label(spec))))
@@ -150,7 +150,7 @@ final class ModelCommands(app: App):
     val agentModel = moved(agent.model)
     if agentModel ne agent.model then
       agent.model = agentModel
-      Models.rememberLast(agentModel.ref)
+      models.rememberLast(agentModel.ref)
     agent.classifiedModel = agent.classifiedModel.map(moved)
     next.refresh()
     app.updateStatus()

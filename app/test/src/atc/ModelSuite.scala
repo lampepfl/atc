@@ -123,7 +123,7 @@ class ModelSuite extends munit.FunSuite:
       """{ "providers": { "p": { "api": "openai", "url": "http://127.0.0.1:9", "key": "k", "models": {
         |  "a": { "webSearch": true }, "b": { "webSearch": true } } } } }""".stripMargin
     )
-    val models = Models(Cli.Args(cwd = dir), Config.load(dir, None, global))
+    val models = Models(Cli.Args(cwd = dir), Config.load(dir, None, global), dir)
     try
       val a = models.client("a")
       assertEquals(a.webSearch, true)
@@ -267,7 +267,7 @@ class ModelSuite extends munit.FunSuite:
       """{ "model": "typo", "classifiedModel": "p/a" }"""
     )
     val configuration = Config.load(project, None, global, trustProject = true)
-    val models = Models(Cli.Args(cwd = project), configuration)
+    val models = Models(Cli.Args(cwd = project), configuration, dir)
     val warned = List.newBuilder[String]
     assertEquals(models.configured("model", configuration.settings.model, warned += _), None)
     assertEquals(
@@ -284,9 +284,26 @@ class ModelSuite extends munit.FunSuite:
       warnings.head
     )
     assertEquals(models.initial(_ => ()).ref, "p/a", "the only model stands in")
-    intercept[IllegalArgumentException](Models(Cli.Args(cwd = project, model = Some("typo")), configuration).initial(
-      _ => ()
-    ))
+    intercept[IllegalArgumentException](Models(
+      Cli.Args(cwd = project, model = Some("typo")),
+      configuration,
+      dir
+    ).initial(_ => ()))
+
+  test("the model last chosen is kept in the atc directory the session started with"):
+    val dir = java.nio.file.Files.createTempDirectory("atc-last").nn
+    val global = dir.resolve("config.json").nn
+    java.nio.file.Files.writeString(
+      global,
+      """{ "providers": { "p": { "api": "echo", "models": { "a": {}, "b": {} } } } }"""
+    )
+    val models = Models(Cli.Args(cwd = dir), Config.load(dir, None, global), dir)
+    try
+      assertEquals(models.initial(_ => ()).ref, "p/a", "the first model while none is remembered")
+      models.rememberLast("p/b")
+      assertEquals(java.nio.file.Files.readString(dir.resolve("last-model")).nn.trim, "p/b")
+      assertEquals(models.initial(_ => ()).ref, "p/b")
+    finally models.close()
 
   test("a project config cannot move the global classified model to another model"):
     val dir = java.nio.file.Files.createTempDirectory("atc-classified").nn
@@ -304,7 +321,7 @@ class ModelSuite extends munit.FunSuite:
       java.nio.file.Files.writeString(Config.projectPath(cwd), project)
       val configuration = Config.load(cwd, None, global)
       assertEquals(ProjectTrust.pending(cwd, global.getParent.nn), None, "nothing is put to the user")
-      val models = Models(Cli.Args(cwd = cwd), configuration)
+      val models = Models(Cli.Args(cwd = cwd), configuration, global.getParent.nn)
       val warned = List.newBuilder[String]
       val ref = models.classified(warned += _).map(_.ref)
       models.close()
@@ -333,7 +350,7 @@ class ModelSuite extends munit.FunSuite:
       val cwd = dir.resolve(s"p${project.hashCode.abs}").nn
       java.nio.file.Files.createDirectories(cwd.resolve(".atc"))
       java.nio.file.Files.writeString(Config.projectPath(cwd), project)
-      val models = Models(Cli.Args(cwd = cwd), Config.load(cwd, None, global))
+      val models = Models(Cli.Args(cwd = cwd), Config.load(cwd, None, global), dir)
       val warned = List.newBuilder[String]
       val model = models.initial(warned += _)
       models.close()

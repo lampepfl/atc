@@ -259,5 +259,8 @@ object ModelListStore:
   private final case class Model(id: String, settings: ModelConfig) derives ReadWriter
   private final case class Saved(api: String, url: Option[String], models: List[Model]) derives ReadWriter
 
+  /** `model-lists.json` in `atcDir`. */
+  def in(atcDir: Path): ModelListStore = ModelListStore(atcDir.resolve("model-lists.json").nn)
+
   /** `~/.atc/model-lists.json`. */
-  def global: ModelListStore = ModelListStore(Config.globalDir.resolve("model-lists.json").nn)
+  def global: ModelListStore = in(Config.globalDir)

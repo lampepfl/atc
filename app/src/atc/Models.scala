@@ -13,11 +13,14 @@ import scala.util.control.NonFatal
 
 /** The models of a session: every model of every provider, and one client per
   * model, created when first used. `/providers` changes the configuration they
-  * come from; the permission policy keeps the one loaded at start. */
-final class Models(args: Cli.Args, start: Configuration):
+  * come from; the permission policy keeps the one loaded at start. `atcDir` holds
+  * the global config `start` was loaded with, and the state kept between sessions. */
+final class Models(args: Cli.Args, start: Configuration, atcDir: Path):
+  /** The model lists the providers returned, kept between sessions. */
+  val lists: ModelListStore = ModelListStore.in(atcDir)
   /** Every model of every configured provider, resolved with its key; a
     * provider that configures none is asked for its list after the start. */
-  var catalog: ModelCatalog = start.catalog(ChatModel.listModels, ModelListStore.global)
+  var catalog: ModelCatalog = start.catalog(ChatModel.listModels, lists)
   /** The configuration as `/providers` and `/config` last left it. */
   var configuration: Configuration = start
   private val clients = mutable.Map[String, ChatModel]()
@@ -50,7 +53,7 @@ final class Models(args: Cli.Args, start: Configuration):
     * that names no model stops the start; the config's `model` is passed over with
     * a warning, and so is an `effort` the model does not take. */
   def initial(warn: String => Unit): ChatModel =
-    def last = Models.last.flatMap(ref => Try(catalog.find(ref)).toOption)
+    def last = Models.last(atcDir).flatMap(ref => Try(catalog.find(ref)).toOption)
     val model = args.model.map(client).orElse(configured("model", start.settings.model, warn))
       .getOrElse(client(last.getOrElse(catalog.default)))
     start.settings.effort.map(_.toLowerCase(Locale.ROOT)).foreach: effort =>
@@ -90,7 +93,7 @@ final class Models(args: Cli.Args, start: Configuration):
       start.layers.exists(l => !l.origin.grants && l.defines("providers"))
     def granted(ref: String): ModelSpec =
       val spec = catalog.find(ref)
-      val own = start.granting.catalog(ChatModel.listModels, ModelListStore.global).find(ref)
+      val own = start.granting.catalog(ChatModel.listModels, lists).find(ref)
       if own.ref != spec.ref || own.modelId != spec.modelId then
         throw IllegalArgumentException(
           s"the project config changes it from ${own.ref} (${own.modelId}) to ${spec.ref} (${spec.modelId})"
@@ -108,11 +111,12 @@ final class Models(args: Cli.Args, start: Configuration):
   /** Load the configuration again, with this session's settings over it, and
     * rebuild the catalog. The clients made so far take up the new `webSearch`. */
   def reload(): Unit =
-    val files = Config.load(args.cwd, args.config, start.bundledGlobal, trustProject = args.approveAll)
+    val global = atcDir.resolve("config.json").nn
+    val files = Config.load(args.cwd, args.config, global, start.bundledGlobal, trustProject = args.approveAll)
     configuration =
       if session.isEmpty then files
       else Configuration.combine(files.layers :+ ConfigLayer.session(ujson.Obj.from(session)), files.keys)
-    catalog = configuration.catalog(ChatModel.listModels, ModelListStore.global)
+    catalog = configuration.catalog(ChatModel.listModels, lists)
     applyWebSearch()
 
   private def applyWebSearch(): Unit =
@@ -133,6 +137,9 @@ final class Models(args: Cli.Args, start: Configuration):
         session = before
         throw e
 
+  /** Remember a model choice for the next start ([[Models.rememberLast]]). */
+  def rememberLast(ref: String): Unit = Models.rememberLast(atcDir, ref)
+
   def close(): Unit =
     clients.values.foreach: model =>
       try model.close()
@@ -145,16 +152,16 @@ object Models:
     s"${model.ref} — ${spec.displayName.getOrElse(model.modelId)}" +
       (if model.webSearch then " (web search)" else "")
 
-  private def lastPath: Path = Config.globalDir.resolve("last-model").nn
+  private def lastPath(atcDir: Path): Path = atcDir.resolve("last-model").nn
 
   /** The model last chosen with `/model`, the default when nothing names one. */
-  private def last: Option[String] =
-    try Some(Files.readString(lastPath).nn.trim).filter(_.nonEmpty)
+  private def last(atcDir: Path): Option[String] =
+    try Some(Files.readString(lastPath(atcDir)).nn.trim).filter(_.nonEmpty)
     catch case NonFatal(_) => None
 
-  /** Remember a model choice; losing it only loses a default. */
-  def rememberLast(ref: String): Unit =
+  /** Remember a model choice in `atcDir`; losing it only loses a default. */
+  def rememberLast(atcDir: Path, ref: String): Unit =
     try
-      Files.createDirectories(lastPath.getParent)
-      Files.writeString(lastPath, ref + "\n")
+      Files.createDirectories(atcDir)
+      Files.writeString(lastPath(atcDir), ref + "\n")
     catch case NonFatal(_) => ()

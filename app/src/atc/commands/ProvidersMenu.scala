@@ -2,8 +2,7 @@ package atc.commands
 
 import atc.{App, Debug, FirstRun, Setup}
 import atc.config.{
-  Config, ModelCatalog, ModelListStore, ModelSpec, ObjectText, ProjectTrust, ProviderConfig, ProviderEdits,
-  ProviderPreset
+  Config, ModelCatalog, ModelSpec, ObjectText, ProjectTrust, ProviderConfig, ProviderEdits, ProviderPreset
 }
 import atc.llm.ChatModel
 import atc.platform.PlatformPath
@@ -32,7 +31,7 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
       val p = settings.providers(name)
       val offered =
         if p.models.isEmpty then "offers every model it lists"
-        else ProviderEdits.offered(p, endpoint(name, p).flatMap(ModelListStore.global.load).getOrElse(Nil))
+        else ProviderEdits.offered(p, endpoint(name, p).flatMap(models.lists.load).getOrElse(Nil))
       s"${name.padTo(width, ' ')}  ${if p.enabled then "on " else "off"}  $offered" -> (() => actions(name))
     val addable = ProviderPreset.all.filterNot(p => settings.providers.contains(p.name))
     providers ++ Option.when(addable.nonEmpty)("Add a provider" -> (() => add(addable)))
@@ -85,7 +84,7 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
       tui.info(s"Fetching the models of $name...")
       try
         val fetched = ChatModel.listModels(spec)
-        ModelListStore.global.save(spec, fetched)
+        models.lists.save(spec, fetched)
         fetched
       catch
         case NonFatal(e) =>
