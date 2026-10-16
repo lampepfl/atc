@@ -1349,7 +1349,8 @@ added to the history, and `/new` clears it. These records are for inspection and
 part of saved conversations.
 
 Permission menus include **Tell the agent what to change**, followed by free-text input.
-Empty or cancelled feedback returns to the menu. `PromptReader.readAnswer` consumes JLine's
+Empty or cancelled feedback returns to the menu with the cursor on that row.
+`PromptReader.readAnswer` consumes JLine's
 preserved input-cancellation interrupt so the next menu can read normally.
 Plain prompts accept exact `y`/`yes` or
 `s`/`session` approvals, exact `n`/`no` denials, and treat other non-empty input as

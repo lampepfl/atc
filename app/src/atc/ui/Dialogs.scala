@@ -38,9 +38,10 @@ private[ui] final class Dialogs(
   /** Where a pop-up continues: under the text of its question or request. */
   private val Under = Indent + Indent
 
-  /** A pop-up's menu: under its question, which it does not repeat as a title. */
-  private def menu(labels: List[String], escape: String): Option[String] =
-    keys.withPaused(menus.list("", labels, escape, 0, Under)).flatMap(labels.lift)
+  /** A pop-up's menu, its cursor on `initial` at first: under its question, which it does
+    * not repeat as a title. */
+  private def menu(labels: List[String], escape: String, initial: Int = 0): Option[String] =
+    keys.withPaused(menus.list("", labels, escape, initial, Under)).flatMap(labels.lift)
 
   private def note(text: String): Unit = write(Under + styled(text, Dim) + "\n")
 
@@ -64,14 +65,17 @@ private[ui] final class Dialogs(
       if plain then
         Menus.permissionReply(freeText(styled("Allow? [y]es once / [s]ession / [n]o / type instructions: ", Yellow)))
       else
+        val choices = List(Menus.AllowOnce, Menus.AllowSession, Menus.DenyLabel, Menus.ReviseLabel)
         var selected: Option[Decision] = None
+        // After empty instructions the menu opens again on that row, never on Allow once.
+        var initial = 0
         while selected.isEmpty do
-          val choices = List(Menus.AllowOnce, Menus.AllowSession, Menus.DenyLabel, Menus.ReviseLabel)
-          selected = menu(choices, escape = "deny") match
+          selected = menu(choices, escape = "deny", initial) match
             case Some(Menus.AllowOnce) => Some(Decision.AllowOnce)
             case Some(Menus.AllowSession) => Some(Decision.AllowSession)
             case Some(Menus.ReviseLabel) =>
               note("Describe what to change. The current request will not be approved.")
+              initial = choices.indexOf(Menus.ReviseLabel)
               freeText(Under + styled("instructions> ", Cyan)).map(Decision.Revise(_))
             case Some(_) => Some(Decision.Deny)
             case None =>
