@@ -32,9 +32,9 @@ private[ui] final class StatusLine(
   private var context = ""
   private var titleBase = "atc"
   private var lastTitle = ""
-  /** The program status between turns as state, kind and message: `idle` until a turn ends. */
-  private var resting = ("idle", "", "")
-  private var lastStatus = ("", "", "")
+  /** The program status between turns: `idle` until a turn ends. */
+  private var resting: StatusLine.Program = ("idle", "", "")
+  private var lastStatus: StatusLine.Program = ("", "", "")
   @volatile private var closed = false
   @volatile private var turnStarted = 0L
   /** What the turn is doing ("reasoning", "running Scala"). */
@@ -44,7 +44,7 @@ private[ui] final class StatusLine(
   /** The keys the open menu or answer field takes; shown instead of everything else. */
   @volatile private var hint = ""
   /** What the open pop-up waits for, as the program status `kind` and message. */
-  @volatile var waitingFor = ("question", "")
+  @volatile var waitingFor: (kind: String, message: String) = ("question", "")
 
   footer.foreach: status =>
     status.setBorder(false)
@@ -71,36 +71,32 @@ private[ui] final class StatusLine(
       operation = label
       refresh()
 
-  def withOperation[A](label: String)(body: => A): A =
-    val previous = operation
-    def show(value: String): Unit = screen.synchronized:
-      operation = value
-      refresh()
-    show(label)
-    try body
-    finally show(previous)
+  def withOperation[A](label: String)(body: => A): A = showing(operation, operation = _, label)(body)
 
-  def withHint[A](keys: String)(body: => A): A =
-    val previous = hint
-    def show(value: String): Unit = screen.synchronized:
-      hint = value
+  def withHint[A](keys: String)(body: => A): A = showing(hint, hint = _, keys)(body)
+
+  /** Run `body` with the footer field that `set` changes showing `value`, then what it held before. */
+  private def showing[A](current: String, set: String => Unit, value: String)(body: => A): A =
+    def show(text: String): Unit = screen.synchronized:
+      set(text)
       refresh()
-    show(keys)
+    show(value)
     try body
-    finally show(previous)
+    finally show(current)
 
   /** Redraw the window title and send the program status where they changed. */
   def refreshTitle(): Unit = if !plain && !closed then
     val waiting = busy() && popupOpen()
     val marker = if waiting then "? " else if busy() then s"${g.bullet} " else ""
     val title = Ansi.sanitize(marker + titleBase).replace('\n', ' ').replace('\t', ' ')
-    val status =
-      if waiting then ("blocked", waitingFor._1, waitingFor._2)
+    val status: StatusLine.Program =
+      if waiting then ("blocked", waitingFor.kind, waitingFor.message)
       else if busy() then ("working", "", operation)
       else resting
     if title != lastTitle || status != lastStatus then
       if title != lastTitle then screen.writeStyle(s"${Ansi.Esc}]0;$title\u0007")
-      if status != lastStatus then screen.writeStyle(StatusLine.programStatus(status._1, status._2, status._3))
+      if status != lastStatus then
+        screen.writeStyle(StatusLine.programStatus(status.state, status.kind, status.message))
       lastTitle = title
       lastStatus = status
       screen.flush()
@@ -125,7 +121,7 @@ private[ui] final class StatusLine(
         if resized then
           status.resize(Size.of(width, screen.height))
           footerSize = dimensions
-        val text = screen.fit(Ansi.sanitize(label).replace('\n', ' ').replace('\t', ' '), 0)
+        val text = screen.fit(Ansi.sanitize(label).replace('\t', ' '), 0)
         if resized || text != lastFooter then
           screen.flush()
           StatusLine.draw(terminal, status, text)
@@ -158,6 +154,9 @@ private[ui] final class StatusLine(
     footer.foreach(_.close())
 
 private[atc] object StatusLine:
+  /** A Program Status Protocol report's fields. */
+  private type Program = (state: String, kind: String, message: String)
+
   /** A Program Status Protocol report (OSC 7501): `key=value` pairs, the message on one
     * line and Base64-encoded. Terminals without the protocol ignore it. */
   private[atc] def programStatus(state: String, kind: String, message: String): String =
