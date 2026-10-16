@@ -2,7 +2,7 @@ package atc
 
 import atc.config.{ModelConfig, ModelSpec, Tokens}
 import atc.llm.*
-import atc.llm.ChatGPTAuth.Tokens as SignIn
+import atc.llm.ChatGPTAuth.SignIn
 
 import com.sun.net.httpserver.HttpServer
 

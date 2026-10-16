@@ -33,14 +33,14 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
 
   private val http = Providers.httpClient(Timeout, Timeout, Timeout, Timeout)
 
-  /** The saved tokens; `None` when not signed in or the file cannot be read. */
-  def load(): Option[Tokens] =
-    try Option.when(Files.isRegularFile(file))(read[Tokens](Files.readString(file).nn))
+  /** The saved sign-in; `None` when not signed in or the file cannot be read. */
+  def load(): Option[SignIn] =
+    try Option.when(Files.isRegularFile(file))(read[SignIn](Files.readString(file).nn))
     catch case NonFatal(_) => None
 
-  /** Tokens for a request: the saved ones, refreshed first when they expire soon. */
-  def current(): Tokens = synchronized:
-    def fresh(t: Tokens) = t.expiresAt - System.currentTimeMillis() > RefreshMargin.toMillis
+  /** The sign-in for a request: the saved one, refreshed first when it expires soon. */
+  def current(): SignIn = synchronized:
+    def fresh(t: SignIn) = t.expiresAt - System.currentTimeMillis() > RefreshMargin.toMillis
     val saved = signedIn()
     if fresh(saved) then saved
     else
@@ -49,13 +49,13 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
         val latest = signedIn()
         if fresh(latest) then latest else refresh(latest)
 
-  /** New tokens after the backend rejected `stale`. Another process may have refreshed already. */
-  def renewed(stale: Tokens): Tokens = synchronized:
+  /** A new sign-in after the backend rejected `stale`. Another process may have refreshed already. */
+  def renewed(stale: SignIn): SignIn = synchronized:
     locked:
       val saved = signedIn()
       if saved.access != stale.access then saved else refresh(saved)
 
-  private def signedIn(): Tokens = load().getOrElse(throw SignInNeeded("Not signed in to ChatGPT"))
+  private def signedIn(): SignIn = load().getOrElse(throw SignInNeeded("Not signed in to ChatGPT"))
 
   /** Run `step` holding the lock on `<file>.lock`, which keeps two atc processes from using
     * the same single-use refresh token. */
@@ -67,7 +67,7 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
       catch case _: UnsupportedOperationException => FileChannel.open(path, options).nn
     Using.resource(channel)(c => Using.resource(c.lock().nn)(_ => step))
 
-  private def refresh(saved: Tokens): Tokens =
+  private def refresh(saved: SignIn): SignIn =
     val body = ujson.Obj("grant_type" -> "refresh_token", "client_id" -> ClientId, "refresh_token" -> saved.refresh)
     try save(tokens(post(okhttp3.RequestBody.create(ujson.write(body), JsonType)), Some(saved)))
     catch
@@ -105,7 +105,7 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
     verifier: String,
     state: String,
   ) extends AutoCloseable:
-    private val done = CompletableFuture[Tokens]()
+    private val done = CompletableFuture[SignIn]()
     @volatile private var received = false
 
     server.createContext("/auth/callback", respond(_))
@@ -115,14 +115,14 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
     def callbackReceived: Boolean = received
 
     /** The tokens, once the sign-in is complete; waits up to `timeout`. */
-    def await(timeout: Duration): Option[Either[String, Tokens]] =
+    def await(timeout: Duration): Option[Either[String, SignIn]] =
       try Some(Right(done.get(timeout.toMillis, TimeUnit.MILLISECONDS)))
       catch
         case _: TimeoutException => None
         case e: ExecutionException => Some(Left(Debug.message(e.getCause.nn)))
 
     /** Complete with the address the browser ended on (or just its query). */
-    def paste(address: String): Either[String, Tokens] =
+    def paste(address: String): Either[String, SignIn] =
       accept(parameters(address.trim.dropWhile(_ != '?').stripPrefix("?").takeWhile(_ != '#')))
 
     def close(): Unit = server.stop(0)
@@ -138,7 +138,7 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
         call.getResponseBody.nn.write(bytes)
       finally call.close()
 
-    private def accept(params: Map[String, String]): Either[String, Tokens] = synchronized:
+    private def accept(params: Map[String, String]): Either[String, SignIn] = synchronized:
       if done.isDone then await(Duration.ZERO).get
       else if !params.get("state").contains(state) then
         Left("The sign-in does not belong to this attempt (state mismatch)")
@@ -174,8 +174,8 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
         throw TokenRejected(s"HTTP ${response.code}${errorOf(text).fold("")(e => s": $e")}")
       ujson.read(text)
 
-  /** The tokens of a token-endpoint answer; a refresh may omit what did not change. */
-  private def tokens(json: ujson.Value, previous: Option[Tokens]): Tokens =
+  /** The sign-in of a token-endpoint answer; a refresh may omit what did not change. */
+  private def tokens(json: ujson.Value, previous: Option[SignIn]): SignIn =
     def field(name: String) = json.obj.get(name).flatMap(_.strOpt).filter(_.nonEmpty)
     val access = field("access_token").getOrElse(throw TokenRejected("the answer has no access token"))
     val refresh = field("refresh_token").orElse(previous.map(_.refresh))
@@ -190,10 +190,10 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
       .orElse(json.obj.get("expires_in").flatMap(_.numOpt).map(s => now + (s * 1000).toLong))
       .getOrElse(now + Duration.ofHours(1).toMillis)
     val email = idClaims.flatMap(_.obj.get("email")).flatMap(_.strOpt).orElse(previous.flatMap(_.email))
-    Tokens(access, refresh, accountId, expiresAt, email)
+    SignIn(access, refresh, accountId, expiresAt, email)
 
   /** Replace the file atomically, readable by its owner only. */
-  private def save(t: Tokens): Tokens =
+  private def save(t: SignIn): SignIn =
     Config.replaceFile(file, write(t), keepPermissions = false)
     t
 
@@ -217,7 +217,7 @@ object ChatGPTAuth:
 
   /** A sign-in: the tokens, the ChatGPT account (workspace) they act for, and
     * when the access token expires, in epoch milliseconds. */
-  final case class Tokens(
+  final case class SignIn(
     access: String,
     refresh: String,
     accountId: Option[String],
@@ -225,7 +225,7 @@ object ChatGPTAuth:
     email: Option[String] = None,
   ) derives ReadWriter:
     /** Keeps the tokens out of logs and error messages. */
-    override def toString: String = s"Tokens(account=${accountId.getOrElse("-")}, expiresAt=$expiresAt)"
+    override def toString: String = s"SignIn(account=${accountId.getOrElse("-")}, expiresAt=$expiresAt)"
 
   /** The request cannot be authorized until the user signs in (again). An
     * `IOException`, so OkHttp reports it as a failed call. */

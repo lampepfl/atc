@@ -17,13 +17,13 @@ import scala.util.control.NonFatal
 final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
     extends OpenAIResponsesModel(configured.copy(baseUrl = configured.baseUrl.orElse(Some(ChatGPTModel.BackendUrl)))):
   override protected def authorization: Option[okhttp3.Interceptor] = Some: chain =>
-    def authorized(t: ChatGPTAuth.Tokens) =
+    def authorized(t: ChatGPTAuth.SignIn) =
       val b = chain.request().newBuilder().header("Authorization", s"Bearer ${t.access}")
       t.accountId.foreach(b.header("ChatGPT-Account-ID", _))
       b.build()
     // OkHttp reports only an `IOException` as a failed call; anything else from an asynchronous call is
     // thrown again on its dispatcher thread. The cause is left out, since its message may quote a token.
-    def signedIn(step: => ChatGPTAuth.Tokens) =
+    def signedIn(step: => ChatGPTAuth.SignIn) =
       try step
       catch
         case e: IOException => throw e
