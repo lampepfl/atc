@@ -1,6 +1,6 @@
 package atc.perms
 
-import atc.platform.{PathGlob, PlatformPath}
+import atc.platform.{PathGlob, Platform, PlatformPath}
 
 import java.nio.file.{Path, Paths}
 import java.util.regex.Pattern
@@ -17,7 +17,10 @@ import java.util.regex.Pattern
   *  - a trailing `/` is stripped
   *
   * A pattern matches a path if it matches the path itself or any ancestor,
-  * so a rule on a directory covers its whole subtree.
+  * so a rule on a directory covers its whole subtree. Names compare the way the
+  * file system does, case-insensitively on Windows and macOS: canonicalization
+  * corrects the case of existing names only, so a rule must also cover a new name
+  * spelled in another case.
   */
 final class PathPattern private (val raw: String, private val kind: PathPattern.Kind):
   import PathPattern.*
@@ -25,21 +28,28 @@ final class PathPattern private (val raw: String, private val kind: PathPattern.
   def matches(p: Path): Boolean = kind match
     case Kind.Component(glob) => (0 until p.getNameCount).exists(i => glob.matcher(p.getName(i).toString).matches())
     case Kind.Anchored(root, matchers) =>
-      p.startsWith(root) && {
-        val relative = if p == root then "" else PlatformPath.portable(root.relativize(p))
+      within(p, root) && {
+        val relative =
+          if p.getNameCount == root.getNameCount then ""
+          else PlatformPath.portable(p.subpath(root.getNameCount, p.getNameCount))
         matchers.exists(_.matcher(relative).matches())
       }
-    case Kind.Exact(path) => p == path || p.startsWith(path)
+    case Kind.Exact(path) => within(p, path)
 
   override def toString: String = raw
 
 object PathPattern:
   private enum Kind:
-    /** Matched against each name of the path; case-insensitive where file names are. */
+    /** Matched against each name of the path. */
     case Component(glob: Pattern)
     /** `root` is an absolute, real path; matchers are applied to the path relative to it. */
     case Anchored(root: Path, matchers: List[Pattern])
     case Exact(path: Path)
+
+  /** Whether `p` is `root` or below it, comparing names with the file system's case semantics. */
+  private def within(p: Path, root: Path): Boolean =
+    p.getRoot == root.getRoot && p.getNameCount >= root.getNameCount &&
+      (0 until root.getNameCount).forall(i => Platform.samePathName(p.getName(i).toString, root.getName(i).toString))
 
   private val globChars = "*?[{"
 

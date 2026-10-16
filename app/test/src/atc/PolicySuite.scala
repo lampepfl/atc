@@ -84,6 +84,10 @@ class PolicySuite extends munit.FunSuite:
     // locked rule must cover it before it exists (canonicalization only fixes the case of existing names).
     assertEquals(comp.matches(root.resolve("a/b/C.PEM")), Platform.caseInsensitivePaths)
     assertEquals(PathPattern(".atc", root).matches(root.resolve("sub/.ATC/config.json")), Platform.caseInsensitivePaths)
+    // The same holds for the literal part of exact and anchored patterns.
+    assertEquals(PathPattern("./secrets", root).matches(root.resolve("SECRETS/k")), Platform.caseInsensitivePaths)
+    assertEquals(PathPattern("./vault/*.txt", root).matches(root.resolve("VAULT/k.txt")), Platform.caseInsensitivePaths)
+    assert(!PathPattern("./secrets", root).matches(root.resolve("secretsx/k")))
     val anchored = PathPattern("src/*/A.scala", root)
     assert(anchored.matches(root.resolve("src/main/A.scala")))
     assert(!anchored.matches(root.resolve("other/src/main/A.scala")))

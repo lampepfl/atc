@@ -529,7 +529,7 @@ path. `PathGlob` handles slash-based globs on all platforms. Canonicalization re
 symlinks, including dangling write targets. Directory traversal does not follow symlinked
 directories or Windows junctions. Filesystem checks and subsequent operations are not an
 OS-level transactional sandbox. Canonicalization corrects the case of existing names only, so
-on Windows and macOS (`Platform.caseInsensitivePaths`) globs match case-insensitively: a new
+on Windows and macOS (`Platform.caseInsensitivePaths`) patterns match case-insensitively: a new
 `.ATC` is the same directory as `.atc` there and must fall under its locked rule. An agent path
 on a UNC share other than the working directory's is refused before canonicalization, which
 would otherwise contact the server even from a read-only file system.
