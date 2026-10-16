@@ -1463,7 +1463,8 @@ Tests use munit under `app/test/src/atc`. Extend the suite responsible for the b
   rules and host effects, including classified values, local HTTP requests and ignored paths.
 - `HostEditingSuite`: literal replacements, bounded reads and searches, file previews and
   classified exclusions.
-- `ProcessesSuite`, `PlatformProcessSuite`, `TextFilesSuite`: process output and platform behavior.
+- `ProcessesSuite`, `PlatformProcessSuite`, `TextFilesSuite`, `OwnerOnlyFilesSuite`: process
+  output, platform behavior and owner-only file writes.
 - `ConfigSuite`, `LayerSuite`, `ProviderEditsSuite`, `commands.ConfigCommandsSuite`: configuration
   files, layers and project trust, key bindings, and the edits `/providers` and `/config` make.
 - `ModelSuite`, `ModelRequestSuite`, `ProviderRequestSuite`, `ProviderCancellationSuite`,
