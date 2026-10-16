@@ -36,6 +36,12 @@ final class PathPattern private (val raw: String, private val kind: PathPattern.
       }
     case Kind.Exact(path) => within(p, path)
 
+  /** [[matches]] for a path whose parent this pattern does not match. A component glob can then
+    * match only the path's last name, since every other name is also the parent's. */
+  private[perms] def matchesChild(p: Path): Boolean = kind match
+    case Kind.Component(glob) => Option(p.getFileName).exists(name => glob.matcher(name.toString).matches())
+    case _ => matches(p)
+
   override def toString: String = raw
 
 object PathPattern:

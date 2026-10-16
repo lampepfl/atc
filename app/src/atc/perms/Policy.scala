@@ -154,7 +154,7 @@ final class Policy(
           case Some(parent) =>
             val inherited = matchingRules(parent)
             val inheritedSet = inherited.toSet
-            inherited ::: rules.filter(r => !inheritedSet.contains(r) && r.pattern.matches(p))
+            inherited ::: rules.filter(r => !inheritedSet.contains(r) && r.pattern.matchesChild(p))
           case None => rules.filter(_.pattern.matches(p))
         matchingRulesCache.put(p, computed)
         computed
