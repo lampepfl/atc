@@ -1,15 +1,13 @@
 package atc.commands
 
 import atc.{App, Debug, FirstRun, Setup}
-import atc.config.{
-  Config, ModelCatalog, ModelSpec, ObjectText, ProjectTrust, ProviderConfig, ProviderEdits, ProviderPreset
-}
+import atc.config.{Config, ModelCatalog, ModelSpec, ObjectText, ProviderConfig, ProviderEdits, ProviderPreset}
 import atc.llm.ChatModel
 import atc.platform.PlatformPath
 
 import upickle.default.writeJs
 
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 import scala.util.control.NonFatal
 
 /** `/providers`: the provider list, back to it after each change until the
@@ -142,27 +140,20 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
   /** Write `edits`, each to the file that owns it (or `into`), and reload the
     * models. A change that leaves an invalid config is undone. */
   private def applyEdits(edits: List[ProviderEdits.Edit], done: String, into: Option[Path] = None): Boolean =
-    val global = Config.globalPath
     val byFile = edits.groupBy: e =>
-      into.orElse(ProviderEdits.owner(models.configuration.layers, e.path).flatMap(_.path)).getOrElse(global)
-    val created = if byFile.contains(global) && !Files.exists(global) then Config.ensureGlobal() else Nil
-    val originals = byFile.keys.filterNot(created.contains).map(p => p -> Files.readString(p).nn).toMap
-    // The user's own edit, such as turning off the provider of the classified model, must not
-    // make a trusted project ask again.
-    val trusted = ProjectTrust.pending(app.cwd, Config.globalDir).isEmpty
+      into.orElse(ProviderEdits.owner(models.configuration.layers, e.path).flatMap(_.path)).getOrElse(Config.globalPath)
     try
-      byFile.foreach: (path, es) =>
-        Config.editFile(path): text =>
-          es.foldLeft(text)((t, e) => ObjectText.withMember(t, e.path, e.value, path.toString))
-      if trusted then ProjectTrust.trust(app.cwd, Config.globalDir)
-      modelCommands.reload()
-      tui.success(s"$done (saved to ${byFile.keys.map(PlatformPath.display).mkString(", ")})")
+      ConfigCommands.editConfigs(app.cwd, Config.globalDir, byFile.keys.toList) {
+        byFile.foreach: (path, es) =>
+          Config.editFile(path): text =>
+            es.foldLeft(text)((t, e) => ObjectText.withMember(t, e.path, e.value, path.toString))
+      } {
+        modelCommands.reload()
+        tui.success(s"$done (saved to ${byFile.keys.map(PlatformPath.display).mkString(", ")})")
+      }
       true
     catch
       case NonFatal(e) =>
-        originals.foreach((p, text) => Files.writeString(p, text))
-        created.foreach(Files.deleteIfExists)
-        if trusted then ProjectTrust.trust(app.cwd, Config.globalDir)
         // A reload that failed part way may have taken up the edited files already.
         try modelCommands.reload()
         catch case NonFatal(again) => Debug.trace(again)
