@@ -481,9 +481,11 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
         dialogs.checkboxIndices(Ansi.sanitize(title), options.map(Ansi.sanitize), checked, escape = "back")
       ticked.map(_.toSet)
 
+  // The operation is set inside the pop-up, under its lock: pop-ups that `parallel` tasks
+  // open take turns, and each restores the operation it found when its turn came.
   def askPermission(req: PermissionRequest): Decision =
-    statusLine.withOperation("waiting for permission"):
-      popupBlock("permission", s"${req.title} (${req.details.mkString(", ")})")(dialogs.permission(req))
+    popupBlock("permission", s"${req.title} (${req.details.mkString(", ")})"):
+      statusLine.withOperation("waiting for permission")(dialogs.permission(req))
 
   /** A yes/no question from the app itself (see [[Dialogs.confirm]]). */
   def confirm(question: String): Boolean = popupBlock("question", question)(dialogs.confirm(question))
@@ -493,8 +495,8 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   /** Ask the user a question on behalf of the agent (see [[Dialogs.answer]]). */
   def askUser(question: String, options: List[String], multiple: Boolean): Option[String] =
-    statusLine.withOperation("waiting for your answer"):
-      popupBlock("question", question)(dialogs.answer(question, options, multiple))
+    popupBlock("question", question):
+      statusLine.withOperation("waiting for your answer")(dialogs.answer(question, options, multiple))
 
   // ── TODO panel ────────────────────────────────────────────────────
 
