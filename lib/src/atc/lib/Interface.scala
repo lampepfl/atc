@@ -8,21 +8,18 @@ import caps.*
 // This is the whole API you can call. Read these capture-checking types like
 // permission bits:
 //
-//   • `T^` is the full view of a capability and the bare `T` its read-only view:
-//     `FileSystem^` can write, `FileSystem` can only read, and `IOCap` is the
-//     read-only view of the machine-effect root. A full capability can be passed
-//     where a read-only one is wanted, never the other way round. `x.rd` names
-//     the read-only view of `x`: `val ro: FileSystem^{fs.rd} = fs` is a file
-//     system that provably cannot write (hand it to a helper, or read files with
-//     it inside `Classified.map`, where a full `fs` may not be captured).
+//   • `FileSystem`, `FileEntry`, `IOCap` and `UserIO` have two views: `T^` is
+//     the full one and the bare `T` the read-only one. `FileSystem^` can write,
+//     `FileSystem` can only read, and `IOCap` is the read-only view of the
+//     machine-effect root. A full capability can be passed where a read-only
+//     one is wanted, never the other way round. `x.rd` names the read-only view
+//     of `x`: `val ro: FileSystem^{fs.rd} = fs` is a file system that provably
+//     cannot write (hand it to a helper, or read files with it inside
+//     `Classified.map`, where a full `fs` may not be captured).
 //
 //   • `update def` marks a mutating operation (write, delete, …). It compiles
 //     only through a *full* capability; on a read-only one you get
 //     "Cannot call update method … its capture set is read-only".
-//
-// `Classified.map`/`flatMap` callbacks may capture only read-only capabilities.
-// Writing, commands, network, printing and asking are rejected; use one of the
-// classified destinations documented below.
 
 // ─── Classified data ─────────────────────────────────────────────────────────
 
@@ -35,7 +32,8 @@ import caps.*
  *  `ask`, because each of those needs a full capability. Whatever you compute
  *  stays classified; `toString` shows `Classified(***)`. Whatever the function
  *  throws, a stack overflow included, stays inside too: the result is a failed
- *  `Classified`, and no `try` around `map` sees it.
+ *  `Classified`, and no `try` around `map` sees it. Only the signals that stop
+ *  an interrupted or timed-out run pass through.
  *
  *  Do not make nontermination, timeouts, timing or resource consumption depend
  *  on a secret; those side channels are not prevented.
@@ -85,8 +83,7 @@ enum Access:
 object Access
 
 /** The file system, restricted to the configured (and session-granted) paths.
- *  A full `FileSystem^` can read and write; a bare read-only `FileSystem` can
- *  only read. `requestFiles` hands a wider one to a block. */
+ *  `requestFiles` hands a wider one to a block. */
 @assumeSafe
 abstract class FileSystem private[atc] () extends Cap:
   /** A handle for `path` (absolute, or relative to the working directory). The
@@ -149,8 +146,8 @@ abstract class Network private[atc] () extends caps.ExclusiveCapability
  *  REPL, a dev server, a watcher). It captures the `ex` used to start it, so it
  *  cannot be used inside `Classified.map`. It lives until it exits, you `kill()`
  *  it, or the session ends; `runningProcesses` finds the live ones again. One
- *  spawned inside a `requestExec` block is also killed when that block ends, so
- *  start long-lived processes from a standing grant rather than a one-time grant.
+ *  spawned inside a `requestExec` block is also killed when that block ends,
+ *  however the user answered, so start a long-lived process outside such a block.
  *  `readUntil` throws `RuntimeException` on timeout and keeps the output
  *  available for a later `read()`. `waitFor` returns `None` on timeout.
  *
@@ -348,14 +345,11 @@ trait Interface:
 
   // ── File system ─────────────────────────────────────────────────
 
-  /** Ask the user for `access` to `path` (a file or a whole subtree); inside `op`
-   *  a wider `FileSystem` is in scope. The block's file system is as capable as
-   *  the one you already have: with a full `fs` you get a full one (so you can
-   *  write), with a read-only `fs` (read-only mode) you get a read-only one, so
-   *  the request works in every mode. Operations inside still have to fit that
-   *  view: command execution needs `FileSystem^` and remains local/full-only.
-   *  The capability cannot escape the block. Throws `SecurityException` if the
-   *  user denies it. */
+  /** Ask the user for `access` (`Read` unless given) to `path`, a file or a whole
+   *  subtree; inside `op` a wider `FileSystem` is in scope. It has the view of
+   *  your `fs`: full with a full one, read-only with a read-only one, so the
+   *  request works in every mode. It cannot escape the block. Throws
+   *  `SecurityException` if the user denies it. */
   def requestFiles[T, C^](path: String)(using UserIO^, FileSystem^{C})
                          (op: (FileSystem^{any.rd, C}) ?=> T): T
   def requestFiles[T, C^](path: String, access: Access)(using UserIO^, FileSystem^{C})
@@ -526,10 +520,9 @@ trait Interface:
   def execOutput(command: String, args: Seq[String])(using Exec^, FileSystem^): String
   def execOutput(command: String, args: Seq[String], options: ExecOptions)(using Exec^, FileSystem^): String
 
-  /** Start asynchronously using `exec`'s grammar and checks. Stdin stays open;
-   *  `options.stdin` is sent first and `timeoutMs` is ignored. The process ends on
-   *  exit, `kill()`, session end, or closure of its `requestExec` scope. At most
-   *  eight may be live. The user sees starts, input and exits. */
+  /** Start a `Process` using `exec`'s grammar and checks. Stdin stays open;
+   *  `options.stdin` is sent first and `timeoutMs` is ignored. At most eight may
+   *  be live. The user sees starts, input and exits. */
   def spawn(command: String)(using ex: Exec^, fs: FileSystem^): Process^{ex}
   def spawn(command: String, options: ExecOptions)(using ex: Exec^, fs: FileSystem^): Process^{ex}
   /** The processes you started that are still running (to find a handle again). */
@@ -577,9 +570,10 @@ trait Interface:
 
   // ── Concurrency ─────────────────────────────────────────────────
 
-  /** Run the tasks at the same time and return their results in the tasks'
-   *  order once all of them have finished. Use it for independent slow steps:
-   *  several commands, requests or file scans at once.
+  /** Run the tasks at the same time, at most eight at once, and return their
+   *  results in the tasks' order once all of them have finished. A `parallel`
+   *  called inside a task runs its own tasks one after another on that task's
+   *  thread. A task can do what its captured capabilities allow.
    *
    *  The tasks run on separate threads, so they MUST be independent: never let
    *  two tasks write, append to or delete the same file or directory, run
@@ -588,16 +582,12 @@ trait Interface:
    *  outer `var`, `Array`, `StringBuilder` or other mutable object written from
    *  a task): each task returns its result, and you combine and print the
    *  returned list afterwards (output printed from inside tasks interleaves).
-   *  Anything else is a race with unpredictable outcomes.
    *
-   *  A task can do what its captured capabilities allow, under the same rules as
-   *  anywhere else (inside `Classified.map`, only read-only captures compile).
-   *  At most eight tasks run at once; a `parallel` called inside a task runs
-   *  its own tasks one after another on that task's thread. When a task throws,
-   *  `parallel` waits for the rest and rethrows the first failure in task
-   *  order; catch inside the task to keep the other results. Prompts raised by
-   *  several tasks are put to the user one at a time. `C` (what the tasks
-   *  capture) is inferred; never write it.
+   *  When a task throws, the others still finish and `parallel` rethrows the
+   *  first failure in task order; a fatal error, such as the signal that stops
+   *  an interrupted or timed-out run, takes precedence. Catch inside the task to
+   *  keep the other results. Prompts raised by several tasks are put to the user
+   *  one at a time. `C` (what the tasks capture) is inferred; never write it.
    *
    *  {{{
    *  val outputs = parallel(List("git status", "git diff --stat").map(c => () => execOutput(c)))
