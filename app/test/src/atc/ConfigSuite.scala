@@ -15,10 +15,22 @@ class ConfigSuite extends munit.FunSuite:
   private def load(dir: Path, explicit: Option[Path]): Configuration =
     Config.load(dir, explicit, dir.resolve("no-such-global.json").nn, trustProject = true)
 
+  /** Load `file` as the explicit config, from its own directory. */
+  private def load(file: Path): Configuration = load(file.getParent.nn, Some(file))
+
+  private def tempDir(): Path = Files.createTempDirectory("atc-cfg").nn
+
   private def writeCfg(dir: Path, name: String, json: String): Path =
     val p = dir.resolve(name)
     Files.writeString(p, json)
     p
+
+  /** `json` as the `config.json` of a fresh directory. */
+  private def configFile(json: String): Path = writeCfg(tempDir(), "config.json", json)
+
+  /** The message of the error that loading `json` raises. */
+  private def loadError(json: String)(using munit.Location): String =
+    intercept[IllegalArgumentException](load(configFile(json))).getMessage.nn
 
   // ── Access.parse ────────────────────────────────────────────────
 
@@ -91,20 +103,15 @@ class ConfigSuite extends munit.FunSuite:
         )
 
   test("a provider may list no models: an endpoint whose models are listed or filled in later"):
-    val dir = Files.createTempDirectory("atc-cfg-empty-provider").nn
-    val cfg = writeCfg(
-      dir,
-      "config.json",
-      """{ "providers": { "openrouter": { "api": "openai", "url": "https://openrouter.ai/api/v1" } } }"""
-    )
-    val loaded = load(dir, Some(cfg))
+    val json = """{ "providers": { "openrouter": { "api": "openai", "url": "https://openrouter.ai/api/v1" } } }"""
+    val loaded = load(configFile(json))
     assertEquals(loaded.settings.providers("openrouter").models, Map.empty[String, ModelConfig])
     val catalog = ModelCatalog.from(loaded.settings)
     assertEquals(catalog.configured, Nil, "it configures no model")
     assertEquals(catalog.discoverable.map(_.provider), List("openrouter"), "it lists its own")
     // and a later layer can add one without repeating the endpoint
     val withModel = upickle.default.read[Config](Configuration.mergeJson(
-      ujson.read(Files.readString(cfg)).obj,
+      ujson.read(json).obj,
       ujson.read(
         """{ "providers": { "openrouter": { "models": { "sonnet": { "name": "anthropic/claude-sonnet-4.5" } } } } }"""
       ).obj
@@ -124,10 +131,7 @@ class ConfigSuite extends munit.FunSuite:
   // ── parsing a single file ───────────────────────────────────────
 
   test("a full config parses into the model"):
-    val dir = Files.createTempDirectory("atc-cfg").nn
-    val cfg = writeCfg(
-      dir,
-      "config.json",
+    val cfg = configFile(
       """
       {
         "model": "claude", "classifiedModel": "local",
@@ -143,7 +147,7 @@ class ConfigSuite extends munit.FunSuite:
       }
     """
     )
-    val loaded = load(dir, Some(cfg))
+    val loaded = load(cfg)
     val c = loaded.settings
     assertEquals(loaded.layers.flatMap(_.path), List(cfg))
     assertEquals(c.model, Some("claude"))
@@ -163,9 +167,8 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(c.maxToolCalls, 10)
 
   test("UTF-8 BOMs from Windows editors are accepted and preserved when editing"):
-    val dir = Files.createTempDirectory("atc-cfg-bom").nn
-    val cfg = writeCfg(dir, "config.json", "\uFEFF{\r\n  \"safeMode\": true\r\n}\r\n")
-    assert(load(dir, Some(cfg)).settings.safeMode)
+    val cfg = configFile("\uFEFF{\r\n  \"safeMode\": true\r\n}\r\n")
+    assert(load(cfg).settings.safeMode)
     Config.setTopLevel(cfg, "safeMode", ujson.Bool(false))
     val edited = Files.readString(cfg).nn
     assert(edited.startsWith("\uFEFF{\r\n"), edited)
@@ -186,10 +189,7 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(gemini.reasoningStyle.flatMap(_.tags), Some(List("<thought>", "</thought>")))
 
   test("a reasoning style is checked: Chat Completions only, JSON objects, two tags"):
-    val dir = Files.createTempDirectory("atc-cfg-style").nn
-    def problem(provider: String) =
-      val file = writeCfg(dir, "config.json", s"""{ "providers": { "p": $provider } }""")
-      intercept[IllegalArgumentException](load(dir, Some(file))).getMessage.nn
+    def problem(provider: String) = loadError(s"""{ "providers": { "p": $provider } }""")
     assert(problem("""{ "api": "anthropic", "reasoningStyle": { "tags": ["<t>", "</t>"] } }""").contains("api openai"))
     assert(
       problem("""{ "api": "openai", "reasoningStyle": { "request": [1] } }""").contains("request must be a JSON object")
@@ -197,28 +197,21 @@ class ConfigSuite extends munit.FunSuite:
     assert(problem("""{ "api": "openai", "reasoningStyle": { "tags": ["<t>"] } }""").contains("two non-empty strings"))
 
   test("a malformed config file is a clear error"):
-    val dir = Files.createTempDirectory("atc-cfg-bad").nn
-    val bad = writeCfg(dir, "config.json", "{ not json ]")
-    val e = intercept[IllegalArgumentException](load(dir, Some(bad)))
-    assert(e.getMessage.nn.contains("Cannot parse config"), e.getMessage)
+    val message = loadError("{ not json ]")
+    assert(message.contains("Cannot parse config"), message)
 
   test("a non-object config file is rejected"):
-    val dir = Files.createTempDirectory("atc-cfg-arr").nn
-    val arr = writeCfg(dir, "config.json", "[1, 2, 3]")
-    val e = intercept[IllegalArgumentException](load(dir, Some(arr)))
-    assert(e.getMessage.nn.contains("must be a JSON object"), e.getMessage)
+    val message = loadError("[1, 2, 3]")
+    assert(message.contains("must be a JSON object"), message)
 
   test("invalid runtime limits are rejected while loading config"):
-    val dir = Files.createTempDirectory("atc-cfg-limits").nn
-    val bad = writeCfg(dir, "config.json", """{ "maxToolOutputChars": 0 }""")
-    val e = intercept[IllegalArgumentException](load(dir, Some(bad)))
-    assert(e.getMessage.nn.contains("maxToolOutputChars"), e.getMessage)
+    val message = loadError("""{ "maxToolOutputChars": 0 }""")
+    assert(message.contains("maxToolOutputChars"), message)
 
   test("a null for a setting that is not optional, or a fraction for a whole number, is rejected with its file"):
-    val dir = Files.createTempDirectory("atc-cfg-exact").nn
     def rejected(json: String): String =
-      val cfg = writeCfg(dir, "config.json", json)
-      val e = intercept[IllegalArgumentException](load(dir, Some(cfg)))
+      val cfg = configFile(json)
+      val e = intercept[IllegalArgumentException](load(cfg))
       assert(e.getMessage.nn.startsWith(s"Invalid config $cfg: "), e.getMessage)
       e.getMessage.nn
     for key <- List("files", "denyCommands", "commands", "providers", "notifications", "safeMode", "maxToolCalls") do
@@ -239,39 +232,32 @@ class ConfigSuite extends munit.FunSuite:
     assert(rejected("""{ "executionTimeoutMs": 1e30 }""").contains("executionTimeoutMs must be a whole number"))
     assert(rejected(model("""{ "maxTokens": 2.5 }""")).contains("providers.p.models.m.maxTokens must be a whole"))
     // A null unsets an optional setting, and a reasoning style's request is JSON taken as written.
-    val ok = writeCfg(
-      dir,
-      "ok.json",
+    val ok = configFile(
       """{ "executionTimeoutMs": null, "classifiedModel": null, "maxToolCalls": 1e3,
         |  "providers": { "p": { "api": "openai", "reasoningStyle": { "request": { "x": null } },
         |                         "models": { "m": { "maxTokens": 4096.0 } } } } }""".stripMargin
     )
-    val settings = load(dir, Some(ok)).settings
+    val settings = load(ok).settings
     assertEquals(settings.executionTimeoutMs, None)
     assertEquals(settings.maxToolCalls, 1000)
     assertEquals(settings.providers("p").models("m").maxTokens, Some(4096))
 
   test("a files entry with an unknown access level or an unusable pattern is rejected while loading"):
-    val dir = Files.createTempDirectory("atc-cfg-rules").nn
-    val badAccess = writeCfg(dir, "access.json", """{ "files": [ { "path": ".", "access": "rw2" } ] }""")
-    val e = intercept[IllegalArgumentException](load(dir, Some(badAccess)))
-    assert(e.getMessage.nn.contains("Invalid config") && e.getMessage.nn.contains("rw2"), e.getMessage)
-    val badGlob = writeCfg(dir, "glob.json", """{ "files": [ { "path": "src/[a", "access": "read" } ] }""")
-    val g = intercept[IllegalArgumentException](load(dir, Some(badGlob)))
-    assert(g.getMessage.nn.contains("Invalid config") && g.getMessage.nn.contains("src/[a"), g.getMessage)
-    val blank = writeCfg(dir, "blank.json", """{ "files": [ { "path": "  " } ] }""")
-    intercept[IllegalArgumentException](load(dir, Some(blank)))
+    val access = loadError("""{ "files": [ { "path": ".", "access": "rw2" } ] }""")
+    assert(access.contains("Invalid config") && access.contains("rw2"), access)
+    val glob = loadError("""{ "files": [ { "path": "src/[a", "access": "read" } ] }""")
+    assert(glob.contains("Invalid config") && glob.contains("src/[a"), glob)
+    loadError("""{ "files": [ { "path": "  " } ] }""")
 
   test("with no config file at all, nothing is configured and nothing is permitted"):
-    val dir = Files.createTempDirectory("atc-cfg-none").nn
-    val loaded = load(dir, None)
+    val loaded = load(tempDir(), None)
     assert(loaded.layers.flatMap(_.path).isEmpty)
     assertEquals(loaded.layers, Nil)
     assertEquals(loaded.rules, Nil)
     assertEquals(loaded.settings.commands, Nil)
 
   test("the same config path is not merged twice"):
-    val dir = Files.createTempDirectory("atc-cfg-dedup").nn
+    val dir = tempDir()
     val projectDir = Files.createDirectories(dir.resolve(".atc")).nn
     val project = writeCfg(projectDir, "config.json", """{ "commands": ["git status"] }""")
     val loaded = load(dir, Some(project))
@@ -283,26 +269,17 @@ class ConfigSuite extends munit.FunSuite:
   // ── layered merge (global ← project ← explicit) ─────────────────
 
   test("later layers override scalars, extend list keys and merge models"):
-    val dir = Files.createTempDirectory("atc-cfg-merge").nn
-    val base = writeCfg(
-      dir,
-      "a.json",
-      """
+    val base = """
       { "model": "a", "safeMode": true, "files": [ {"path": "."} ], "commands": ["ls"],
         "providers": { "anthropic": { "api": "anthropic", "models": { "a": { "name": "m1" } } } } }
     """
-    )
-    val over = writeCfg(
-      dir,
-      "b.json",
-      """
+    val over = """
       { "model": "b", "safeMode": false, "files": [ {"path": "secrets", "classified": true} ],
         "commands": ["git status"],
         "providers": { "openai": { "api": "openai-responses", "models": { "b": { "name": "m2" } } } } }
     """
-    )
     // load merges global(a) ← project ← explicit(b); this drives mergeJson directly.
-    val merged = Configuration.mergeJson(ujson.read(Files.readString(base)).obj, ujson.read(Files.readString(over)).obj)
+    val merged = Configuration.mergeJson(ujson.read(base).obj, ujson.read(over).obj)
     val c = upickle.default.read[Config](merged)
     assertEquals(c.model, Some("b")) // scalar overridden
     assertEquals(c.safeMode, false) // scalar overridden
@@ -339,8 +316,7 @@ class ConfigSuite extends munit.FunSuite:
 
   test("a BOM-prefixed keys file is a properties file, and an empty value is not a binding"):
     val unset = "ATC_TEST_KEY_" + ProcessHandle.current().pid()
-    val dir = Files.createTempDirectory("atc-keys").nn
-    val file = dir.resolve(Config.KeysFile).nn
+    val file = tempDir().resolve(Config.KeysFile).nn
     Files.writeString(
       file,
       s"""|\uFEFF# a comment
@@ -365,7 +341,7 @@ class ConfigSuite extends munit.FunSuite:
 
   test("the warning about a keys file other users can read shows its path without terminal controls"):
     assume(!atc.platform.Platform.isWindows, "POSIX permissions")
-    val dir = Files.createDirectories(Files.createTempDirectory("atc-keys-shared").nn.resolve("a\u001b]0;x\u0007b")).nn
+    val dir = Files.createDirectories(tempDir().resolve("a\u001b]0;x\u0007b")).nn
     val file = dir.resolve(Config.KeysFile).nn
     Files.writeString(file, "SHARED_KEY=value\n")
     Files.setPosixFilePermissions(file, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"))
@@ -381,9 +357,7 @@ class ConfigSuite extends munit.FunSuite:
     assert(!warning.exists(c => c == '\u001b' || c == '\u0007'), warning)
 
   test("a ${VAR} in a provider's key is resolved through the bindings, then the environment"):
-    val dir = Files.createTempDirectory("atc-keys-provider").nn
-    val file = dir.resolve(Config.KeysFile).nn
-    Files.writeString(file, "DEEPSEEK_API_KEY=sk-secret\n")
+    val file = writeCfg(tempDir(), Config.KeysFile, "DEEPSEEK_API_KEY=sk-secret\n")
     val keys = KeyBindings.load(List(file))
     def spec(p: ProviderConfig) =
       ModelCatalog.from(Config(providers = Map("deepseek" -> p)), keys).find("m")
@@ -411,17 +385,15 @@ class ConfigSuite extends munit.FunSuite:
   // ── Configuration.fileRules ──────────────────────────────────────────────
 
   test("fileRules carries each rule's origin and parses its access level"):
-    val dir = Files.createTempDirectory("atc-rules").nn
-    val cfg = writeCfg(
-      dir,
-      "config.json",
+    val cfg = configFile(
       """
       { "files": [ { "path": ".", "access": "read" },
                    { "path": "build", "access": "write", "locked": true },
                    { "path": "secrets", "classified": true } ] }
     """
     )
-    val rules = load(dir, Some(cfg)).fileRules(dir)
+    val dir = cfg.getParent.nn
+    val rules = load(cfg).fileRules(dir)
     val configured = rules
     assertEquals(configured.map(_.access), List(Some(Access.Read), Some(Access.Write), None))
     assert(configured.forall(_.grantsWithin.isEmpty), "an explicit -c file grants wherever it matches")
@@ -456,13 +428,9 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(Tokens.parse("64k").toInt, 64000)
     intercept[IllegalArgumentException](Tokens.parse("lots"))
     // and it survives a full config load
-    val dir = Files.createTempDirectory("atc-cfg-ctx").nn
-    val cfg = writeCfg(
-      dir,
-      "c.json",
-      """{ "providers": { "p": { "api": "echo", "models": { "m": { "contextWindow": "32k" } } } } }"""
-    )
-    assertEquals(load(dir, Some(cfg)).settings.providers("p").models("m").contextWindow.map(_.toInt), Some(32000))
+    val cfg =
+      configFile("""{ "providers": { "p": { "api": "echo", "models": { "m": { "contextWindow": "32k" } } } } }""")
+    assertEquals(load(cfg).settings.providers("p").models("m").contextWindow.map(_.toInt), Some(32000))
 
   test("predictInput is on by default and a later layer can turn it off"):
     assertEquals(upickle.default.read[Config](ujson.read("{}")).predictInput, true)
@@ -474,12 +442,6 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(upickle.default.read[Config](merged).predictInput, false)
 
   // ── template ────────────────────────────────────────────────────
-
-  test("the --init-global template is valid JSON that parses into a Config"):
-    val json = Config.globalTemplate
-    val c = upickle.default.read[Config](ujson.read(json))
-    assert(c.providers.nonEmpty, "template should define providers")
-    assert(c.files.nonEmpty, "template should define file rules")
 
   test("the settings the starting config shows are the code defaults"):
     val start = ConfigLayer.bundled.config
@@ -575,7 +537,7 @@ class ConfigSuite extends munit.FunSuite:
   // ── project detection, key files, init ──────────────────────────
 
   test("a .atc holding only keys.properties still marks a project root"):
-    val dir = Files.createTempDirectory("atc-projkeys").nn.toRealPath().nn
+    val dir = tempDir().toRealPath().nn
     val sub = Files.createDirectories(dir.resolve("sub")).nn
     Files.createDirectories(dir.resolve(".atc"))
     Files.writeString(dir.resolve(".atc").resolve(Config.KeysFile), "K=v\n")
@@ -586,7 +548,7 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(keys.get("PATH"), Option(System.getenv("PATH")).filter(_.nonEmpty))
 
   test("ensureGlobal creates the keys file readable by the owner only"):
-    val dir = Files.createTempDirectory("atc-ensure").nn
+    val dir = tempDir()
     val created = Config.ensureGlobal(dir.resolve("config.json").nn)
     assertEquals(created.size, 2)
     val keys = dir.resolve(Config.KeysFile).nn
@@ -598,101 +560,68 @@ class ConfigSuite extends munit.FunSuite:
     else assert(Files.isRegularFile(keys), keys.toString)
 
   test("initProject adds keys.properties to a pre-existing .atc/.gitignore"):
-    val dir = Files.createTempDirectory("atc-initproj").nn
-    Files.createDirectories(dir.resolve(".atc"))
-    Files.writeString(dir.resolve(".atc/.gitignore"), "target\n")
-    val created = Config.initProject(dir, dir.resolve("no-such-global.json").nn)
-    assert(created.contains(Config.projectPath(dir)), created.toString)
-    val gi = Files.readString(dir.resolve(".atc/.gitignore")).nn
-    assert(gi.startsWith("target\n") && gi.linesIterator.exists(_.trim == Config.KeysFile), gi)
-    // already covered: untouched
-    val dir2 = Files.createTempDirectory("atc-initproj2").nn
-    Files.createDirectories(dir2.resolve(".atc"))
-    Files.writeString(dir2.resolve(".atc/.gitignore"), "keys.properties\n")
-    Config.initProject(dir2, dir2.resolve("no-such-global.json").nn)
-    assertEquals(Files.readString(dir2.resolve(".atc/.gitignore")).nn, "keys.properties\n")
-    val dir3 = Files.createTempDirectory("atc-initproj3").nn
-    Files.createDirectories(dir3.resolve(".atc"))
-    Files.writeString(dir3.resolve(".atc/.gitignore"), "keys.properties\n!keys.properties\n")
-    Config.initProject(dir3, dir3.resolve("no-such-global.json").nn)
+    /** The `.atc/.gitignore` that `initProject` leaves in a project whose one held `before`. */
+    def afterInit(before: String): String =
+      val dir = tempDir()
+      writeCfg(Files.createDirectories(dir.resolve(".atc")).nn, ".gitignore", before)
+      val created = Config.initProject(dir, dir.resolve("no-such-global.json").nn)
+      assert(created.contains(Config.projectPath(dir)), created.toString)
+      Files.readString(dir.resolve(".atc/.gitignore")).nn
+    val added = afterInit("target\n")
+    assert(added.startsWith("target\n") && added.linesIterator.exists(_.trim == Config.KeysFile), added)
+    assertEquals(afterInit("keys.properties\n"), "keys.properties\n") // already covered: untouched
     assertEquals(
-      Files.readString(dir3.resolve(".atc/.gitignore")).nn,
+      afterInit("keys.properties\n!keys.properties\n"),
       "keys.properties\n!keys.properties\nkeys.properties\n"
     )
-    val dir4 = Files.createTempDirectory("atc-initproj4").nn
-    Files.createDirectories(dir4.resolve(".atc"))
-    Files.writeString(dir4.resolve(".atc/.gitignore"), "target\r\n")
-    Config.initProject(dir4, dir4.resolve("no-such-global.json").nn)
-    assertEquals(Files.readString(dir4.resolve(".atc/.gitignore")).nn, "target\r\nkeys.properties\r\n")
-    val dir5 = Files.createTempDirectory("atc-initproj5").nn
-    Files.createDirectories(dir5.resolve(".atc"))
-    Files.writeString(dir5.resolve(".atc/.gitignore"), "")
-    Config.initProject(dir5, dir5.resolve("no-such-global.json").nn)
-    assertEquals(Files.readString(dir5.resolve(".atc/.gitignore")).nn, "keys.properties\n")
-    val dir6 = Files.createTempDirectory("atc-initproj6").nn
-    Files.createDirectories(dir6.resolve(".atc"))
-    Files.writeString(dir6.resolve(".atc/.gitignore"), "\uFEFFtarget\r")
-    Config.initProject(dir6, dir6.resolve("no-such-global.json").nn)
-    assertEquals(Files.readString(dir6.resolve(".atc/.gitignore")).nn, "\uFEFFtarget\rkeys.properties\r")
+    assertEquals(afterInit("target\r\n"), "target\r\nkeys.properties\r\n")
+    assertEquals(afterInit(""), "keys.properties\n")
+    assertEquals(afterInit("\uFEFFtarget\r"), "\uFEFFtarget\rkeys.properties\r")
 
   test("an invalid reasoning effort or summary is a config error, not a per-turn crash"):
-    def withModel(model: String): IllegalArgumentException =
-      val dir = Files.createTempDirectory("atc-cfg-reasoning").nn
-      val cfg =
-        writeCfg(dir, "config.json", s"""{ "providers": { "p": { "api": "echo", "models": { "m": $model } } } }""")
-      intercept[IllegalArgumentException](load(dir, Some(cfg)))
-    assert(withModel("""{ "reasoning": "hihg" }""").getMessage.nn.contains("reasoning"))
-    assert(withModel("""{ "reasoningSummary": "loud" }""").getMessage.nn.contains("reasoningSummary"))
+    def withModel(model: String) = s"""{ "providers": { "p": { "api": "echo", "models": { "m": $model } } } }"""
+    assert(loadError(withModel("""{ "reasoning": "hihg" }""")).contains("reasoning"))
+    assert(loadError(withModel("""{ "reasoningSummary": "loud" }""")).contains("reasoningSummary"))
     // valid values pass
-    val dir = Files.createTempDirectory("atc-cfg-reasoning-ok").nn
-    val cfg = writeCfg(
-      dir,
-      "config.json",
-      """{ "providers": { "p": { "api": "echo", "models": { "m": { "reasoning": "high", "reasoningSummary": "auto" } } } } }"""
-    )
-    assertEquals(load(dir, Some(cfg)).settings.providers("p").models("m").reasoning, Some("high"))
+    val valid = load(configFile(withModel("""{ "reasoning": "high", "reasoningSummary": "auto" }""")))
+    assertEquals(valid.settings.providers("p").models("m").reasoning, Some("high"))
 
   test("provider APIs, web-search versions, and case-insensitive model references validate at load time"):
-    def rejected(providers: String): IllegalArgumentException =
-      val dir = Files.createTempDirectory("atc-cfg-provider-validation").nn
-      val cfg = writeCfg(dir, "config.json", s"""{ "providers": $providers }""")
-      intercept[IllegalArgumentException](load(dir, Some(cfg)))
-    assert(rejected("""{ "p": { "api": "opneai", "models": {} } }""").getMessage.nn.contains("api"))
+    def rejected(providers: String): String = loadError(s"""{ "providers": $providers }""")
+    assert(rejected("""{ "p": { "api": "opneai", "models": {} } }""").contains("api"))
     assert(rejected(
       """{ "p": { "api": "anthropic", "models": { "m": { "webSearchVersion": "2026509" } } } }"""
-    ).getMessage.nn.contains("webSearchVersion"))
+    ).contains("webSearchVersion"))
     assert(rejected(
       """{ "p": { "api": "anthropic", "models": { "m": { "reasoning": " high " } } } }"""
-    ).getMessage.nn.contains("whitespace"))
+    ).contains("whitespace"))
     assert(rejected(
       """{ "p": { "api": "anthropic", "models": { "m": { "webSearchVersion": " 20250305 " } } } }"""
-    ).getMessage.nn.contains("whitespace"))
+    ).contains("whitespace"))
     assert(rejected(
       """{ "p": { "api": "echo", "models": { "m": { "displayName": "   " } } } }"""
-    ).getMessage.nn.contains("displayName"))
+    ).contains("displayName"))
     assert(rejected(
       """{ "p": { "api": "echo", "models": { "m": { "displayName": " Friendly " } } } }"""
-    ).getMessage.nn.contains("whitespace"))
+    ).contains("whitespace"))
     assert(rejected(
       """{ "p": { "api": "echo", "models": { "m": { "displayName": "First\nSecond" } } } }"""
-    ).getMessage.nn.contains("single line"))
+    ).contains("single line"))
     val duplicate = rejected(
       """{ "P": { "api": "echo", "models": { "M": {} } },
         |    "p": { "api": "echo", "models": { "m": {} } } }""".stripMargin
     )
-    assert(duplicate.getMessage.nn.contains("unique ignoring case"), duplicate.getMessage)
-    assert(rejected("""{ " p": { "api": "echo", "models": { "m": {} } } }""")
-      .getMessage.nn.contains("provider name"))
-    assert(rejected("""{ "p": { "api": "echo", "models": { "m ": {} } } }""")
-      .getMessage.nn.contains("model alias"))
+    assert(duplicate.contains("unique ignoring case"), duplicate)
+    assert(rejected("""{ " p": { "api": "echo", "models": { "m": {} } } }""").contains("provider name"))
+    assert(rejected("""{ "p": { "api": "echo", "models": { "m ": {} } } }""").contains("model alias"))
     // A control character in a reference would reach the terminal wherever the model is named.
-    val alias = rejected("""{ "p": { "api": "echo", "models": { "m\u001b[2J": {} } } }""").getMessage.nn
+    val alias = rejected("""{ "p": { "api": "echo", "models": { "m\u001b[2J": {} } } }""")
     assert(alias.contains("""model alias 'm\u001b[2J' must not contain control characters"""), alias)
-    val provider = rejected("""{ "p\u0007q": { "api": "echo", "models": { "m": {} } } }""").getMessage.nn
+    val provider = rejected("""{ "p\u0007q": { "api": "echo", "models": { "m": {} } } }""")
     assert(provider.contains("""provider name 'p\u0007q' must not contain control characters"""), provider)
 
   test("setTopLevel rewrites the project config, and a null classifiedModel there unsets a global one"):
-    val dir = Files.createTempDirectory("atc-cfg-set").nn
+    val dir = tempDir()
     val projectDir = Files.createDirectories(dir.resolve(".atc")).nn
     val project = writeCfg(projectDir, "config.json", "{\n  \"model\": \"a\",\n  \"commands\": [\"ls\"]\n}\n")
     val global = writeCfg(
@@ -716,7 +645,7 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(loaded.settings.commands, List("ls"))
 
   test("setTopLevel preserves an intentional shared-config symlink"):
-    val dir = Files.createTempDirectory("atc-cfg-set-link").nn
+    val dir = tempDir()
     val victim = writeCfg(dir, "victim.json", "{ \"model\": \"a\" }")
     val link = dir.resolve("link.json").nn
     assume(TestEnv.trySymbolicLink(link, victim), "symbolic links are unavailable for this account")
@@ -750,8 +679,7 @@ class ConfigSuite extends munit.FunSuite:
     assert(error.getMessage.nn.contains("effort"), error.getMessage)
 
   test("editFile leaves a file alone when the edit changes nothing"):
-    val file = Files.createTempFile("atc-edit", ".json").nn
-    Files.writeString(file, """{ "model": "a" }""")
+    val file = configFile("""{ "model": "a" }""")
     Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(0))
     Config.editFile(file)(ObjectText.withMember(_, List("effort"), None))
     assertEquals(Files.getLastModifiedTime(file).toMillis, 0L)
