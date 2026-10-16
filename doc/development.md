@@ -762,10 +762,11 @@ window, efforts and display name the list reported, which makes them its shortli
 without one (`ProviderEdits.aliasFor`). Each edit goes to the last layer holding the
 longest part of its path (`ProviderEdits.owner`), because layers merge a model entry as a
 whole; a new provider goes to the global config. The configuration is then loaded again
-(an invalid result restores the files) and the catalog rebuilt; a model in use that the
-change renamed moves to its new name. A provider or model in use, by the session or as
-`model`/`classifiedModel`, cannot be turned off. A `chatgpt` provider also offers *Sign in
-with ChatGPT*, which replaces the saved sign-in.
+(a failure restores the files and loads them again) and the catalog rebuilt; a model in use
+that the change renamed moves to its new name. A provider or model in use, by the session or
+as `model`/`classifiedModel`, cannot be turned off, and a provider with a model in use keeps
+its entries. A `chatgpt` provider also offers *Sign in with ChatGPT*, which replaces the
+saved sign-in.
 
 **Efforts.** `reasoning` is the effort a session starts with; `efforts` lists the ones the
 model accepts (by default every effort its api knows: `low` to `max` for Anthropic, `none`

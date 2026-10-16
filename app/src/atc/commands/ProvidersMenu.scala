@@ -43,22 +43,23 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
     var open = true
     while open do
       val p = models.configuration.settings.providers(name)
+      /** Whether no model of this provider is in use; says which one is when one is. */
+      def unused(): Boolean =
+        modelCommands.inUse.find(_._1.provider == name) match
+          case Some((m, role)) =>
+            tui.error(s"${m.ref} is $role; switch to another model first")
+            false
+          case None => true
       val toggle = (if p.enabled then "Turn off" else "Turn on") ->
         (() =>
-          modelCommands.inUse.find(_._1.provider == name) match
-            case Some((m, role)) if p.enabled =>
-              tui.error(s"${m.ref} is $role; switch to another model first")
-              false
-            case _ =>
-              applyEdits(
-                ProviderEdits.setEnabled(name, !p.enabled),
-                s"$name turned ${if p.enabled then "off" else "on"}"
-              )
+          (!p.enabled || unused()) &&
+            applyEdits(ProviderEdits.setEnabled(name, !p.enabled), s"$name turned ${if p.enabled then "off" else "on"}")
         )
+      // Dropping the entries removes every alias of the provider, so none of its models may be in use.
       val showAll = "Offer every model it lists (drop its model entries)" ->
         (() =>
           val question = s"Drop the ${p.models.size} model entries of $name and their settings?"
-          tui.chooseOrBack(question, List("Drop them")).isDefined &&
+          unused() && tui.chooseOrBack(question, List("Drop them")).isDefined &&
           applyEdits(ProviderEdits.showAll(name), s"$name offers every model it lists")
         )
       val signIn = "Sign in with ChatGPT" ->
@@ -157,5 +158,8 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
       case NonFatal(e) =>
         originals.foreach((p, text) => Files.writeString(p, text))
         created.foreach(Files.deleteIfExists)
+        // A reload that failed part way may have taken up the edited files already.
+        try modelCommands.reload()
+        catch case NonFatal(again) => Debug.trace(again)
         tui.error(s"Nothing changed: ${Debug.message(e)}")
         false
