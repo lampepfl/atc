@@ -29,8 +29,6 @@ import Ansi.{Blue, Bold, Cyan, Dim, Green, Red, Yellow}
   * `doc/development.md` for the layout and keyboard controls. */
 final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends AgentUI:
   private val historyPath = PromptReader.secureHistoryFile(historyFile)
-  // No grapheme-cluster probing: it sends a DECRQM query to the terminal and
-  // waits for a reply, which swallows early input on ptys that don't answer.
   private val terminal: Terminal = Tui.openTerminal(nonInteractive)
   Debug.log(
     s"terminal: ${terminal.getClass.getSimpleName} type=${terminal.getType} size=${terminal.getSize} encoding=${terminal.encoding()}"
@@ -58,7 +56,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   // ── state ─────────────────────────────────────────────────────────
 
-  /** Set while an agent turn is running; Ctrl-C sets it. */
+  /** Set by Ctrl-C during a turn; `beginTurn` clears it. */
   private val interrupted = AtomicBoolean(false)
   @volatile private var busy = false
   @volatile private var closed = false
@@ -419,11 +417,6 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
               flushProcessEvents()
     finally popupLock.unlock()
 
-  // Slash-command menus follow one pattern. A one-shot picker (`/model`, `/effort`)
-  // acts on the choice and closes; a menu the user comes back to (`/providers`,
-  // `/config`) is a `menuLoop` ending in Done; a menu opened from another is
-  // `chooseOrBack`, ending in Back. Esc goes back one level in each of them.
-
   /** A single-choice pop-up for a slash command (`/model`, `/classifiedmodel`).
     * `None` when there is no terminal for menus, no options, or the user
     * left it with Esc, Ctrl-C or Ctrl-D. */
@@ -602,7 +595,9 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 object Tui:
   /** A scripted `-p` run never needs console discovery or raw mode. Giving it
     * a known dumb UTF-8 terminal also avoids platform-specific null encodings
-    * when Windows redirects stdin/stdout (as CI and normal pipelines do). */
+    * when Windows redirects stdin/stdout (as CI and normal pipelines do).
+    * There is no grapheme-cluster probing: it sends a DECRQM query to the terminal
+    * and waits for a reply, which swallows early input on ptys that do not answer. */
   private[atc] def openTerminal(
     nonInteractive: Boolean,
     input: InputStream = System.in.nn,

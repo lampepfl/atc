@@ -21,10 +21,10 @@ private[ui] final class KeyReader(
   private var thread: Option[Thread] = None
   private var saved: Option[Attributes] = None
   @volatile private var running = false
-  /** The pop-up handshake: both guarded by pauseLock. A pop-up may not read
-    * while the key thread is inside `read`, and the key thread may not start
-    * a read once a pop-up asked for the pause. Every change of `reading`,
-    * `pauseDepth` and `running` notifies, so the waits below have no timeout. */
+  /** The pop-up handshake, with `pauseDepth` and `reading` guarded by pauseLock. A pop-up
+    * may not read while the key thread is inside `read`, and the key thread may not start
+    * a read once a pop-up asked for the pause. Every change of `reading`, `pauseDepth` and
+    * `running` notifies, so the waits below have no timeout. */
   private val pauseLock = Object()
   private var pauseDepth = 0
   private var reading = false
@@ -108,9 +108,7 @@ private[ui] final class KeyReader(
             case '\r' =>
               if pasting then typeAhead.append('\n') else submit()
               skipLf = true
-            // Collapse only a CRLF pair: an LF right after a CR. Any other real key
-            // clears the latch, so a later lone LF is not wrongly swallowed as the
-            // tail of an old CR (`skipLf` is reset in every branch below but '\r').
+            // Only an LF right after a CR completes a CRLF; any other key clears `skipLf`.
             case '\n' =>
               if !skipLf then
                 if pasting then typeAhead.append('\n') else submit()

@@ -167,9 +167,9 @@ private[atc] object StatusLine:
 
   /** Draw the one-line footer and flush it. JLine's `Status.update` flushes the text itself
     * but leaves the closing synchronized-update sequence (`ESC[?2026l`) in the buffered
-    * writer: a terminal honouring mode 2026 (xterm.js/VS Code, iTerm2, kitty, Ghostty, WezTerm)
-    * then keeps rendering frozen until something else flushes, so a footer repainted from the
-    * input-poll clock stalled the whole window for up to a poll interval per repaint. */
+    * writer, and a terminal honouring mode 2026 (xterm.js/VS Code, iTerm2, kitty, Ghostty,
+    * WezTerm) keeps rendering frozen until something else flushes: each footer repainted
+    * from the input-poll clock would stall the whole window for up to a poll interval. */
   private[atc] def draw(terminal: Terminal, status: Status, text: String): Unit =
     status.update(List(AttributedString(text)).asJava)
     terminal.writer().flush()

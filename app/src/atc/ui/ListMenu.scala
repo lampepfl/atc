@@ -57,7 +57,7 @@ private[ui] final class MenuState(
     if multi then labels.indices.filter(ticked) ++ labels.indices.filterNot(ticked) else labels.indices
   private var query = ""
   private var shown: IndexedSeq[Int] = order
-  /** The cursor, as a position in `shown`, and the first position in view. */
+  /** The cursor, as a position in `shown`. */
   private var at = initial.max(0).min((labels.size - 1).max(0))
   /** The first position in view; `-1` until the first window, which centres the cursor. */
   private var first = -1
@@ -158,7 +158,7 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
         screen.LiveRegion()
       var page = MenuState.MaxRows
       def draw(force: Boolean = false): Unit = screen.frame:
-        val (lines, rows) = ListMenu.render(state, title, keys, !status.shown, screen.height, screen, indent)
+        val (lines, rows) = ListMenu.render(state, title, keys, !status.shown, screen, indent)
         page = rows
         region.redraw(lines, force)
       val outcome = status.withHint(keys):
@@ -232,15 +232,14 @@ private[ui] object ListMenu:
     val filter = if state.filterable then s" $dot type to filter" else ""
     s"Arrows move $dot $choose$filter $dot Esc $escape"
 
-  /** The menu's lines for a terminal of `height` rows, and how many item rows are in view.
-    * The region cuts each line to one row. The window leaves room for the title, the filter
+  /** The menu's lines for the screen's height, and how many item rows are in view. The
+    * region cuts each line to one row. The window leaves room for the title, the filter
     * line, the rows out of view and the footer, so the whole menu stays shorter than the screen. */
   def render(
     state: MenuState,
     title: String,
     keys: String,
     keysInMenu: Boolean,
-    height: Int,
     screen: Screen,
     indent: String = "",
   ): (List[String], Int) =
@@ -255,9 +254,10 @@ private[ui] object ListMenu:
     val filterLine = Option.when(state.filterable):
       if state.filter.isEmpty then styled(s"  Type to filter ${g.dot} $total items", Dim)
       else "  Filter: " + styled(Ansi.sanitize(state.filter), Cyan) + styled(s"  ${g.dot} ${shown.size} of $total", Dim)
-    val fixed = head.size + filterLine.size + (if keysInMenu then 1 else 0) +
-      2 // title, filter, keys, the rows out of view
-    val rows = (height - fixed - 3).min(MenuState.MaxRows).max(1) // and the footer, the line under, a margin
+    // The rows besides the items: the title, the filter line, the keys and the two rows out of view.
+    val fixed = head.size + filterLine.size + (if keysInMenu then 1 else 0) + 2
+    // The footer, the line under the menu and a margin stay free.
+    val rows = (screen.height - fixed - 3).min(MenuState.MaxRows).max(1)
     val (from, until) = state.window(rows)
     val scrolls = shown.size > rows
     val above = Option.when(scrolls)(

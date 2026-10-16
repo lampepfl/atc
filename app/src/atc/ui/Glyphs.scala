@@ -24,7 +24,7 @@ final case class Glyphs(
   /** Horizontal rule, also table rules. */
   rule: String,
   ellipsis: String,
-  /** Separator in summary lines ("worked for 3 s · 2 tool calls"). */
+  /** Separator in summary lines ("finished in 3 s · 2 tool calls"). */
   dot: String,
   /** Table header/rule crossing. */
   junction: String,
