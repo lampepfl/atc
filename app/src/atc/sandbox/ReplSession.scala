@@ -187,9 +187,10 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
 
   /** Load the preamble; errors here are programmer bugs and are thrown. Each
     * chunk is a separate REPL round so that every given lands in its own
-    * line-wrapper (see `preambleChunks`); a `preambleOverride` runs as one round. */
+    * line-wrapper (see `preambleChunks`); a `preambleOverride` runs as one round.
+    * Each round installs this session's host under the evaluation lock; installing it
+    * before would replace the host of a session that holds the lock. */
   def init(): this.type =
-    Sandbox.installHost(host)
     val chunks = preambleOverride.map(List(_)).getOrElse(preambleChunks(config.mode))
     chunks.foreach(setUp("Sandbox preamble", _))
     if config.safeMode then setUp("Safe mode import", SafeModeImport)

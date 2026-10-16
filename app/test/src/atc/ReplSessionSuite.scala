@@ -143,6 +143,24 @@ class ReplSessionSuite extends munit.FunSuite:
     assertEquals(a.contents("owner.txt"), "a")
     assertEquals(b.contents("owner.txt"), "b")
 
+  test("initializing a session does not replace the host of a session that is evaluating"):
+    // The host slot is process-global, so only a holder of the evaluation lock may set it.
+    val a = TestEnv(prefix = "atc-init-host-a")
+    val b = TestEnv(prefix = "atc-init-host-b")
+    val sa = a.newSession()
+    val outside = TestEnv.outsideDir("init-host")
+    @volatile var hostKept: Option[Boolean] = None
+    val initB = Thread(() => { b.newSession(); () })
+    initB.setDaemon(true)
+    a.onRequest = _ =>
+      initB.start()
+      Thread.sleep(1000)
+      hostKept = Some(atc.lib.Runtime.current eq a.host)
+    a.decisions = List(Decision.AllowOnce)
+    assertOk(sa.run(s"requestFiles(${a.scalaString(outside)}, Access.Read, \"x\") { 1 }"))
+    initB.join(240000)
+    assertEquals(hostKept, Some(true))
+
   // ── Errors ──────────────────────────────────────────────────────
 
   test("syntax error"):
