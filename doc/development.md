@@ -1073,15 +1073,17 @@ instruction and permission blocks are marked as data.
 or blocked responses are not executed, and the assistant message says so even when it has
 text. Output limits add `Msg.Continuation`; server-side pauses can resume directly. A tool
 call the output limit cut gets its own continuation (`AgentMessages.truncatedToolCall`: the
-call did not run, split it), since the plain one made models send the same call again, and
-at most `Agent.MaxTruncatedCalls` retries. Resume and tool-budget rejection counts bound
-repeated work.
-The interactive tool budget may be extended by the user; non-interactive runs stop at it.
+call did not run, split it), since after a plain continuation models send the same call
+again, and at most `Agent.MaxTruncatedCalls` retries. Resume and tool-budget rejection counts
+bound repeated work. The interactive tool budget may be extended by the user;
+non-interactive runs stop at it.
 
 `TurnOutcome` records why the loop ended. `Finished` means the model produced a final
-response, not that the user's overall objective was independently verified. Interruption,
-provider refusal, exhausted limits and empty terminal responses have distinct outcomes.
-`App` maps them to summary labels and process exit codes; uncaught execution errors remain
+response, not that the user's overall objective was independently verified or that every
+tool succeeded. Interruption, provider refusal, exhausted limits and empty terminal
+responses have distinct outcomes. `App` maps them to the turn's summary line, which also
+shows its cost and how full the context window is, and to the exit code of a `-p` run: `0`
+when finished, `130` when interrupted and `1` otherwise. Uncaught execution errors remain
 exceptions within the loop and are reported as `Failed` by the application.
 
 `ModelRequest` runs at most one unfinished provider call per agent. The provider adapters
@@ -1091,12 +1093,12 @@ before HTTP headers arrive as well as during streaming. The caller blocks until 
 ends or `ModelRequest.recheck()` finds the request's cancellation predicate true; the
 threads that make it true (the SIGINT handler through `Agent.interrupt`, the key thread
 through `Agent.submit`) call `recheck()`, which wakes the caller, closes the stream and
-interrupts the worker, so nothing is polled during a call. A provider that does not stop prevents
-another worker from accumulating behind it and produces a clear retry message. Request
-completion or failure releases the active slot before returning to the caller, even if
-the worker is still exiting. Cancellation retains the slot while the operation is running.
-Stream sinks reject late output after the request ends. Provider clients are closed at application
-shutdown. Interrupted calls may not supply a final token-usage report.
+interrupts the worker, so nothing is polled during a call. A provider that does not stop
+prevents another worker from accumulating behind it and produces a clear retry message.
+Request completion or failure releases the active slot before returning to the caller, even
+if the worker is still exiting. Cancellation retains the slot while the operation is
+running. Stream sinks reject late output after the request ends. Provider clients are closed
+at application shutdown. Interrupted calls may not supply a final token-usage report.
 
 Cancellation tracks the underlying OkHttp call through a request-scoped event listener.
 It calls `Call.cancel()` before closing the SDK's buffered reader: closing that reader alone
@@ -1104,55 +1106,90 @@ can wait on a lock held by a stalled read. The listener captures the request sco
 on SDK threads remain cancellable. Temporary SDK clients borrow the model's connection pool
 and executor through transports whose `close` is a no-op. Only the owning model closes
 these resources. This also prevents SDK garbage-collection cleanup from shutting down the
-executor between tool calls. Provider tests cover authentication, cancellation before headers,
-cancellation between chunked events, subsequent requests and garbage collection. Error messages
-include a bounded cause chain; `ATC_DEBUG=1` adds the complete stack trace.
+executor between tool calls. Provider tests cover authentication, cancellation before
+headers, cancellation between chunked events, subsequent requests and garbage collection.
+Error messages include a bounded cause chain; `ATC_DEBUG=1` adds the complete stack trace.
 
 When a tool call throws, `Agent` appends the results of the calls that completed, a failure
 for that call (its effects may have happened) and a "not run" result for each later call
 before the exception propagates. After any other failure `Conversation` closes the open edge
 with `[turn failed: ...]` as each pending tool result or as an assistant message, and after a
-cancellation with the interruption marker. Input queued during a model request cancels it
-without a marker; `Conversation.steer` closes that edge when the next round accepts the
-input. Pending REPL notices are prepended to the next user message. Real user input
-and internal continuation messages remain distinct for context fitting and prediction.
+cancellation with the interruption marker. Pending REPL notices are prepended to the next
+user message. Real user input and internal continuation messages remain distinct for
+context fitting and prediction.
+
+Input the user submits during a turn enters a concurrent queue. While a model is
+generating, it cancels that request without a marker; while Scala is running, it waits for
+the call to return, and the remaining calls of that completion receive skipped results.
+`Conversation.steer` then adds the correction as a user message, closing the open edge and
+inserting an assistant bridge after tool results when needed, so the next model request
+sees the correction before choosing another operation. When the user interrupts the turn
+instead, queued text goes back to the prompt as a draft (`Agent.takeQueuedInput`,
+`Tui.draft`), with text typed but not sent on a line after it, rather than starting another
+turn.
+
+When a permission prompt returns feedback, `ScalaToolRunner` sets `ToolResult.needsReplan`
+from the recorded decision, even if the snippet caught the permission exception. `Agent`
+then skips the remaining tool calls in that completion and supplies an error result for
+each skipped call, preserving the provider's request/result pairing. The next completion
+can issue revised calls normally. This scheduling flag is internal and is not serialized
+by provider adapters. It does not roll back earlier effects or stop code that continues
+inside the same snippet after catching the permission exception.
+
+### Context fitting and compaction
 
 `ContextManager` estimates tokens from text and replay payloads, then calibrates against
-provider counts. It reserves output capacity and drops complete older exchanges at user
-boundaries. The latest exchange is retained. A cut rewrites the first message, which ends
-every cached prompt prefix, so it goes down to three quarters of the budget
-(`ContextManager.CutTarget`) and the next rounds fit without another one. An unavoidable overflow produces a warning
-once per user turn. Changing models resets calibration.
+provider counts. It reserves output capacity and drops complete older exchanges at real user
+boundaries, computing message sizes and prefix sums once. It never cuts between a tool
+request and its results or drops part of the latest exchange, and `Msg.Continuation` is not
+a boundary, so an automatic resume cannot remove the user request it continues. A cut
+rewrites the first message, which ends every cached prompt prefix, so it goes down to three
+quarters of the budget (`ContextManager.CutTarget`) and the next rounds fit without another
+one. An unavoidable overflow produces a warning once per user turn. Changing models resets
+calibration.
 
 The estimator starts at approximately one token per four UTF-16 characters, plus message
 framing. For a configured context window `W`, it reserves
-`max(W / 8, configured maximum output tokens)`. Completed requests with at least 200 input
-tokens update the provider/estimate ratio, clamped to `[0.25, 8.0]`. Estimates include only
-native payloads eligible for replay to the selected model and avoid counting native and
-neutral assistant content twice. This is an estimate, not provider tokenization.
+`max(W / 8, configured maximum output tokens)`; `ContextManager.inputAllowance` is the
+window less that reserve and serves fitting, compaction and the automatic compaction
+threshold. Completed requests with at least 200 input tokens update the provider/estimate
+ratio, clamped to `[0.25, 8.0]`. Estimates include only native payloads eligible for replay
+to the selected model and avoid counting native and neutral assistant content twice. This
+is an estimate, not provider tokenization.
 
-`Agent.compact` implements `/compact [focus]` with a tool-free request to the selected
-model through `ModelRequest`. `ContextCompaction` serializes neutral transcript data and
-builds a user/assistant summary exchange, including retained task context. It commits only
-complete, nonempty summaries smaller than the older prefix they replace; the result is an
-`Agent.CompactOutcome` (compacted, nothing to compact, summary not smaller) so `/compact`
-can say which. Pending notes, user request tracking, task state and REPL definitions are
-unchanged; usage is recorded separately. Before the summary request is sent, the transcript
-is estimated against the model's input allowance, using the same output reservation as
-ordinary requests. If it cannot fit, the error suggests a larger model or `/new`.
+`HostInteraction` retains immutable `TaskNotes` (goal, constraints, completed work and
+remaining steps), limited to 16000 characters, which `/task` shows. The agent prompt asks
+the model to maintain these alongside TODOs. `Conversation` separately retains the first
+user request and up to eight recent requests, bounded to 8000 characters each. When history
+is cut, `ContextManager` reserves room for a JSON representation of the task notes, bounded
+recent instructions and TODO state, and inserts it with the cut notice. This leaves the
+stable system prefix intact. Current user instructions and actual permissions take
+precedence over working notes.
 
-`autoCompact` in `Agent`'s turn loop runs at the top of every round, after queued input is accepted and
-before `ContextManager.prepare` fits the request: before the first request of a turn and
-between tool rounds, so a long tool loop can be summarized while it runs. It never runs
-between a tool request and its results, which would make the history invalid, and never
-after the final answer, where a `-p` run would pay for a summary it never uses. It compares
-calibrated
-next-request usage with `contextWindow * autoCompactThreshold`, or with the input allowance
-(the window less the output reserve) when that is smaller, since trimming keeps every request
-within the allowance and a higher threshold would never be reached. This fraction defaults to
-`0.8`, accepts `[0, 1]`, and uses zero to disable automatic compaction. It is a non-policy
-setting merged with later-layer precedence, shown and changed by `/config`. When the exchange in
-progress is itself summarized (nothing fits the retention budget), a
+`Agent.compact` implements `/compact [focus]` (`/compact preserve debugging findings`) with
+a tool-free request to the selected model through `ModelRequest`. `ContextCompaction`
+serializes neutral transcript data and builds a user/assistant summary exchange, including
+retained task context. It commits only complete, nonempty summaries smaller than the older
+prefix they replace; the result is an `Agent.CompactOutcome` (compacted, nothing to
+compact, summary not smaller) so `/compact` can say which. Pending notes, user request
+tracking, task state, permissions and REPL definitions are unchanged; the usage is listed
+under **context compaction** in `/cost`, and summaries are saved with the session like any
+message. Before the summary request is sent, the transcript is estimated against the
+model's input allowance; if it cannot fit, the error suggests a larger model or `/new`.
+Ctrl-C cancels the request with history unchanged. A summary is lossy; task notes and files
+keep what must survive it.
+
+`autoCompact` runs at the top of every round of `Agent`'s turn loop, after queued input is
+accepted and before `ContextManager.prepare` fits the request: before the first request of a
+turn and between tool rounds, so a long tool loop can be summarized while it runs. It never
+runs between a tool request and its results, which would make the history invalid, and
+never after the final answer, where a `-p` run would pay for a summary it never uses. It
+compares calibrated next-request usage with `contextWindow * autoCompactThreshold`, or with
+the input allowance when that is smaller, since trimming keeps every request within the
+allowance and a higher threshold would never be reached; without a context window it does
+not run. The threshold defaults to `0.8`, accepts `[0, 1]`, uses zero to disable automatic
+compaction, merges with later-layer precedence, and is shown and changed by `/config`. When
+the exchange in progress is itself summarized (nothing fits the retention budget), a
 `Msg.Continuation` (`AgentMessages.compactionContinuation`) closes the request so that the
 model continues from the summary instead of being asked to complete an assistant message.
 
@@ -1169,71 +1206,52 @@ not the summary or fixed prompt.
 An automatic attempt that fails or produces no smaller summary warns once, leaves the
 request to ordinary trimming, and is not repeated until calibrated usage has grown by a tenth
 of the window past the failed attempt (`compactRetryAt`, reset by any successful
-compaction, including a manual one). Ctrl-C during the summary request interrupts the turn
-like any other request, with history unchanged; queued input skips the attempt so the next
-round can accept it first. Summary messages persist through the existing session format.
+compaction, a model switch and `/new`). Ctrl-C during the summary request interrupts the
+turn like any other request, with history unchanged; queued input skips the attempt so the
+next round can accept it first.
 
-History fitting computes message sizes and prefix sums once, then chooses a real user
-boundary. It never cuts between a tool request and its results or drops only part of the
-latest exchange. `Msg.Continuation` is excluded from those boundaries so an automatic
-resume cannot remove the user request it is continuing.
-
-`HostInteraction` retains immutable `TaskNotes` (goal, constraints, completed work and
-remaining steps), limited to 16000 characters. The agent prompt asks it to maintain these
-alongside TODOs. `Conversation` separately retains the first user request and up to eight
-recent requests, bounded to 8000 characters each. When history is cut, `ContextManager`
-reserves room for a JSON representation of the task notes, bounded recent instructions and
-TODO state, and inserts it with the cut notice. This leaves the stable system prefix intact.
-Current user instructions and actual permissions take precedence over working notes.
-
-Submitted updates enter a concurrent queue. While a model is generating, an update cancels
-that request; while Scala is running, it waits for the call to return. Remaining calls in
-the old completion receive skipped results. `Conversation.steer` adds the correction as a
-user message, inserting an assistant bridge after tool results when needed. When the user
-interrupts the turn instead, queued text goes back to the prompt as a draft
-(`Agent.takeQueuedInput`, `Tui.draft`), with text typed but not sent on a line after it,
-rather than starting another turn. The next model
-request therefore sees the correction before choosing another operation.
+### Sessions
 
 `SessionStore` writes versioned JSON snapshots with neutral messages, pending notes, task
 state and TODOs. It excludes SDK replay payloads, REPL definitions and permission grants.
-Files are limited to 8 MiB, created exclusively and owner-only on POSIX systems. `/resume [file]`
-validates the file before clearing current state, checks tool-call/result pairing, creates
-fresh permission and REPL state, and adds explicit notices about lost definitions and
-grants. It retains the currently selected model and never executes saved tool calls.
+Files are limited to 8 MiB, created exclusively and owner-only on POSIX systems. `/save
+[file]` writes a new file and never overwrites one; without a name it writes beside the
+automatic saves, outside the project, where a transcript cannot be committed with the
+repository. `/resume [file]` validates the file before clearing current state, checks
+tool-call/result pairing, creates fresh permission and REPL state, and adds explicit notices
+about lost definitions and grants. It retains the currently selected model and never
+executes saved tool calls; restored state waits for a new user request before any model or
+tool runs.
 
 Interactive terminal sessions save after every turn and again when the session ends, by
 `/quit`, its aliases, Ctrl-D or an error, so a closed terminal or a signal loses at most the
-turn in progress.
-`SessionStore.autoSavePath` hashes the canonical working directory with SHA-256 to select
-a checkpoint under `~/.atc/sessions/`. This works with read-only project directories and
-keeps different working directories separate. Startup offers to resume that checkpoint;
-bare `/resume` opens it later. Empty sessions leave it unchanged, so declining the startup
-offer and immediately quitting does not erase previous work; `/new` deletes it, so the next
-start does not offer the conversation the user discarded. Conversation messages, pending
-notes from `/run`, task notes or TODOs make a session non-empty. Manual `/save` files remain
-independent. Scripted runs and redirected input do not save or prompt automatically.
+turn in progress. `SessionStore.autoSavePath` hashes the canonical working directory with
+SHA-256 to select a checkpoint under `~/.atc/sessions/`. This works with read-only project
+directories and keeps different working directories separate. Startup offers to resume that
+checkpoint; bare `/resume` opens it later. Empty sessions leave it unchanged, so declining
+the startup offer and immediately quitting does not erase previous work; `/new` deletes it,
+so the next start does not offer the conversation the user discarded. Conversation
+messages, pending notes from `/run`, task notes or TODOs make a session non-empty. Scripted
+runs and redirected input neither save nor offer to resume.
 
-`checkpoint` writes an exclusive temporary file with the usual size limit and permissions,
-closes it, then replaces the previous save with an atomic move. Filesystems without atomic
-move support use a replacement move. Failed writes leave the previous checkpoint intact;
-temporary files are removed. Concurrent instances in one directory share the checkpoint,
-so the last successful save becomes the resume point. A missing or invalid checkpoint never
-prevents startup. This is normal-exit persistence; it does not install a shutdown hook or
-promise recovery after a forced termination. Restoring state waits for a new user request
-before any model or tool runs.
+`SessionStore.checkpoint` writes an exclusive temporary file with the usual size limit and
+permissions, then replaces the previous save with an atomic move, or a replacement move where
+the file system has none. Failed writes leave the previous checkpoint intact; temporary
+files are removed. Concurrent instances in one directory share the checkpoint, so the last
+successful save becomes the resume point. A missing or invalid checkpoint never prevents
+startup. ATC installs no shutdown hook, so a forced termination loses the turn in progress.
 
-When a permission prompt returns feedback, `ScalaToolRunner` sets `ToolResult.needsReplan`
-from the recorded decision, even if the snippet caught the permission exception. `Agent`
-then skips the remaining tool calls in that completion and supplies an error result for
-each skipped call, preserving the provider's request/result pairing. The next completion
-can issue revised calls normally. This scheduling flag is internal and is not serialized
-by provider adapters. It does not roll back earlier effects or stop code that continues
-inside the same snippet after catching the permission exception.
+### Input prediction
 
-`InputPredictor` sends recent conversation text to the agent model on one daemon worker.
-A generation counter prevents stale publication; at most one job runs and one waits.
-Predictions are reduced to visible single-line text and reported separately in usage.
+After each interactive turn, `InputPredictor` sends recent conversation text to the agent
+model on one daemon worker, and the main prompt shows the predicted next request as ghost
+text that Tab or → accepts (`"predictInput": false` disables it). A generation counter
+prevents stale publication; at most one job runs and one waits. The model returns
+`[NO_PREDICTION]` when it has no useful suggestion; that marker and empty responses never
+reach the prompt. Predictions are reduced to visible single-line text and reported
+separately in usage. Answer and key fields show none, so Tab or → cannot insert a
+prediction there, and the redraw a read leaves on screen has no ghost text, so a suggestion
+never looks sent after Ctrl-D or Enter.
 
 ## The terminal
 
@@ -1448,63 +1466,6 @@ terminal cell widths. History is owner-only on POSIX systems and rejects final s
 Only the main prompt adds to it; answers and secrets typed into pop-ups stay out.
 Non-interactive runs use a dumb UTF-8 terminal and do not prompt for permission unless
 explicitly configured to auto-approve requests.
-
-### Sessions, inspection and compaction
-
-After each interactive turn the model predicts the next request and the main prompt shows it
-as ghost text (Tab or → accepts it; `"predictInput": false` disables it). Answer and key
-fields show none, so Tab or → cannot insert the prediction there. The redraw a read
-leaves on screen has no ghost text, so a suggestion never looks sent after Ctrl-D or Enter. When there is no useful
-suggestion, the model is asked to return `[NO_PREDICTION]`. This marker and empty responses
-are suppressed before reaching the prompt. A summary line
-shows the turn's cost and how full the context window is. Turn summaries distinguish
-finished, interrupted, blocked, failed and limit-reached responses; in scripted `-p` runs,
-finished responses exit with `0`, interruptions with `130`, and other stopped outcomes with
-`1`, and a finished response does not certify that every tool succeeded. Bracketed pastes
-retain their newlines until Enter. The REPL starts in the background as soon as ATC is
-ready for input, so the first Scala call usually finds it warm and ordinary conversation
-never waits for a compiler.
-
-| Command | Purpose |
-|---|---|
-| `/output` | List recent tool results |
-| `/output last` or `/output 3` | Inspect retained output and file-change previews (bounded text diffs) |
-| `/output 3 201` | Continue from a line in a long result |
-| `/task` | Show the task goal, constraints, completed work and remaining steps |
-| `/perms revoke` | Select a session grant to revoke (`/perms revoke 2`, `/perms revoke all`) |
-| `/save [file]` | Save to a new file (never overwrites); default location `~/.atc/sessions/`, outside the project |
-| `/resume [file]` | Resume the last session for this directory, or restore a saved file |
-| `/ps`, `/kill [id|all]` | The processes the agent started with `spawn` |
-| `/reset` | Fresh REPL, killing those processes |
-
-Interactive terminal sessions save automatically after every turn and on `/quit`, `exit` or Ctrl-D, under
-`~/.atc/sessions/` per working directory (owner-only on POSIX); the next launch in the
-same directory offers **Resume last session**. Exiting an empty session preserves the
-previous save, scripted `-p` runs do not update it, and resuming does not replay tool calls
-or restore permission grants. Output retention excludes classified terminal text.
-
-For agent code, `replaceExact(path, expected, replacement)` checks that literal text occurs
-exactly once before writing, `readRange(path, from, to)` and
-`search(dir, pattern, glob, SearchOptions(...))` provide bounded reads and searches
-(`SearchResult.limited` says whether a search was exhaustive), and `TaskNotes` keep task
-state that survives context trimming.
-
-`/compact [focus]` asks the current model for a summary of the older part of the
-conversation and replaces that part with it (`/compact preserve debugging findings` guides
-it). Task notes, pending notices, permissions and the live REPL remain; summaries are part
-of saved sessions and the usage is listed under **context compaction** in `/cost`; Ctrl-C
-cancels without replacing history. Manual and automatic compaction keep the most recent
-complete exchanges verbatim, as many as fit within `compactKeepRatio` of the context window
-(default `0.2`; `0` summarizes everything; valid values `0` through `1`), and summarize the
-rest, keeping tool calls with their exchange. When everything fits there is nothing to
-compact and no request is made; a summary that is not smaller is discarded; a transcript
-larger than the model's input allowance is refused with a suggestion to use a larger model
-or `/new`. Automatic compaction runs immediately before a request when its estimated size
-reaches `autoCompactThreshold` times the model's `contextWindow` (default `0.8`; `0`
-disables), before the first request of a turn and between tool rounds, never after a final
-answer, and never without a configured window. A failed or not-smaller attempt is reported
-and not retried until the conversation has grown by a tenth of the window; a new conversation
-(`/new`) lifts that mark. Compaction is lossy; essential details belong in task notes or files.
 
 ## Testing and conventions
 
