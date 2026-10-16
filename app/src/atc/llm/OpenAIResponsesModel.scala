@@ -79,13 +79,14 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     b.build()
 
   /** The configured output limit and sampling of a request. */
-  protected def limits(b: ResponseCreateParams.Builder): Unit =
+  protected def requestSettings(b: ResponseCreateParams.Builder): Unit =
     settings.maxTokens.foreach(n => b.maxOutputTokens(n.toLong))
     settings.temperature.foreach(b.temperature)
 
-  /** What `params` and `simple` both set: [[limits]], the `reasoning` block and the `thinking` switch. */
+  /** What `params` and `simple` both set: the [[requestSettings]], the `reasoning` block and the
+    * `thinking` switch. */
   private def configure(b: ResponseCreateParams.Builder, thinking: Boolean, reasoning: Option[Reasoning]): Unit =
-    limits(b)
+    requestSettings(b)
     reasoning.foreach(b.reasoning)
     thinkingSwitch(thinking).foreach(b.putAdditionalBodyProperty("thinking", _))
 

@@ -38,7 +38,8 @@ final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
   /** Codex asks for summaries, the only reasoning text the backend shows. */
   override protected def defaultReasoningSummary: Option[String] = Some("auto")
 
-  override protected def limits(b: ResponseCreateParams.Builder): Unit =
+  /** In place of the output limit and temperature the backend rejects, the conversation as the prompt cache key. */
+  override protected def requestSettings(b: ResponseCreateParams.Builder): Unit =
     b.promptCacheKey(Providers.conversation)
 
   override protected def send(params: ResponseCreateParams): Response =
