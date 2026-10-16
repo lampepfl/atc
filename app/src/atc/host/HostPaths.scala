@@ -85,7 +85,7 @@ private[host] trait HostPaths:
     val before = FileChange.snapshot(path)
     val result = body
     try
-      FileChange.between(display(PlatformPath.portable(path)), operation, before, FileChange.snapshot(path))
+      FileChange.between(fromCwd(PlatformPath.portable(path)), operation, before, FileChange.snapshot(path))
         .foreach(output.fileChanged)
     catch case NonFatal(error) => Debug.trace(error)
     result
@@ -172,7 +172,7 @@ private[host] trait HostPaths:
   private lazy val canonicalCwd: Path = canonical(".")
 
   /** `absolute` relative to the working directory when inside it, with `/` separators. */
-  private[host] def display(absolute: String): String =
+  private[host] def fromCwd(absolute: String): String =
     val path = Paths.get(absolute).nn
     if path == canonicalCwd then "."
     else if path.startsWith(canonicalCwd) then PlatformPath.portable(canonicalCwd.relativize(path).nn)

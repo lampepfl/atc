@@ -44,18 +44,18 @@ private[host] trait HostNetwork:
         )
       case None => ()
 
-  private final case class Prepared(uri: URI, method: String)
+  private final case class PreparedRequest(uri: URI, method: String)
 
   /** Validate everything that is independent of classified header values before
     * inspecting any of them. Header names are plain strings even in
     * `secretHeaders`, so duplicate/restricted-name errors are safe to report. */
-  private def prepare(
+  private def prepareRequest(
     net: Network,
     method: String,
     url: String,
     headers: Map[String, String],
     secretHeaderNames: Iterable[String],
-  ): Prepared =
+  ): PreparedRequest =
     val uri = URI(url)
     val scheme = Option(uri.getScheme).map(_.toLowerCase(Locale.ROOT)).getOrElse("")
     if scheme != "http" && scheme != "https" then
@@ -79,7 +79,7 @@ private[host] trait HostNetwork:
     headers.foreach((name, value) => validator.header(name, value))
     secretHeaderNames.foreach(name => validator.header(name, "placeholder"))
     validator.method(normalizedMethod, HttpRequest.BodyPublishers.noBody())
-    Prepared(uri, normalizedMethod)
+    PreparedRequest(uri, normalizedMethod)
 
   /** Sequence classified header computations without making their success or
     * failure observable. The resulting `Try` is consumed only inside another
@@ -114,7 +114,7 @@ private[host] trait HostNetwork:
       String(body, StandardCharsets.UTF_8)
 
   private def send(
-    prepared: Prepared,
+    prepared: PreparedRequest,
     url: String,
     body: Option[String],
     contentType: String,
@@ -137,7 +137,7 @@ private[host] trait HostNetwork:
     contentType: String,
     headers: Map[String, String],
   ): HttpResponse =
-    val prepared = prepare(net, method, url, headers, Nil)
+    val prepared = prepareRequest(net, method, url, headers, Nil)
     send(prepared, url, body, contentType, headers, Map.empty)
 
   /** Any request containing classified input produces a classified response.
@@ -153,7 +153,7 @@ private[host] trait HostNetwork:
     headers: Map[String, String],
     secretHeaders: Map[String, Classified[String]],
   ): Classified[HttpResponse] =
-    val prepared = prepare(net, method, url, headers, secretHeaders.keys)
+    val prepared = prepareRequest(net, method, url, headers, secretHeaders.keys)
     val result =
       for
         resolvedBody <- body

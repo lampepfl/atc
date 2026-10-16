@@ -242,13 +242,13 @@ private[host] trait HostFiles:
 
   def delete(path: String)(using fs: FileSystem): Unit = fs.access(path).delete()
 
-  def ls(dir: String)(using fs: FileSystem): List[String] = fs.access(dir).children.map(entry => display(entry.path))
+  def ls(dir: String)(using fs: FileSystem): List[String] = fs.access(dir).children.map(entry => fromCwd(entry.path))
 
-  def walk(dir: String)(using fs: FileSystem): List[String] = fs.access(dir).walk().map(entry => display(entry.path))
+  def walk(dir: String)(using fs: FileSystem): List[String] = fs.access(dir).walk().map(entry => fromCwd(entry.path))
 
   private def grepEntry(entry: FileEntryImpl, operation: String, regex: Regex): List[GrepMatch] =
     val matches = mutable.ListBuffer[GrepMatch]()
-    val shown = display(entry.path)
+    val shown = fromCwd(entry.path)
     entry.forEachLine(
       operation,
       (line, number) => if regex.findFirstIn(line).isDefined then matches += GrepMatch(shown, number, line)
@@ -266,7 +266,7 @@ private[host] trait HostFiles:
     filesNamed(dir, glob, classified = false).toList.flatMap(grepEntry(_, "grepRecursive", regex))
 
   def find(dir: String, glob: String)(using fs: FileSystem): List[String] =
-    filesNamed(dir, glob, classified = true).map(entry => display(entry.path)).toList
+    filesNamed(dir, glob, classified = true).map(entry => fromCwd(entry.path)).toList
 
   def search(dir: String, pattern: String, glob: String, options: SearchOptions)(using fs: FileSystem): SearchResult =
     val limits = List(
@@ -303,7 +303,7 @@ private[host] trait HostFiles:
               limited = true
               false
             else
-              if hit then matches += GrepMatch(display(entry.path), number, line)
+              if hit then matches += GrepMatch(fromCwd(entry.path), number, line)
               true
       if readLimit then limited = true
     SearchResult(matches.toList, scanned, limited || entries.hasNext)
