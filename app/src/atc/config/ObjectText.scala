@@ -13,7 +13,7 @@ private[config] final case class ObjectText(text: String, open: Int, close: Int,
         TextFiles.lastLineEnding(before).fold(" ")(ending => before.substring(ending.index))
       case None =>
         val inside = text.substring(open + 1, close)
-        TextFiles.firstLineEnding(inside).fold(TextFiles.DefaultLineEnding)(_.text) + "  "
+        TextFiles.lineEnding(inside) + "  "
 
 /** Edits of a config's text that keep everything they do not change: a config is
   * hand-formatted (blank lines, several patterns per line), and serializing it
@@ -57,7 +57,7 @@ object ObjectText:
             text.substring(0, prev.valueEnd) + s",${obj.separator}$entry" + text.substring(prev.valueEnd)
           case None if obj.members.isEmpty =>
             val separator = obj.separator
-            val newline = TextFiles.firstLineEnding(separator).fold(TextFiles.DefaultLineEnding)(_.text)
+            val newline = TextFiles.lineEnding(separator)
             text.substring(0, obj.open + 1) + separator + entry + newline + text.substring(obj.close)
           case None =>
             text.substring(0, obj.open + 1) + s"${obj.separator}$entry," + text.substring(obj.open + 1)

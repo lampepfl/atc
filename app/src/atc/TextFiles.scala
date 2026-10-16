@@ -34,6 +34,9 @@ object TextFiles:
   def firstLineEnding(text: String): Option[LineEnding] =
     text.indices.iterator.flatMap(lineEndingAt(text, _)).nextOption()
 
+  /** The text of the first line ending, or [[DefaultLineEnding]] when there is none. */
+  def lineEnding(text: String): String = firstLineEnding(text).fold(DefaultLineEnding)(_.text)
+
   def lastLineEnding(text: String): Option[LineEnding] =
     text.indices.reverseIterator.flatMap { index =>
       // The `\n` of a `\r\n` belongs to the ending that starts one character earlier.
@@ -69,14 +72,14 @@ object TextFiles:
     * ending. A missing final ending is supplied; an existing one is replaced
     * only when a mixed-ending file ends differently from its first ending. */
   def appendLine(text: String, line: String): String =
-    val lineEnding = firstLineEnding(text).fold(DefaultLineEnding)(_.text)
+    val ending = lineEnding(text)
     val prefix =
       if text.isEmpty then ""
       else
         lastLineEnding(text).filter(e => e.index + e.text.length == text.length) match
-          case Some(ending) => text.substring(0, ending.index) + lineEnding
-          case None => text + lineEnding
-    prefix + line + lineEnding
+          case Some(last) => text.substring(0, last.index) + ending
+          case None => text + ending
+    prefix + line + ending
 
   private def lineEndingAt(text: String, index: Int): Option[LineEnding] =
     if index < 0 then None
