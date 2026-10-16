@@ -19,17 +19,26 @@ import scala.jdk.OptionConverters.*
 final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
   val providerKey: String = "openai"
 
-  private def reasoningEffort(thinking: Boolean): Option[ReasoningEffort] =
-    requestEffort(thinking).map(ReasoningEffort.of)
-
   /** The provider's `reasoningStyle` fragment for a call, which then goes in place of
     * `reasoning_effort`: `request` when the call reasons, `requestOff` when it does not. */
   private def styleFragment(thinking: Boolean): Option[ujson.Value] =
     spec.reasoningStyle.flatMap(s => if thinking then s.request else s.requestOff)
       .map(ReasoningStyle.withEffort(_, if thinking then requestEffort(thinking) else None))
 
-  private def putFragment(b: ChatCompletionCreateParams.Builder, fragment: ujson.Value): Unit =
-    fragment.obj.foreach((key, value) => b.putAdditionalBodyProperty(key, JsonValue.from(Json.toJava(value))))
+  /** The `reasoning_effort` of a call, unless the provider's style fragment goes in its place. */
+  private def reasoningEffort(thinking: Boolean): Option[ReasoningEffort] =
+    if styleFragment(thinking).isDefined then None else requestEffort(thinking).map(ReasoningEffort.of)
+
+  /** What `params` and `simple` both set: the output limit, the sampling, the reasoning (the
+    * style fragment, else `effort`) and the `thinking` switch. */
+  private def configure(b: ChatCompletionCreateParams.Builder, thinking: Boolean, effort: Option[ReasoningEffort])
+    : Unit =
+    settings.maxTokens.foreach(n => b.maxCompletionTokens(n.toLong))
+    settings.temperature.foreach(b.temperature)
+    for fragment <- styleFragment(thinking); (key, value) <- fragment.obj do
+      b.putAdditionalBodyProperty(key, JsonValue.from(Json.toJava(value)))
+    effort.foreach(b.reasoningEffort)
+    thinkingSwitch(thinking).foreach(b.putAdditionalBodyProperty("thinking", _))
 
   /** The reasoning tags of the provider's `reasoningStyle`, when it writes reasoning into the text. */
   private val tags: Option[(String, String)] =
@@ -49,12 +58,7 @@ final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
   private def params(system: SystemPrompt, history: List[Msg], tools: List[ToolSpec]): ChatCompletionCreateParams =
     val b = ChatCompletionCreateParams.builder().model(modelId).addSystemMessage(system)
     b.streamOptions(ChatCompletionStreamOptions.builder().includeUsage(true).build())
-    settings.maxTokens.foreach(n => b.maxCompletionTokens(n.toLong))
-    settings.temperature.foreach(b.temperature)
-    styleFragment(thinking = true) match
-      case Some(fragment) => putFragment(b, fragment)
-      case None => reasoningEffort(thinking = true).foreach(b.reasoningEffort)
-    thinkingSwitch(thinking = true).foreach(b.putAdditionalBodyProperty("thinking", _))
+    configure(b, thinking = true, reasoningEffort(thinking = true))
     tools.foreach(t => b.addTool(functionTool(t)))
     if webSearch then b.webSearchOptions(ChatCompletionCreateParams.WebSearchOptions.builder().build())
     history.foreach:
@@ -125,18 +129,13 @@ final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     OpenAIChatModel.usageOf(c.usage().toScala)
 
   def simple(system: Option[String], prompt: String, thinking: Boolean): Reply =
-    val fragment = styleFragment(thinking)
     def request(effort: Option[ReasoningEffort]): ChatCompletion =
       val b = ChatCompletionCreateParams.builder().model(modelId)
-      fragment.foreach(putFragment(b, _))
       system.foreach(b.addSystemMessage)
       b.addUserMessage(prompt)
-      settings.maxTokens.foreach(n => b.maxCompletionTokens(n.toLong))
-      settings.temperature.foreach(b.temperature)
-      effort.foreach(b.reasoningEffort)
-      thinkingSwitch(thinking).foreach(b.putAdditionalBodyProperty("thinking", _))
+      configure(b, thinking, effort)
       client.chat().completions().create(b.build())
-    val c = withEffortFallback(thinking, if fragment.isDefined then None else reasoningEffort(thinking))(request)
+    val c = withEffortFallback(thinking, reasoningEffort(thinking))(request)
     Reply(answer(c.choices().asScala.headOption.flatMap(_.message().content().toScala).getOrElse("")), usageOf(c))
 
 object OpenAIChatModel:

@@ -55,9 +55,7 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     // for the encrypted reasoning content, or the replayed reasoning items are
     // invalid (backends answer HTTP 400 invalid_encrypted_content).
     b.addInclude(ResponseIncludable.REASONING_ENCRYPTED_CONTENT)
-    limits(b)
-    reasoning(thinking = true).foreach(b.reasoning)
-    thinkingSwitch(thinking = true).foreach(b.putAdditionalBodyProperty("thinking", _))
+    configure(b, thinking = true, reasoning(thinking = true))
     tools.foreach(t => b.addTool(functionTool(t)))
     if webSearch then b.addTool(Tool.ofWebSearch(WebSearchTool.builder().`type`(WebSearchTool.Type.WEB_SEARCH).build()))
     val input = List.newBuilder[ResponseInputItem]
@@ -87,6 +85,12 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
   protected def limits(b: ResponseCreateParams.Builder): Unit =
     settings.maxTokens.foreach(n => b.maxOutputTokens(n.toLong))
     settings.temperature.foreach(b.temperature)
+
+  /** What `params` and `simple` both set: [[limits]], the `reasoning` block and the `thinking` switch. */
+  private def configure(b: ResponseCreateParams.Builder, thinking: Boolean, reasoning: Option[Reasoning]): Unit =
+    limits(b)
+    reasoning.foreach(b.reasoning)
+    thinkingSwitch(thinking).foreach(b.putAdditionalBodyProperty("thinking", _))
 
   /** Send a one-shot request. */
   protected def send(params: ResponseCreateParams): Response = client.responses().create(params)
@@ -164,9 +168,7 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     def request(reasoning: Option[Reasoning]): Response =
       val b = ResponseCreateParams.builder().model(modelId).input(prompt).store(false)
       system.foreach(b.instructions)
-      limits(b)
-      reasoning.foreach(b.reasoning)
-      thinkingSwitch(thinking).foreach(b.putAdditionalBodyProperty("thinking", _))
+      configure(b, thinking, reasoning)
       send(b.build())
     val r = withEffortFallback(thinking, reasoning(thinking))(request)
     val text = r.output().asScala.filter(_.isMessage)
