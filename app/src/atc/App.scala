@@ -166,8 +166,8 @@ final class App(args: Cli.Args, val tui: Tui):
           models.catalog.refresh()
           if tui.menusAvailable then commands.sessionCommands.offerResume()
           sandbox.warm() // after the resume offer: restoring would only discard it
-          interactive()
-          if tui.menusAvailable then commands.sessionCommands.saveOnExit()
+          try interactive()
+          finally if tui.menusAvailable then commands.sessionCommands.saveOnExit()
           0
     finally
       predictor.invalidate()
@@ -232,11 +232,14 @@ final class App(args: Cli.Args, val tui: Tui):
         case Some(line) => afterTurn(runTurn(line))
 
   /** After Ctrl-C, a correction typed during the turn goes back to the prompt: starting
-    * another turn with it would contact the model right after the user stopped it. */
+    * another turn with it would contact the model right after the user stopped it.
+    * The session is saved after every turn, so a closed terminal or a signal loses at
+    * most the turn in progress. */
   private def afterTurn(outcome: TurnOutcome): Unit =
     if outcome == TurnOutcome.Interrupted then
       val queued = agent.takeQueuedInput()
       if queued.nonEmpty then tui.draft(queued.mkString("\n"))
+    if tui.menusAvailable then commands.sessionCommands.checkpoint()
 
   /** The input prompt names the mode unless it is the full one. */
   def prompt: String = policy.mode match

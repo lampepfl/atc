@@ -505,7 +505,7 @@ Tab fills in, Enter runs). Ctrl-C interrupts the turn. Finished code runs fold
 to a summary (`/output <n>` shows one in full), and Ctrl-O switches to writing code, output
 and reasoning out in full, Shift-Tab cycles the mode, and Shift+Enter adds a line. While the
 agent is working, type a correction and press Enter: it reaches the agent before its next
-tool call. Sessions are saved when you leave, and the next start in the same directory
+tool call. Sessions are saved after every turn, and the next start in the same directory
 offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
 reports whether it is working, waiting or done to terminals that track program status.
 

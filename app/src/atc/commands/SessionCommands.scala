@@ -165,17 +165,24 @@ final class SessionCommands(app: App):
         tui.warn(s"Could not load the previous session: ${Debug.describe(error)}")
         Debug.trace(error)
 
-  /** At the end: keep the conversation for [[offerResume]]. */
-  def saveOnExit(): Unit =
+  /** After a turn: keep the conversation for [[offerResume]]. An empty conversation
+    * leaves the previous save in place. True when the conversation was written. */
+  def checkpoint(): Boolean =
     val saved = agent.snapshot
-    if saved.nonEmpty then
+    if !saved.nonEmpty then false
+    else
       try
         SessionStore.checkpoint(autoSaveFile, saved)
-        tui.info("Session saved. Start ATC in this directory to resume.")
+        true
       catch
         case NonFatal(error) =>
           tui.error(s"Could not save the session: ${Debug.describe(error)}")
           Debug.trace(error)
+          false
+
+  /** At the end: save once more and say where the conversation is kept. */
+  def saveOnExit(): Unit =
+    if checkpoint() then tui.info("Session saved. Start ATC in this directory to resume.")
 
   private def restore(saved: SessionSnapshot): Unit =
     if startOver() then

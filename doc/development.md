@@ -1133,7 +1133,9 @@ validates the file before clearing current state, checks tool-call/result pairin
 fresh permission and REPL state, and adds explicit notices about lost definitions and
 grants. It retains the currently selected model and never executes saved tool calls.
 
-Interactive terminal sessions save on normal exit (`/quit`, its aliases, or Ctrl-D).
+Interactive terminal sessions save after every turn and again when the session ends, by
+`/quit`, its aliases, Ctrl-D or an error, so a closed terminal or a signal loses at most the
+turn in progress.
 `SessionStore.autoSavePath` hashes the canonical working directory with SHA-256 to select
 a checkpoint under `~/.atc/sessions/`. This works with read-only project directories and
 keeps different working directories separate. Startup offers to resume that checkpoint;
@@ -1397,7 +1399,7 @@ never waits for a compiler.
 | `/ps`, `/kill [id|all]` | The processes the agent started with `spawn` |
 | `/reset` | Fresh REPL, killing those processes |
 
-Interactive terminal sessions save automatically on `/quit`, `exit` or Ctrl-D, under
+Interactive terminal sessions save automatically after every turn and on `/quit`, `exit` or Ctrl-D, under
 `~/.atc/sessions/` per working directory (owner-only on POSIX); the next launch in the
 same directory offers **Resume last session**. Exiting an empty session preserves the
 previous save, scripted `-p` runs do not update it, and resuming does not replay tool calls
