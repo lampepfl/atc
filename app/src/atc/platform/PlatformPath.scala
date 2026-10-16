@@ -36,10 +36,10 @@ private[atc] object PlatformPath:
     value == "/" ||
       (Platform.isWindows && (value == "\\" || value.matches("(?i)^[a-z]:[\\\\/]$")))
 
-  /** Remove path separators from the end without turning a root into an empty
-    * path. Call [[isRoot]] first when roots have special meaning. */
+  /** Remove path separators from the end. A root loses its separator too, so call
+    * [[isRoot]] first when roots have special meaning. */
   def stripTrailingSeparators(value: String): String =
-    value.reverse.dropWhile(isSeparator).reverse
+    value.take(value.lastIndexWhere(!isSeparator(_)) + 1)
 
   private inline def isSeparator(char: Char): Boolean =
     char == '/' || (Platform.isWindows && char == '\\')
