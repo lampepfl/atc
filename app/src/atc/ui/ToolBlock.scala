@@ -125,16 +125,20 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       if compact then
         outputStarted = true
         redraw()
-      else
-        if open && !outputStarted then
-          ensureNewline()
-          write(section("output", Dim))
-          outputStarted = true
-          outputColumn = 0
-        val (rows, column) =
-          if plain then (text, 0) else Screen.breakLines(text, outputColumn, width - GutterWidth - 1, GutterWidth)
-        outputColumn = column
-        screen.writeGuttered(rows, gutter(Dim))
+      else writeOutput(text)
+
+  /** Write `text` out in the output section, which the first output opens. Long lines break
+    * at the row's end, so they stay inside the gutter. */
+  private def writeOutput(text: String): Unit =
+    if open && !outputStarted then
+      ensureNewline()
+      write(section("output", Dim))
+      outputStarted = true
+      outputColumn = 0
+    val (rows, column) =
+      if plain then (text, 0) else Screen.breakLines(text, outputColumn, width - GutterWidth - 1, GutterWidth)
+    outputColumn = column
+    screen.writeGuttered(rows, gutter(Dim))
 
   /** Output of `parallel` tasks that arrives while a pop-up is drawn, which writing it
     * would break; the last [[TailBuffer.MaxChars]] characters are kept. */
@@ -285,12 +289,12 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
   def reattach(): Unit = if open then
     if expanded() then
       if compact then
+        compact = false
         if headed then writeHead()
         val lines = output.lineCount - shownFrom
-        if outputStarted && lines > 0 then
-          write(section("output", Dim))
-          output.tail(lines.min(Int.MaxValue).toInt).foreach(l => write(gutter(Dim) + l + "\n"))
-        compact = false
+        val started = outputStarted
+        outputStarted = false // the region's output section is gone: a new one opens
+        if started && lines > 0 then writeOutput(output.tail(lines.min(Int.MaxValue).toInt).mkString("", "\n", "\n"))
     else if !compact then
       compact = true
       headed = false

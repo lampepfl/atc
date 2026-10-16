@@ -15,7 +15,7 @@ import scala.collection.mutable
 class ToolBlockSuite extends munit.FunSuite:
 
   /** A block on a 80x24 terminal whose output is kept in the returned stream. */
-  private def block(expanded: Boolean): (Screen, ToolBlock, ByteArrayOutputStream) =
+  private def block(expanded: => Boolean): (Screen, ToolBlock, ByteArrayOutputStream) =
     val out = ByteArrayOutputStream()
     // A dumb terminal of an xterm type writes synchronously and sends no probes, whose
     // pending answers would delay the output of a terminal built from streams.
@@ -141,6 +141,23 @@ class ToolBlockSuite extends munit.FunSuite:
     assert(shown.take(3).forall(_.startsWith("  │ ")), shown)
     assertEquals(shown.map(_.stripPrefix("  │ ")).take(3).mkString, "x" * 60 + "y" * 60 + "short")
     assert(shown.forall(Screen.displayWidth(_) < 80), shown)
+
+  test("Ctrl-O writes the kept output inside the gutter, and later output starts its rows at the gutter"):
+    var expanded = true
+    val (screen, tool, out) = block(expanded)
+    def toggle(): Unit =
+      expanded = !expanded
+      screen.frame { tool.detach(); tool.reattach() }
+    screen.frame(tool.start("println(long)", "run_scala"))
+    screen.frame(tool.emit("abc")) // the expanded view's row now holds three cells
+    toggle()
+    screen.frame(tool.emit("\n" + "x" * 120 + "\n"))
+    toggle()
+    screen.frame(tool.emit("y" * 120 + "\n"))
+    val shown = rows(out).drop(rows(out).lastIndexWhere(_.contains("output")) + 1)
+    assert(shown.forall(row => row.startsWith("  │ ") && Screen.displayWidth(row) < 80), shown)
+    val room = 80 - screen.GutterWidth - 1
+    assertEquals(shown.map(_.stripPrefix("  │ ")), List("x" * room, "x" * (120 - room), "y" * room, "y" * (120 - room)))
 
   test("repeated identical file changes fold into one row with a count"):
     val (screen, tool, out) = block(expanded = false)
