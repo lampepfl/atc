@@ -1,6 +1,6 @@
 package atc
 
-import atc.ui.{Highlight, MarkdownStream}
+import atc.ui.{Ansi, Highlight, MarkdownStream}
 
 /** The streaming Markdown renderer and the Scala highlighter (pure). */
 class RenderSuite extends munit.FunSuite:
@@ -14,7 +14,7 @@ class RenderSuite extends munit.FunSuite:
   private def render(chunks: String*): String =
     val m = md()
     chunks.map(m.push).mkString + m.finish()
-  private def plain(s: String): String = s.replaceAll("\\[[0-9;]*m", "")
+  private def plain(s: String): String = Ansi.Sgr.replaceAllIn(s, "")
 
   test("plain text streams through immediately, chunk by chunk"):
     val m = md()
