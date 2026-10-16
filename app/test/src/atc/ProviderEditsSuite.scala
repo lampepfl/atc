@@ -51,6 +51,13 @@ class ProviderEditsSuite extends munit.FunSuite:
       "removing nothing changes nothing"
     )
 
+  test("removing a duplicated member removes every occurrence, so an earlier one does not take effect"):
+    val top = """{ "effort": "low", "model": "a", "effort": "high" }"""
+    assertEquals(ObjectText.withMember(top, List("effort"), None), """{ "model": "a" }""")
+    val nested = """{ "providers": { "p": { "enabled": false, "api": "echo", "enabled": false } } }"""
+    val on = ObjectText.withMember(nested, List("providers", "p", "enabled"), None)
+    assertEquals(on, """{ "providers": { "p": { "api": "echo" } } }""")
+
   private val provider = upickle.default.read[Config](text).providers("p")
   private def listed(ids: String*) = ids.toList.map(id =>
     ModelSpec(

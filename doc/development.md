@@ -684,8 +684,9 @@ the file under the private profile and check it with `icacls` on a shared machin
 `Config.setTopLevel` preserves surrounding JSON formatting, BOMs and line endings, and
 `Config.editFile` leaves a file alone when an edit changes nothing. The
 `ObjectText` scanner operates only after JSON validation. Duplicate keys update the final
-occurrence, matching ujson's lookup. Writes use a temporary file and atomic replacement
-where supported, preserving POSIX permissions and resolving a configured symlink target.
+occurrence, matching ujson's lookup, and a removal drops every occurrence. Writes use a
+temporary file and atomic replacement where supported, preserving POSIX permissions and
+resolving a configured symlink target.
 
 ### Configuration reference
 

@@ -63,9 +63,10 @@ object ObjectText:
             text.substring(0, obj.open + 1) + s"${obj.separator}$entry," + text.substring(obj.open + 1)
 
   /** `text` (a JSON object) with the member at `path` set to `value`, or removed
-    * when `value` is `None`. Objects missing on the way are created, and a new
-    * member goes last in its object, written on one line. Everything else keeps
-    * its text, like [[withTopLevel]]. */
+    * when `value` is `None`. A removal drops every duplicate of the member, since
+    * an earlier one would otherwise take effect. Objects missing on the way are
+    * created, and a new member goes last in its object, written on one line.
+    * Everything else keeps its text, like [[withTopLevel]]. */
   def withMember(text: String, path: List[String], value: Option[ujson.Value], where: String = "config"): String =
     parse(text, where)
     member(text, path, value)
@@ -76,7 +77,8 @@ object ObjectText:
     def replace(m: Member, by: String) = text.substring(0, m.valueStart) + by + text.substring(m.valueEnd)
     def nested(v: ujson.Value) = path.tail.foldRight(v)((k, inner) => ujson.Obj(k -> inner))
     obj.members.findLast(_.key == key) match
-      case Some(m) if path.tail.isEmpty => value.fold(removeMember(obj, m))(v => replace(m, oneLine(v)))
+      case Some(m) if path.tail.isEmpty =>
+        value.fold(member(removeMember(obj, m), path, None))(v => replace(m, oneLine(v)))
       case Some(m) =>
         val inner = text.substring(m.valueStart, m.valueEnd)
         if inner.startsWith("{") then replace(m, member(inner, path.tail, value))
