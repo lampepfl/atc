@@ -159,6 +159,7 @@ class HostSuite extends munit.FunSuite:
     Files.writeString(root.resolve("long.txt"), "x" * (Host.CatMaxLineChars + 7) + "\nshort\n")
     cat("long.txt", 1, 2)
     assertEquals(agentOut.toString, "     1\t" + "x" * Host.CatMaxLineChars + " ... [+7 chars]\n     2\tshort\n")
+    assertEquals(readRange("long.txt", 1, 2), "x" * Host.CatMaxLineChars + " ... [+7 chars]\nshort")
     agentOut.clear(); userOut.clear()
 
   test("cat retains only a capped prefix of a giant line and preserves CR/LF line semantics"):
