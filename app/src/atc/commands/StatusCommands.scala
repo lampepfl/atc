@@ -6,8 +6,8 @@ import atc.llm.TokenUsage
 import atc.perms.SessionGrant
 import atc.ui.Format
 
-/** `/perms`, `/cost` and `/task`: what the session has been granted, has
-  * spent and is working on. */
+/** `/perms`, `/cost`, `/task` and `/output`: what the session has been granted, has
+  * spent and is working on, and what its tool calls returned. */
 final class StatusCommands(app: App):
   import app.{agent, policy, tui}
 
@@ -48,6 +48,18 @@ final class StatusCommands(app: App):
     val context = agent.contextUsage
     val window = context.window.fold(" (no contextWindow configured for this model)")(_ => "")
     tui.println(s"${Format.contextUsage(context.tokens, context.window)} estimated for the next request$window")
+
+  /** `/output [id|last] [line]`: list the retained tool results, or show one from a line on. */
+  def output(arg: String): Unit =
+    val history = tui.outputHistory
+    arg.trim.split("\\s+").toList.filter(_.nonEmpty) match
+      case Nil => if history.latest.isEmpty then tui.info("No retained tool output.") else tui.listOutput()
+      case id :: line if line.size <= 1 && line.forall(_.toIntOption.exists(_ >= 1)) =>
+        val entry = if id == "last" then history.latest else id.toIntOption.flatMap(history.get)
+        entry match
+          case Some(e) => tui.showOutput(e, line.headOption.fold(1)(_.toInt))
+          case None => tui.error("Output is unavailable. Use /output to list retained results.")
+      case _ => tui.error("Use /output <id|last> [line], with a positive line number.")
 
   /** `/task`: the agent's task notes. */
   def showTask(): Unit =

@@ -73,7 +73,7 @@ final class Commands(app: App):
       // The agent's handles to those processes are dead now; it should hear why.
       if result.startsWith("killed") then agent.noteProcessesKilled(result)
     case Cmd.Cost => statusCommands.showCost()
-    case Cmd.Output => tui.showOutput(arg)
+    case Cmd.Output => statusCommands.output(arg)
     case Cmd.Task => statusCommands.showTask()
     case Cmd.Save => sessionCommands.save(arg)
     case Cmd.Resume => sessionCommands.resume(arg)

@@ -104,29 +104,23 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   def clearOutputHistory(): Unit = screen.synchronized(tool.history.clear())
 
-  /** `/output`: list the retained results, or show one from a line on, 200 lines at a time. */
-  def showOutput(argument: String): Unit = frame:
-    val history = tool.history
-    val parts = argument.trim.split("\\s+").toList.filter(_.nonEmpty)
-    if parts.isEmpty then
-      if history.latest.isEmpty then info("No retained tool output.")
-      else history.list(g.dot).foreach(println)
-    else if parts.size > 2 || parts.lift(1).exists(value => !value.toIntOption.exists(_ >= 1)) then
-      error("Use /output <id|last> [line], with a positive line number.")
+  /** The results kept for `/output`. */
+  def outputHistory: ToolHistory = tool.history
+
+  /** `/output`: a line per retained result. */
+  def listOutput(): Unit = frame(tool.history.list(g.dot).foreach(println))
+
+  /** `/output`: `entry` from line `from` on, 200 lines at a time. */
+  def showOutput(entry: ToolHistory.Entry, from: Int): Unit = frame:
+    val lines = entry.render.linesIterator.toVector
+    if from > lines.size then error(s"Tool ${entry.id} has ${lines.size} lines of retained output.")
     else
-      val id = if parts.head == "last" then history.latest.map(_.id) else parts.head.toIntOption
-      val from = parts.lift(1).flatMap(_.toIntOption).getOrElse(1)
-      id.flatMap(history.get) match
-        case Some(entry) =>
-          val lines = entry.render.linesIterator.toVector
-          if from > lines.size then error(s"Tool ${entry.id} has ${lines.size} lines of retained output.")
-          else
-            val end = (from.toLong - 1 + 200).min(lines.size.toLong).toInt
-            (from - 1 until end).foreach: i =>
-              val line = Ansi.sanitize(lines(i))
-              renderedLine(if i < entry.changesFrom then line else diffLine(line))
-            if lines.size > end then info(s"More output: /output ${entry.id} ${end + 1}")
-        case _ => error("Output is unavailable. Use /output to list retained results.")
+      val end = (from.toLong - 1 + 200).min(lines.size.toLong).toInt
+      val diffFrom = entry.changesFrom
+      (from - 1 until end).foreach: i =>
+        val line = Ansi.sanitize(lines(i))
+        renderedLine(if i < diffFrom then line else diffLine(line))
+      if lines.size > end then info(s"More output: /output ${entry.id} ${end + 1}")
 
   /** A line of a file-change preview: the file's header bold, additions green, removals red. */
   private def diffLine(line: String): String =
