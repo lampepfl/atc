@@ -314,6 +314,24 @@ class ReplSessionSuite extends munit.FunSuite:
     assert(timedOut.error.exists(_.contains("timed out")), timedOut.toString)
     assert(assertOk(quick.run("3 + 3")).output.contains("6"))
 
+  test("interrupt() and the timeout stop a loop inside Classified.map"):
+    // `map` keeps what its callback throws, except the stop signal.
+    val loop = "classify(1L).map(n => { var i = 0L; while true do i += n; i })"
+    @volatile var result: Option[ExecutionResult] = None
+    val t = Thread(() => result = Some(safe.run(loop)))
+    t.setDaemon(true)
+    t.start()
+    Thread.sleep(700)
+    safe.interrupt()
+    t.join(10000)
+    assert(!t.isAlive, "evaluation did not stop after interrupt")
+    assert(result.exists(_.error.exists(_.contains("interrupted"))), result.toString)
+    assert(assertOk(run("2 + 2")).output.contains("4"))
+    envQuick.activate()
+    val timedOut = quick.run(loop)
+    assert(timedOut.error.exists(_.contains("timed out")), timedOut.toString)
+    assert(assertOk(quick.run("3 + 3")).output.contains("6"))
+
   test("close() interrupts a running evaluation and refuses later runs"):
     val env = TestEnv(prefix = "atc-repl-close")
     val s = env.newSession(timeoutMs = Some(60000L))

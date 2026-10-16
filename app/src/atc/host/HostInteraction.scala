@@ -3,7 +3,6 @@ package atc.host
 import atc.lib.*
 
 import scala.util.{Failure, Success, Try}
-import scala.util.control.NonFatal
 
 /** User-visible output, questions, TODO state, and model interaction supplied
   * by [[Host]]. */
@@ -41,19 +40,22 @@ private[host] trait HostInteraction:
   /** Render something that came out of a classified computation for the user.
     *
     * The rendering itself is a classified sink: an agent-defined `toString` (or
-    * even a custom `Throwable.getMessage`) can throw an exception containing the
-    * secret. Letting that exception escape would put its message in the REPL
-    * result, which is visible to the agent. Non-fatal rendering failures are
-    * therefore turned into user-only text and the call returns normally. */
+    * even a custom `Throwable.getMessage`) runs on the secret and can throw an
+    * exception containing it, or a fatal error or control throwable that depends
+    * on it. Letting either escape would reach agent code. Rendering failures are
+    * therefore turned into user-only text, as `map` keeps them, and the call
+    * returns normally; only the stop signals propagate. */
   private def classifiedUserText(value: Try[Any]): String =
     def errorText(error: Throwable): String =
-      try Option(error.getMessage).filter(_.nonEmpty).getOrElse(error.toString)
-      catch case NonFatal(_) => "(error details could not be rendered)"
+      ClassifiedImpl
+        .attempt(Option(error.getMessage).filter(_.nonEmpty).getOrElse(error.toString))
+        .getOrElse("(error details could not be rendered)")
 
     value match
       case Success(plain) =>
-        try Option(String.valueOf(plain)).getOrElse("null")
-        catch case NonFatal(error) => s"<classified rendering failed: ${errorText(error)}>"
+        ClassifiedImpl.attempt(Option(String.valueOf(plain)).getOrElse("null")) match
+          case Success(text) => text
+          case Failure(error) => s"<classified rendering failed: ${errorText(error)}>"
       case Failure(error) => s"<classified error: ${errorText(error)}>"
 
   private def userView(value: Any): Any = value match

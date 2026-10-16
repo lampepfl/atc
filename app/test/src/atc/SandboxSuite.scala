@@ -156,9 +156,9 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
 
   test("a fatal-throwable oracle over classified data is rejected before it runs"):
     // A pure callback that throws only when a predicate over the secret holds is a
-    // per-bit oracle *if* the fatal throwable it raises can be caught. `Try` traps
-    // only NonFatal, so the attack needs a fatal throwable and a catch. The
-    // validator rejects both, so the code never runs.
+    // per-bit oracle if what it throws can be observed outside `map`. `map` keeps
+    // every throwable inside the classified value except the stop signals, and
+    // agent code may not name those, so the validator rejects this before it runs.
     val attack =
       """val c = readClassified("secrets/s.txt")
         |def bit(i: Int, mid: Char): Boolean =
@@ -175,6 +175,51 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
         |  catch case _: StackOverflowError => true
         |println(bit(0, 'm'))""".stripMargin
     assertFails(run(attack), "catch-fatal")
+
+  /** Run an attack whose `bit(ch)` should reveal whether the secret starts with `ch`,
+    * and check that it gives the same answer for a right and a wrong guess. */
+  private def assertNoOracle(attack: String)(using munit.Location): Unit =
+    val r = assertOk(run(attack + "\nprintln(s\"bits ${bit('s')} ${bit('z')}\")"))
+    assert(r.output.contains("bits false false"), r.output)
+
+  test("a non-local return out of a map callback is kept inside the classified value"):
+    assertNoOracle(
+      """val c = readClassified("secrets/s.txt")
+        |def bit(ch: Char): Boolean =
+        |  c.map(s => if s(0) == ch then return true else 0)
+        |  false""".stripMargin
+    )
+
+  test("a finally that returns cannot observe a secret-dependent error from map"):
+    assertNoOracle(
+      """val c = readClassified("secrets/s.txt")
+        |def deep(n: Int): Int = deep(n + 1) + 1
+        |def bit(ch: Char): Boolean =
+        |  var hit = true
+        |  try { c.map(s => if s(0) == ch then deep(0) else 0); hit = false } finally { return hit }
+        |  hit""".stripMargin
+    )
+
+  test("a secret-dependent stack overflow inside map cannot be caught by agent code"):
+    assertNoOracle(
+      """val c = readClassified("secrets/s.txt")
+        |object CatchIt { def unapply(t: Throwable): Boolean = true }
+        |def deep(n: Int): Int = deep(n + 1) + 1
+        |def bit(ch: Char): Boolean =
+        |  try { c.map(s => if s(0) == ch then deep(0) else 0); false }
+        |  catch case CatchIt() => true""".stripMargin
+    )
+
+  test("a NonLocalReturnControl thrown directly inside map is kept inside the classified value"):
+    assertNoOracle(
+      """val c = readClassified("secrets/s.txt")
+        |def bit(ch: Char): Boolean =
+        |  val key = new Object
+        |  try
+        |    c.map(s => if s(0) == ch then throw new scala.runtime.NonLocalReturnControl(key, true) else 0)
+        |    false
+        |  catch case e: scala.runtime.NonLocalReturnControl[?] if e.key eq key => true""".stripMargin
+    )
 
   test("the ThreadDeath stop signal cannot be swallowed by a catch-all"):
     // Interrupts and timeouts stop REPL loops by raising ThreadDeath at back-edges;

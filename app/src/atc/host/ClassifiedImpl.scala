@@ -2,16 +2,18 @@ package atc.host
 
 import atc.lib.Classified
 
-import scala.util.{Success, Try}
+import scala.util.{Failure, Success, Try}
 
-/** Stores classified values and non-fatal computation failures in `Try`.
+/** Stores a classified value or the failure of the computation that produced it.
   * Capture checking enforces callback purity in the agent-facing API.
-  * Fatal errors and interruption propagate to abort evaluation; the validator
-  * rejects catches that could expose those failures or suppress cancellation. */
+  * A callback failure stays inside the classified value whatever its type, fatal errors
+  * and control throwables (a non-local `return`, `boundary.break`) included, so no catch
+  * or `finally` in agent code can observe a secret-dependent failure. Only the stop
+  * signals propagate, so that an interrupt or a timeout still ends the evaluation. */
 final class ClassifiedImpl[+T](val value: Try[T]) extends Classified[T]:
-  def map[B](op: T => B): Classified[B] = ClassifiedImpl(value.map(op))
+  def map[B](op: T => B): Classified[B] = ClassifiedImpl(value.flatMap(v => ClassifiedImpl.attempt(op(v))))
   def flatMap[B](op: T => Classified[B]): Classified[B] =
-    ClassifiedImpl(value.flatMap(v => ClassifiedImpl.unwrap(op(v))))
+    ClassifiedImpl(value.flatMap(v => ClassifiedImpl.attempt(op(v)).flatMap(ClassifiedImpl.unwrap)))
   override def toString: String = "Classified(***)"
 
 object ClassifiedImpl:
@@ -19,6 +21,16 @@ object ClassifiedImpl:
 
   /** Classify the outcome of an already-run effect (value or failure). */
   def fromTry[T](value: Try[T]): Classified[T] = ClassifiedImpl(value)
+
+  /** Run agent code on classified data, keeping everything it throws in the result
+    * except the stop signals: the sandbox's `ThreadDeath` and `InterruptedException`.
+    * Agent code cannot name either type; they come from a stop request, not from the
+    * data. The interrupt status needs no repair, since the exception is rethrown. */
+  def attempt[B](op: => B): Try[B] =
+    try Success(op)
+    catch
+      case stop @ (_: ThreadDeath | _: InterruptedException) => throw stop
+      case other: Throwable => Failure(other)
 
   def unwrap[T](c: Classified[T]): Try[T] = c match
     case impl: ClassifiedImpl[T] @unchecked => impl.value

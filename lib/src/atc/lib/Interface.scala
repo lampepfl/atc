@@ -33,7 +33,9 @@ import caps.*
  *  arrays, and read files where your `fs` is itself read-only. You can never
  *  write, run a command, use the network, `println`, normal-model `chat` or
  *  `ask`, because each of those needs a full capability. Whatever you compute
- *  stays classified; `toString` shows `Classified(***)`.
+ *  stays classified; `toString` shows `Classified(***)`. Whatever the function
+ *  throws, a stack overflow included, stays inside too: the result is a failed
+ *  `Classified`, and no `try` around `map` sees it.
  *
  *  Do not make nontermination, timeouts, timing or resource consumption depend
  *  on a secret; those side channels are not prevented.

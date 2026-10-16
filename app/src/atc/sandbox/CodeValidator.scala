@@ -120,13 +120,14 @@ object CodeValidator:
     ),
     Forbidden("sys-thread", raw"\bnew\s+Thread\b".r, "Creating threads is forbidden"),
     Forbidden("sys-thread2", raw"\bThread\s*\(".r, "Creating threads is forbidden"),
-    // Catching fatal throwables. Fatal throwables (StackOverflowError, OutOfMemoryError,
-    // the sandbox's ThreadDeath stop signal, ...) must propagate and abort the evaluation;
-    // agent code must not catch them, or a callback that throws conditionally on a secret
-    // becomes a per-bit oracle and a loop could swallow a timeout/interrupt. A typed catch
-    // of Throwable/Error/a fatal type is rejected here; a bare catch-all is caught by the
-    // cross-line `catch-all` rule below. A typed catch of a non-fatal type (`case _: Exception`,
-    // a RuntimeException subtype, ...) stays allowed. NonFatal(e) is not usable under safe mode.
+    // Catching fatal throwables. The sandbox's ThreadDeath stop signal is an Error, so a
+    // catch of Throwable, Error or another fatal type could let a loop swallow a timeout or
+    // an interrupt, and a fatal error must end the evaluation. Secret-dependent failures do
+    // not reach these catches: `Classified.map` keeps everything its callback throws inside
+    // the classified value. A typed catch of Throwable/Error/a fatal type is rejected here; a
+    // bare catch-all is caught by the cross-line `catch-all` rule below. A typed catch of a
+    // non-fatal type (`case _: Exception`, a RuntimeException subtype, ...) stays allowed.
+    // NonFatal(e) is not usable under safe mode.
     // The fatal type may appear anywhere in the ascription, so a parenthesised
     // (`case _: (Throwable)`) or union (`case _: (RuntimeException | Throwable)`)
     // type does not slip past. The scan of the ascription stops before the arm
@@ -360,7 +361,7 @@ object CodeValidator:
     * Only `case`s belonging to a `catch` are considered, so `match` arms and
     * `.recover { case _ => }` are untouched. An arm is a bare catch-all when its
     * head is `_` or a lower-case binder followed by `=>` or `if`, which also catches
-    * fatal errors and the ThreadDeath stop signal. `case _: T` is typed instead, and
+    * the ThreadDeath stop signal and fatal errors. `case _: T` is typed instead, and
     * extractors start upper-case. Braceless regions end at `finally`, a depth-0 `}`,
     * or a line indented no deeper than the `catch` that does not start with `case`.
     * A braceless nested `match` with a `case _` inside such an arm is an accepted

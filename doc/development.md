@@ -311,7 +311,7 @@ checking behavior.
 
 ### Classified data
 
-`ClassifiedImpl` stores a `Try`: non-fatal computation failures remain confidential.
+`ClassifiedImpl` stores a `Try`: every failure of a computation remains confidential.
 HTTP calls with classified headers or bodies return classified responses, preventing a
 server from reflecting a secret into ordinary output. Validate public parameters and
 permissions before inspecting classified values, and keep subsequent failures inside the
@@ -338,10 +338,15 @@ classify("private").map(printer) // requires UserIO^, which map cannot capture
 ```
 
 Exception handling is part of this boundary. A callback may throw an exception containing
-a secret, so a failed `Try` must remain classified. Authorized output methods must also
-handle failures in user-defined rendering, including `toString` and `getMessage`, without
-letting the exception reach the model. Fatal errors must abort evaluation rather than
-becoming a condition the agent can catch and inspect.
+a secret, or a fatal error or control throwable whose occurrence depends on one: a stack
+overflow, a non-local `return`, a `NonLocalReturnControl` thrown directly. `map` and
+`flatMap` keep everything a callback throws inside the classified value except the stop
+signals, `ThreadDeath` and `InterruptedException`, which propagate so that an interrupt or
+a timeout still ends the evaluation. Nothing else a classified callback throws can leave
+the classified value, so no catch or `finally` in agent code can observe a secret-dependent
+failure. Authorized output methods apply the same rule to user-defined rendering, including
+`toString` and `getMessage`: a failure there becomes user-only text and never reaches the
+model.
 
 `classifiedChat(String)` is treated as pure. This assumes the configured endpoint is
 isolated and has no observable effects beyond its result; ATC cannot establish that about
