@@ -533,6 +533,30 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(ProjectTrust.pending(w.cwd, atcDir), None)
     assertEquals(Config.load(w.cwd, None, w.globalPath).settings.commands, List("make test"))
 
+  test("writing the starter config trusts it, unless the project already waited for trust"):
+    def withKeys(binding: String): World =
+      val w = World(global = "")
+      Files.createDirectories(Config.keysPath(w.cwd).getParent)
+      Files.writeString(Config.keysPath(w.cwd), binding + "\n")
+      w
+    val fresh = World(global = "")
+    assertEquals(ProjectTrust.initProject(fresh.cwd, fresh.globalPath.getParent.nn).size, 2)
+    assertEquals(ProjectTrust.pending(fresh.cwd, fresh.globalPath.getParent.nn), None)
+    // a repository that ships only key bindings is a project whose bindings the user has not seen
+    val shipped = withKeys("ATC_TEST_BINDING=from-the-repo")
+    val shippedStore = shipped.globalPath.getParent.nn
+    assertEquals(ProjectTrust.initProject(shipped.cwd, shippedStore).size, 2)
+    val pending = ProjectTrust.pending(shipped.cwd, shippedStore).get
+    assertEquals(pending.grants.keys, List("ATC_TEST_BINDING"))
+    assert(pending.grants.commands.nonEmpty, "the prompt shows the starter config's grants too")
+    assertEquals(Config.load(shipped.cwd, None, shipped.globalPath).keys.get("ATC_TEST_BINDING"), None)
+    // bindings the user trusted before keep the new config trusted
+    val known = withKeys("ATC_TEST_BINDING=mine")
+    val knownStore = known.globalPath.getParent.nn
+    ProjectTrust.trust(known.cwd, knownStore)
+    ProjectTrust.initProject(known.cwd, knownStore)
+    assertEquals(ProjectTrust.pending(known.cwd, knownStore), None)
+
   // ── order and sources ───────────────────────────────────────────
 
   test("layers are reported in order, and a path named twice is read once"):

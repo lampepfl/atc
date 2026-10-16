@@ -69,6 +69,16 @@ object ProjectTrust:
   /** Trust the grants `pending` describes, and not a later version of the files. */
   def trust(pending: Pending, atcDir: Path): Unit = record(pending.root, pending.grants.fingerprint, atcDir)
 
+  /** Write the starter project config in `dir` ([[Config.initProject]]) and trust it, since ATC
+    * wrote what it grants. A key file that `dir` already had and the user has not trusted keeps
+    * the project waiting for the prompt that shows its bindings. Returns the paths written. */
+  def initProject(dir: Path, atcDir: Path): List[Path] =
+    val root = dir.toAbsolutePath.nn.normalize.nn
+    val waiting = pending(root, atcDir).exists(_.root == root)
+    val created = Config.initProject(root, atcDir.resolve("config.json").nn)
+    if created.nonEmpty && !waiting then trust(root, atcDir)
+    created
+
   private def record(root: Path, fingerprint: String, atcDir: Path): Unit =
     val store = read(atcDir).updated(key(root), fingerprint)
     val text = ujson.write(ujson.Obj.from(store.toList.sortBy(_._1).map((k, v) => k -> ujson.Str(v))), indent = 2)

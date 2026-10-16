@@ -87,8 +87,8 @@ object Setup:
           tui.confirm("Write a starting project config to .atc/config.json here? It opens this directory to the agent.")
         if !accepted then current
         else
-          val created = Config.initProject(args.cwd, global).map(p => PlatformPath.portable(args.cwd.relativize(p)))
-          ProjectTrust.trust(args.cwd, Config.globalDir) // it grants what the user just accepted
+          val created = ProjectTrust.initProject(args.cwd, Config.globalDir)
+            .map(p => PlatformPath.portable(args.cwd.relativize(p)))
           tui.success(
             s"Wrote ${created.mkString(" and ")}; edit .atc/config.json to change what the agent may touch here."
           )

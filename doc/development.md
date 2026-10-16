@@ -652,10 +652,12 @@ permission details, and offers Trust, Run without these grants, or Quit; it says
 new or has changed since it was trusted. Trust records the fingerprint of what was shown, so a
 file that changed meanwhile stays untrusted. A `-p` run warns and goes without them unless
 `--approve-all` is given, which takes them unrecorded. Configs ATC writes itself (`--init`,
-the offered starter config) are trusted as they are written. Neither writes the home
-directory's `.atc/config.json`, which is the global config, nor through a symbolic link at
-`.atc`, its `config.json` or its `.gitignore`. A `/model`, `/effort` or
-`/classifiedmodel` save keeps a trusted project trusted. Other edits, such as a new
+the offered starter config) are trusted as they are written, unless the directory already
+waited for trust, such as for a `keys.properties` the repository shipped: the prompt then
+shows the starter config's grants with it. Neither writes the home directory's
+`.atc/config.json`, which is the global config, nor through a symbolic link at `.atc`, its
+`config.json` or its `.gitignore`. A `/model`, `/effort` or `/classifiedmodel` save keeps a
+trusted project trusted. Other edits, such as a new
 `model`, do not change the fingerprint.
 
 Only explicitly defined project settings narrow a value. `executionTimeoutMs` defaults to
