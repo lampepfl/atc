@@ -30,18 +30,21 @@ final case class ModelConfig(
   /** The efforts the model accepts, offered by `/effort`. Unset: every effort
     * its provider's api knows. `[]`: the model takes no effort setting. */
   efforts: Option[List[String]] = None,
-  /** Anthropic: adaptive thinking (default on); `false` disables it. OpenAI-
-    * compatible vendors with a `thinking: {"type": ...}` switch (DeepSeek, GLM,
-    * Kimi, MiniMax): sends `enabled`/`disabled`; leave it unset for OpenAI
-    * itself, which rejects the parameter. */
+  /** Anthropic: adaptive thinking (default on); `false` disables it. Claude Code:
+    * `false` runs the CLI with `--thinking=disabled`. OpenAI-compatible vendors with a
+    * `thinking: {"type": ...}` switch (DeepSeek, GLM, Kimi, MiniMax): sends
+    * `enabled`/`disabled`; leave it unset for OpenAI itself, which rejects the parameter. */
   thinking: Option[Boolean] = None,
   /** OpenAI Responses: stream reasoning summaries (`auto|concise|detailed`);
     * OpenAI only sends them when asked. */
   reasoningSummary: Option[String] = None,
   maxTokens: Option[Int] = None,
   /** The model's context window, in tokens (`200000`, `"256k"`, `"1m"`; see
-    * [[Tokens]]). When a conversation would exceed it, the oldest exchanges
-    * are dropped from what the model sees. Unset: never cut. */
+    * [[Tokens]]). The conversation is compacted as it nears the window
+    * (`autoCompactThreshold`), and when a request would still exceed it, the oldest
+    * exchanges are dropped from what the model sees. Unset: the window a listed model's
+    * provider or the Claude Code CLI reports; without one, nothing is compacted
+    * automatically or cut. */
   contextWindow: Option[Tokens] = None,
   temperature: Option[Double] = None,
   /** Anthropic web-search tool version: `20260209` (default) or `20250305`. */
@@ -87,9 +90,9 @@ final case class ProviderConfig(
   /** How this Chat Completions endpoint (`api: openai`) asks for reasoning and returns
     * it, where that differs from OpenAI's `reasoning_effort`. Unset: OpenAI's way. */
   reasoningStyle: Option[ReasoningStyle] = None,
-  /** The provider's models, by alias. Empty: the models the provider lists
-    * (`GET /models`) are fetched the first time they are needed, and each is
-    * named `provider/model-id`. */
+  /** The provider's models, by alias. Empty: the models the provider lists, each named
+    * `provider/model-id`; the list is fetched in the background once a session starts and
+    * kept between sessions ([[ModelCatalog]]). */
   models: Map[String, ModelConfig] = Map.empty,
   /** `false` turns the provider off: none of its models is offered or fetched. */
   enabled: Boolean = true,
@@ -181,7 +184,8 @@ final case class FileRuleConfig(
 
 final case class Config(
   /** The agent's model: a model alias, or `provider/alias` when two providers
-    * use the same alias. Unset picks the first configured model. */
+    * use the same alias. Unset: the model last chosen with `/model` while it still
+    * resolves, else the first one (`Models.initial`). */
   model: Option[String] = None,
   /** The isolated, effect-free model trusted by `classifiedChat`, named the
     * same way. Unset means classified data is never sent to a model. */
@@ -216,7 +220,7 @@ final case class Config(
     * files, run commands) or `full` (also network). `/mode` switches at run time. */
   mode: Option[String] = None,
   /** Wall-clock limit for one snippet, excluding time spent waiting for the user
-    * or for a command (`exec` has its own `ExecOptions.timeoutMs`). */
+    * or for a command (`exec` has its own `ExecOptions.timeoutMs`). `null` sets no limit. */
   executionTimeoutMs: Option[Long] = Some(300000L),
   /** Tool calls per user turn before the agent checks in: an interactive session
     * asks the user whether to continue for another `maxToolCalls`, a `-p` run stops. */
@@ -233,8 +237,8 @@ final case class Config(
     * it as ghost text at the prompt (Tab / → accepts). One extra, small model
     * call per turn; `false` turns it off. */
   predictInput: Boolean = true,
-  /** After a turn, compact when estimated context usage reaches this fraction
-    * of the model's context window. Zero disables automatic compaction. */
+  /** Before a model request, compact when the estimated context usage reaches this
+    * fraction of the model's context window. Zero disables automatic compaction. */
   autoCompactThreshold: Double = 0.8,
   /** Fraction of the context window reserved for recent verbatim exchanges
     * during manual or automatic compaction. Zero summarizes everything. */

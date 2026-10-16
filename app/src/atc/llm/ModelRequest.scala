@@ -86,7 +86,9 @@ private[atc] final class ModelRequest:
 private[atc] object ModelRequest:
   private val current = ThreadLocal[Scope]()
 
-  /** SDK async streams can be cancelled even before response headers arrive. */
+  /** Wait until the SDK stream `completion` finishes, registered with the request so that
+    * cancelling it closes the stream (`closeStream`), even before its response headers arrive.
+    * A failure of the stream is thrown as it is, not wrapped. */
   def awaitStream(closeStream: () => Unit)(completion: => CompletableFuture[?]): Unit =
     val stream: AutoCloseable = () => closeStream()
     withResource(stream): _ =>

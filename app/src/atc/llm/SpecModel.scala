@@ -8,8 +8,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import scala.reflect.ClassTag
 import scala.util.control.NonFatal
 
-/** What every provider adapter takes from its [[ModelSpec]]: the names, the
-  * per-model settings and the two settings the agent loop reads. */
+/** What every provider adapter takes from its [[ModelSpec]]: the names, the per-model
+  * settings, and the context window and output limit the agent loop reads. */
 private[llm] abstract class SpecModel(val spec: ModelSpec) extends ChatModel:
   val alias: String = spec.alias
   override val ref: String = spec.ref

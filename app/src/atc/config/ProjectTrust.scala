@@ -92,6 +92,8 @@ object ProjectTrust:
   /** `layer` without the settings that need trust. */
   def withoutGrants(layer: ConfigLayer): ConfigLayer =
     val json = new ujson.Obj(ujson.copy(layer.json).obj)
+    // A `null` stays: only `classifiedModel` may be null, which unsets the global one and so
+    // sends classified data to no model.
     for key <- Removed if json.value.get(key).exists(!_.isNull) do json.value.remove(key)
     for entry <- webSearchEntries(json) do entry.remove("webSearch")
     layer.copy(json = json, config = ConfigLayer.settings(json, layer.path.fold("")(_.toString)))

@@ -9,8 +9,8 @@ import java.util.Locale
 import scala.util.control.NonFatal
 
 /** `/config`: show the configuration, and change the settings that leave the
-  * sandbox as it is. A change applies to the running session at once and is
-  * kept for this session only, in the project config or in the global one. */
+  * sandbox as it is. A change applies to the running session at once, and is
+  * saved to the project or the global config when asked. */
 final class ConfigCommands(app: App):
   import app.{models, tui}
   import ConfigCommands.*

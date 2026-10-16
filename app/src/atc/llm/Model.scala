@@ -56,7 +56,6 @@ enum CompletionStop:
   case Complete
   case Resume
   case Truncated
-  /** The stream ended without confirming completion; received text can be continued, but tool calls cannot run. */
   case Incomplete
   case Blocked
 

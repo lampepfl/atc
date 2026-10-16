@@ -207,19 +207,12 @@ object OpenAIChatModel:
     val split = TagSplitter(open, close)
     (split.push(text) ++ split.finish()).collect { case (false, part) => part }.mkString
 
-  /** Feeds a stream's chunks to the SDK accumulator, which accepts the finish chunk and then
-    * at most one choice-less chunk, and only if it carries the usage the completion lacks.
-    * Providers differ in where the usage goes: OpenAI sends it in a choice-less chunk after
-    * the finish chunk, DeepSeek puts it on the finish chunk itself, and OpenCode's gateway
-    * does both for GLM (the finish chunk carries it and a usage chunk follows; a `cost`
-    * line after `[DONE]` never reaches the SDK). So usage is never fed as it comes: the
-    * last one seen is fed once, as the choice-less chunk the accumulator expects, when the
-    * completion is taken. Chunks the accumulator would refuse are dropped: choice-less
-    * chunks without usage, and chunks with choices after the finish chunk. One choice per
-    * completion is assumed (the request never sets `n`).
-    *
-    * Gemini sends each tool call whole and without the `index` the accumulator requires
-    * to join a call's fragments; such a fragment is numbered here (see [[numbered]]). */
+  /** Feeds a stream's chunks to the SDK accumulator, which takes the finish chunk and then at
+    * most one choice-less chunk, carrying the usage. Providers put the usage on the finish chunk,
+    * in a later chunk or in both, so the last usage seen is fed once, when the completion is
+    * taken, and chunks the accumulator would refuse are dropped. One choice per completion is
+    * assumed (the request never sets `n`). Tool-call fragments without an `index` (Gemini's)
+    * are numbered ([[numbered]]). */
   private[atc] final class ChunkFeed:
     private val acc = ChatCompletionAccumulator.create()
     private var finished = false

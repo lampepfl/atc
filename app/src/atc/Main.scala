@@ -14,7 +14,7 @@ object Main:
       .getOrElse("dev")
 
   lazy val usage: String =
-    s"""atc $Version — a minimal coding agent with tracked capabilities
+    s"""atc $Version: a minimal coding agent with tracked capabilities
        |
        |Usage: atc [options]
        |  -c, --config <file>   extra config file (merged over ~/.atc/config.json and the project's .atc/config.json)
