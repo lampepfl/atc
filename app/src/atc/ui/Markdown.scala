@@ -48,8 +48,10 @@ class MarkdownStream(
   private var dropLine = false
   /** Terminal cells written on the current line, its prefix included. */
   private var col = 0
-  /** What a wrapped row of the current line starts with: the width of a list marker, or the quote bar. */
+  /** What a wrapped row of the current line starts with (spaces as wide as a list marker, or the
+    * quote bar), and its width in cells. */
   private var hang = ""
+  private var hangCells = 0
   /** The rendered word being written (with its style sequences), and its width in cells. */
   private val word = StringBuilder()
   private var wordCells = 0
@@ -146,8 +148,9 @@ class MarkdownStream(
     lineStyle = Nil
     dropLine = false
     val prefix = linePrefix(line)
-    col = TextLayout.width(prefix)
+    col = Screen.displayWidth(prefix)
     hang = if lineStyle == List(Dim) && prefix.nonEmpty then sgr(Dim) + glyphs.quote + " " else " " * col
+    hangCells = Screen.displayWidth(hang)
     prefix
 
   private def linePrefix(line: String): String =
@@ -201,35 +204,33 @@ class MarkdownStream(
   /** Lay rendered text out in rows of `columns` cells, breaking before a word that does not
     * fit; style sequences take no cells and travel with their word. */
   private def flow(rendered: String): String =
-    if columns() == Int.MaxValue then return rendered // rows never end: nothing to hold back
-    val out = StringBuilder()
-    var i = 0
-    while i < rendered.length do
-      val c = rendered.charAt(i)
-      if c == '\u001b' then
-        val end = rendered.indexOf('m', i)
-        val stop = if end < 0 then rendered.length else end + 1
-        word.append(rendered.substring(i, stop))
-        i = stop
-      else
-        val cp = rendered.codePointAt(i)
-        val size = Character.charCount(cp)
-        if cp == ' ' then
-          out.append(endWord())
-          spaces += 1
+    if columns() == Int.MaxValue then rendered // rows never end: nothing to hold back
+    else
+      val out = StringBuilder()
+      var i = 0
+      while i < rendered.length do
+        val styleEnd = Screen.sgrEnd(rendered, i)
+        if styleEnd > 0 then
+          word.append(rendered.substring(i, styleEnd))
+          i = styleEnd
         else
-          word.append(rendered.substring(i, i + size))
-          wordCells += Screen.cellWidth(cp, col + wordCells)
-        i += size
-    out.toString
+          val cp = rendered.codePointAt(i)
+          val size = Character.charCount(cp)
+          if cp == ' ' then
+            out.append(endWord())
+            spaces += 1
+          else
+            word.append(rendered.substring(i, i + size))
+            wordCells += Screen.cellWidth(cp, col + wordCells)
+          i += size
+      out.toString
 
   /** Write the held word after its spaces, or start a new row with it when it does not fit on
     * this one. Spaces with no word after them end the line and are dropped. */
   private def endWord(): String =
-    val hangCells = TextLayout.width(hang)
     val wrap = wordCells > 0 && col > hangCells && col + spaces + wordCells > columns()
     val lead = if wrap then "\n" + hang else if word.isEmpty then "" else " " * spaces
-    col = (if wrap then hangCells else col + TextLayout.width(lead)) + wordCells
+    col = (if wrap then hangCells else col + lead.length) + wordCells
     val text = lead + word
     word.clear()
     wordCells = 0
@@ -309,7 +310,7 @@ class MarkdownStream(
         (0 until cells.map(_.size).max).map { line =>
           (0 until columns).map { c =>
             val text = cells(c).lift(line).getOrElse("")
-            val padding = (widths(c) - TextLayout.width(text)).max(0)
+            val padding = (widths(c) - Screen.displayWidth(text)).max(0)
             val (left, right) = aligns.lift(c).getOrElse(Align.Left) match
               case Align.Left => (0, padding)
               case Align.Right => (padding, 0)

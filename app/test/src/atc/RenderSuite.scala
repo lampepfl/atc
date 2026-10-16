@@ -133,7 +133,7 @@ class RenderSuite extends munit.FunSuite:
       val renderer = MarkdownStream(glyphs, MarkdownStream.verbatim, () => columns)
       val output = renderer.push(table) + renderer.finish()
       val lines = plain(output).linesIterator.toList
-      assert(lines.forall(line => atc.ui.TextLayout.width(line) <= columns), output)
+      assert(lines.forall(line => atc.ui.Screen.displayWidth(line) <= columns), output)
       assert(output.contains("source.py"), output)
       assert(output.contains("regression"), output)
       assert(output.contains("behavior"), output)

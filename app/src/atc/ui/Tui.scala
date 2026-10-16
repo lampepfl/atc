@@ -258,7 +258,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
       Ansi.sanitize(hint).split(" · ").toList.map(c => if g == Glyphs.ascii then c.replace("→", "Right") else c)
     // Rows of whole controls: a row break inside one would split a key from what it does.
     val hintRows = controls.foldLeft(List.empty[String]):
-      case (row :: done, control) if TextLayout.width(row) + 3 + TextLayout.width(control) <= width - 3 =>
+      case (row :: done, control) if Screen.displayWidth(row) + 3 + Screen.displayWidth(control) <= width - 3 =>
         s"$row ${g.dot} $control" :: done
       case (done, control) => control :: done
     hintRows.reverse.foreach(row =>
