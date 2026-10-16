@@ -1123,7 +1123,8 @@ that request; while Scala is running, it waits for the call to return. Remaining
 the old completion receive skipped results. `Conversation.steer` adds the correction as a
 user message, inserting an assistant bridge after tool results when needed. When the user
 interrupts the turn instead, queued text goes back to the prompt as a draft
-(`Agent.takeQueuedInput`, `Tui.draft`) rather than starting another turn. The next model
+(`Agent.takeQueuedInput`, `Tui.draft`), with text typed but not sent on a line after it,
+rather than starting another turn. The next model
 request therefore sees the correction before choosing another operation.
 
 `SessionStore` writes versioned JSON snapshots with neutral messages, pending notes, task

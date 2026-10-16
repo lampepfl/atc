@@ -562,7 +562,8 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     var again = true
     while again do
       try
-        val typed = nextDraft + keys.takeTypeAhead()
+        // A line apart, as queued corrections are joined.
+        val typed = List(nextDraft, keys.takeTypeAhead()).filter(_.nonEmpty).mkString("\n")
         nextDraft = ""
         statusLine.draft = ""
         result = Some(prompt.read(styled(promptText, Cyan, Bold), typed))
