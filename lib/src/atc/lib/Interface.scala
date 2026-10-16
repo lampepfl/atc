@@ -592,7 +592,8 @@ trait Interface:
    *
    *  A task can do what its captured capabilities allow, under the same rules as
    *  anywhere else (inside `Classified.map`, only read-only captures compile).
-   *  At most eight tasks run at once. When a task throws,
+   *  At most eight tasks run at once; a `parallel` called inside a task runs
+   *  its own tasks one after another on that task's thread. When a task throws,
    *  `parallel` waits for the rest and rethrows the first failure in task
    *  order; catch inside the task to keep the other results. Prompts raised by
    *  several tasks are put to the user one at a time. `C` (what the tasks

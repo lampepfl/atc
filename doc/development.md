@@ -618,10 +618,11 @@ keeps output unread. `waitFor` returns `None` on timeout. Process termination in
 pipeline stages and descendants. Shutdown kills registered processes.
 
 `parallel(tasks)` runs the tasks (a `Seq[() => A]`) on a pool of at most eight daemon
-threads created for that call (a nested call gets its own pool, so it cannot starve the
-outer one). The results come back in task order once every task has ended; a failed task
-does not cut the others short, since their effects must not outlive the snippet, and the
-first failure in task order is rethrown, with a fatal throwable winning over ordinary exceptions so that the
+threads created for that call. A nested call, made from one of those threads, runs its tasks
+one after another on that thread: a pool per level would multiply the threads of a
+recursion, and a pool shared by the levels could starve them. The results come back in
+task order once every task has ended; a failed task does not cut the others short, since
+their effects must not outlive the snippet, and the first failure in task order is rethrown, with a fatal throwable winning over ordinary exceptions so that the
 REPL's stop signal reaches the evaluation thread. The stop flag is checked by every
 instrumented REPL class on every thread, so an interrupt or timeout stops busy tasks too;
 for tasks blocked in a host call, `parallel` interrupts its workers when the calling thread

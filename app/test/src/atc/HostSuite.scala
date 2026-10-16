@@ -485,6 +485,23 @@ class HostSuite extends munit.FunSuite:
     }))
     assertEquals(failure.getMessage, "task 2")
 
+  test("a nested parallel runs its tasks in order on the thread of the task that calls it"):
+    // A pool per nesting level would multiply the threads of a recursion.
+    val sameThread = parallel(List(1, 2).map { _ => () =>
+      val outer = Thread.currentThread.getName
+      parallel(List(1, 2, 3).map(_ => () => Thread.currentThread.getName)).map(_ == outer)
+    })
+    assertEquals(sameThread, List(List(true, true, true), List(true, true, true)))
+    val ran = java.util.concurrent.ConcurrentLinkedQueue[Int]()
+    val failure = intercept[IllegalStateException](parallel(List(() =>
+      parallel(List(1, 2, 3).map { i => () =>
+        ran.add(i)
+        if i == 1 then i else throw IllegalStateException(s"inner $i")
+      })
+    )))
+    assertEquals(failure.getMessage, "inner 2")
+    assertEquals(ran.toArray.toList, List(1, 2, 3)) // every task ran, in order
+
   test("parallel lets a fatal throwable win and passes an interruption on to its tasks"):
     // munit's intercept only catches non-fatal errors, and the stop signal is fatal by design.
     val fatal =
