@@ -3,7 +3,6 @@ package atc.llm
 import atc.Debug
 import atc.config.ModelSpec
 
-import com.openai.core.JsonValue
 import com.openai.helpers.ResponseAccumulator
 import com.openai.models.{Reasoning, ReasoningEffort}
 import com.openai.models.responses.*
@@ -34,11 +33,9 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
       r.build()
 
   private def functionTool(t: ToolSpec): Tool =
-    val schema = ujson.read(t.parametersJson)
-    val params = FunctionTool.Parameters.builder()
-    schema.obj.foreach((k, v) => params.putAdditionalProperty(k, JsonValue.from(Json.toJava(v))))
+    val params = FunctionTool.Parameters.builder().putAllAdditionalProperties(schema(t)).build()
     Tool.ofFunction(
-      FunctionTool.builder().name(t.name).description(t.description).parameters(params.build()).strict(false).build()
+      FunctionTool.builder().name(t.name).description(t.description).parameters(params).strict(false).build()
     )
 
   private def outputItemsToInput(items: java.util.List[ResponseOutputItem]): List[ResponseInputItem] =

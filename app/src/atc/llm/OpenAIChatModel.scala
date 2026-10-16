@@ -48,11 +48,9 @@ final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
   private def answer(text: String): String = tags.fold(text)((open, close) => OpenAIChatModel.answer(text, open, close))
 
   private def functionTool(t: ToolSpec): ChatCompletionFunctionTool =
-    val schema = ujson.read(t.parametersJson)
-    val params = FunctionParameters.builder()
-    schema.obj.foreach((k, v) => params.putAdditionalProperty(k, JsonValue.from(Json.toJava(v))))
+    val params = FunctionParameters.builder().putAllAdditionalProperties(schema(t)).build()
     ChatCompletionFunctionTool.builder()
-      .function(FunctionDefinition.builder().name(t.name).description(t.description).parameters(params.build()).build())
+      .function(FunctionDefinition.builder().name(t.name).description(t.description).parameters(params).build())
       .build()
 
   private def params(system: SystemPrompt, history: List[Msg], tools: List[ToolSpec]): ChatCompletionCreateParams =

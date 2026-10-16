@@ -20,9 +20,10 @@ import scala.util.Try
   * server-side web-search tool when enabled. */
 final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
   val providerKey: String = "anthropic"
-  protected def knownEfforts: List[String] = List("low", "medium", "high", "xhigh", "max")
+  protected def knownEfforts: List[String] = AnthropicModel.Efforts
+  private val maxTokens: Int = settings.maxTokens.getOrElse(AnthropicModel.DefaultMaxTokens)
   /** What the request asks for: the context fitter reserves exactly this. */
-  override val maxOutputTokens: Option[Int] = Some(settings.maxTokens.getOrElse(AnthropicModel.DefaultMaxTokens))
+  override val maxOutputTokens: Option[Int] = Some(maxTokens)
 
   private final case class Connection(client: AnthropicClient, transport: HttpClient)
   private var opened: Option[Connection] = None
@@ -85,7 +86,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
     val systemBlock = TextBlockParam.builder().text(system).cacheControl(cache).build()
     val b = MessageCreateParams.builder()
       .model(modelId)
-      .maxTokens(maxOutputTokens.get.toLong)
+      .maxTokens(maxTokens.toLong)
       .systemOfTextBlockParams(List(systemBlock).asJava)
     configuredThinking(b)
     // `temperature` is not applied: current Anthropic models reject sampling parameters.
@@ -185,7 +186,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
   private def configuredThinking(b: MessageCreateParams.Builder): Unit =
     if settings.thinking.getOrElse(true) then b.thinking(ThinkingConfigAdaptive.builder().build())
     effort.foreach: e =>
-      b.outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.of(e.toLowerCase(Locale.ROOT))).build())
+      b.outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.of(e)).build())
 
   /** `input` is the whole prompt (Anthropic reports the uncached part, the
     * cache reads and the cache writes separately; OpenAI's `prompt_tokens`
@@ -239,6 +240,8 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
       )
 
 private[atc] object AnthropicModel:
+  /** The efforts Claude models take, lowest first. */
+  val Efforts: List[String] = List("low", "medium", "high", "xhigh", "max")
   private val DefaultMaxTokens = 32000
   /** As `Providers.StreamTimeout`, in this SDK's type. */
   val StreamTimeout: Timeout = Timeout.builder().read(Providers.RequestTimeout).write(Providers.RequestTimeout)

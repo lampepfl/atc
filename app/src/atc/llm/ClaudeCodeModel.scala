@@ -25,7 +25,7 @@ final class ClaudeCodeModel(spec: ModelSpec, launch: List[String] => ClaudeCli.P
   import ClaudeCodeModel.*
 
   val providerKey: String = "claude-code"
-  protected def knownEfforts: List[String] = List("low", "medium", "high", "xhigh", "max")
+  protected def knownEfforts: List[String] = AnthropicModel.Efforts
 
   /** What a CLI process was started with. */
   private final case class Setup(system: String, tools: List[ToolSpec], effort: Option[String])
@@ -51,7 +51,7 @@ final class ClaudeCodeModel(spec: ModelSpec, launch: List[String] => ClaudeCli.P
 
   /** The configured window, else the one the CLI reports for this model (known once a
     * session has started; a listed model has it from the listing). */
-  override def contextWindow: Option[Int] = settings.contextWindow.map(_.toInt).orElse(reported)
+  override def contextWindow: Option[Int] = super.contextWindow.orElse(reported)
 
   override def close(): Unit = synchronized(end(session))
 
@@ -99,8 +99,7 @@ final class ClaudeCodeModel(spec: ModelSpec, launch: List[String] => ClaudeCli.P
     * the results of the calls it waits on, or the next user message after a finished answer. */
   private def continuation(s: Session, history: List[Msg]): Option[Input] =
     val seen = s.seen.length
-    def same(a: Msg, b: Msg) = (a eq b) || a == b
-    if seen == 0 || history.length <= seen + 1 || !history.take(seen).corresponds(s.seen)(same) then None
+    if seen == 0 || history.length <= seen + 1 || !history.startsWith(s.seen) then None
     else
       history(seen) match
         case Msg.Assistant(_, _, native) if s.reply.exists(r => native.exists(_.payload == r)) =>
@@ -183,7 +182,7 @@ final class ClaudeCodeModel(spec: ModelSpec, launch: List[String] => ClaudeCli.P
     result.get
 
   def simple(system: Option[String], prompt: String, thinking: Boolean): Reply =
-    val cli = start(system.getOrElse(DefaultInstructions), Nil, thinking)
+    val cli = start(system.getOrElse(Providers.DefaultInstructions), Nil, thinking)
     try
       cli.prompt(prompt)
       val completion = read(cli, StreamSink(_ => ()), () => false, None)
@@ -196,7 +195,7 @@ final class ClaudeCodeModel(spec: ModelSpec, launch: List[String] => ClaudeCli.P
     signedIn()
     val cli = ClaudeCli.start(launch(arguments(Nil, thinking = true)), Nil)
     try
-      val answer = cli.initialize(DefaultInstructions)
+      val answer = cli.initialize(Providers.DefaultInstructions)
       models(spec, answer, id => { cli.setModel(id); cli.contextWindow() })
     finally cli.close()
 
@@ -267,9 +266,6 @@ private[atc] object ClaudeCodeModel:
       case NonFatal(e) =>
         Debug.log(s"claude-code: no context window for $id: ${Debug.message(e)}")
         None
-
-  /** The system prompt of a one-shot call that has none. */
-  private val DefaultInstructions = "Answer the request."
 
   /** Ends a CLI session when a cancelled request closes it before it finished. */
   private final class Guard(onCancel: () => Unit) extends AutoCloseable:

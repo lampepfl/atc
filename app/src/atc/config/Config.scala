@@ -147,6 +147,9 @@ object ProviderConfig:
   /** The api `name` stands for, ignoring case and surrounding whitespace; `None` for an unknown name. */
   def canonicalApi(name: String): Option[String] = Apis.get(name.trim.toLowerCase(Locale.ROOT))
 
+  /** The apis, each by its own name, for messages. */
+  def apiNames: String = Apis.values.toList.distinct.sorted.mkString(" | ")
+
 /** A provider the first run can set up, from `atc/providers.json`; the starting
   * global config lists all of them. */
 final case class ProviderPreset(

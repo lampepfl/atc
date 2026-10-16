@@ -44,7 +44,7 @@ final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
   override protected def send(params: ResponseCreateParams): Response =
     val complete =
       if params.instructions().isPresent then params
-      else params.toBuilder().instructions(ChatGPTModel.DefaultInstructions).build()
+      else params.toBuilder().instructions(Providers.DefaultInstructions).build()
     val acc = OpenAIResponsesModel.Accumulator()
     Using.resource(client.responses().createStreaming(complete))(_.stream().forEach(acc.accumulate(_)))
     acc.response()
@@ -65,8 +65,6 @@ object ChatGPTModel:
   val BackendUrl = "https://chatgpt.com/backend-api/codex"
   /** The backend lists the models a Codex release of this version may use. */
   val ClientVersion = "0.156.1"
-  /** Instructions for a one-shot call that has none: the backend requires them. */
-  private val DefaultInstructions = "Answer the request."
 
   /** The models of a `GET /models` answer, as listed models of `spec`'s provider. */
   private[atc] def models(spec: ModelSpec, json: ujson.Value): List[ModelSpec] =

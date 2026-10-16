@@ -104,7 +104,7 @@ object ConfigValidation:
     // the fully merged provider must define it.
     requireValid(
       provider.api.exists(_.trim.nonEmpty),
-      s"provider '$name' has no api (expected anthropic | openai | openai-responses | chatgpt | claude-code | echo)"
+      s"provider '$name' has no api (expected ${ProviderConfig.apiNames})"
     )
     provider.api.foreach(api => validateChoice(s"providers.$name.api", api, ProviderConfig.Apis.keys))
     provider.reasoningStyle.foreach: style =>

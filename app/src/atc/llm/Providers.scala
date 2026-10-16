@@ -91,6 +91,10 @@ private[llm] abstract class OpenAIShapedModel(spec: ModelSpec) extends SpecModel
   /** Authorizes every request when the provider's credential is not a fixed key. */
   protected def authorization: Option[okhttp3.Interceptor] = None
   protected def knownEfforts: List[String] = ModelConfig.ReasoningEfforts
+
+  /** A tool's parameter schema as the members of the SDK's parameters object. */
+  protected def schema(t: ToolSpec): java.util.Map[String, JsonValue] =
+    ujson.read(t.parametersJson).obj.map((k, v) => k -> JsonValue.from(Json.toJava(v))).asJava
   protected def streamingClient: OpenAIClient =
     val current = connection
     val transport = com.openai.client.okhttp.OkHttpClient(ModelRequest.scopedHttpClient(current.http))
@@ -107,7 +111,7 @@ private[llm] abstract class OpenAIShapedModel(spec: ModelSpec) extends SpecModel
     * guessing one makes sense: the model is known to reason, has no `thinking`
     * switch, and has not rejected the parameter. */
   protected def requestEffort(thinking: Boolean): Option[String] =
-    if thinking then effort.map(_.toLowerCase(Locale.ROOT))
+    if thinking then effort
     else if effortRejected || settings.thinking.isDefined then None
     else Providers.lowestEffort(modelId, effort.isDefined)
 
@@ -169,6 +173,9 @@ private[atc] object Providers:
 
   /** For listing a provider's models, which a user waits for. */
   val ListTimeout: Duration = Duration.ofSeconds(20)
+
+  /** The instructions of a one-shot call that has none, for the providers that require them. */
+  val DefaultInstructions = "Answer the request."
 
   /** How ATC identifies itself; a configured `User-Agent` header replaces it. */
   lazy val UserAgent: String = s"atc/${Main.Version}"

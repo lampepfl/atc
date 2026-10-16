@@ -174,7 +174,7 @@ object ChatModel:
       case Some("claude-code") => ClaudeCodeModel(spec)
       case Some("echo") => EchoModel(spec.alias, spec.ref, spec.settings.contextWindow.map(_.toInt))
       case _ => throw IllegalArgumentException(
-          s"Unknown api '${spec.api.trim}' for provider '${spec.provider}' (expected anthropic | openai | openai-responses | chatgpt | claude-code | echo)"
+          s"Unknown api '${spec.api.trim}' for provider '${spec.provider}' (expected ${ProviderConfig.apiNames})"
         )
 
   /** The models a provider's endpoint lists (`provider` has an empty alias and
