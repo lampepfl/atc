@@ -1,7 +1,7 @@
 package atc
 
 import atc.host.*
-import atc.lib.{Exec, FileSystem, IOCap, Network, UserIO}
+import atc.lib.{Exec, FileSystem, IOCap, Network, Todo, TodoStatus, UserIO}
 import atc.perms.*
 import atc.platform.{PathGlob, Platform, PlatformPath}
 
@@ -484,6 +484,18 @@ class HostSuite extends munit.FunSuite:
       if i == 1 then i else throw IllegalStateException(s"task $i")
     }))
     assertEquals(failure.getMessage, "task 2")
+
+  test("TODO updates from parallel tasks are not lost"):
+    val items = (1 to Host.MaxParallel).map(i => s"item $i").toList
+    for _ <- 1 to 50 do
+      setTodos(items.map(Todo(_)))
+      val ready = CountDownLatch(items.size)
+      parallel(items.map { item => () =>
+        ready.countDown()
+        ready.await(5, TimeUnit.SECONDS)
+        markTodo(item, TodoStatus.Done)
+      })
+      assertEquals(todos.map(_.status), items.map(_ => TodoStatus.Done))
 
   test("a nested parallel runs its tasks in order on the thread of the task that calls it"):
     // A pool per nesting level would multiply the threads of a recursion.

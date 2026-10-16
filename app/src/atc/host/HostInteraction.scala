@@ -11,6 +11,8 @@ private[host] trait HostInteraction:
 
   @volatile private var todoList: List[Todo] = Nil
   @volatile private var notes = TaskNotes()
+  /** Serializes the TODO updates, which `parallel` tasks can make at once. */
+  private val todoLock = Object()
 
   def setTaskNotes(value: TaskNotes)(using UserIO): Unit =
     if HostInteraction.length(value) > HostInteraction.MaxTaskNotesChars then
@@ -21,7 +23,7 @@ private[host] trait HostInteraction:
 
   def taskNotes(using UserIO): TaskNotes = notes
   private[atc] def currentTaskNotes: TaskNotes = notes
-  private[atc] def restoreTaskState(value: TaskNotes, todos: List[Todo]): Unit =
+  private[atc] def restoreTaskState(value: TaskNotes, todos: List[Todo]): Unit = todoLock.synchronized:
     notes = value
     todoList = todos
 
@@ -81,20 +83,20 @@ private[host] trait HostInteraction:
   def ask(question: String, options: List[String], multiple: Boolean)(using UserIO): Option[String] =
     ui.askUser(question, options, multiple)
 
-  def setTodos(items: List[Todo])(using UserIO): Unit =
+  def setTodos(items: List[Todo])(using UserIO): Unit = todoLock.synchronized:
     todoList = items
     ui.showTodos(items)
 
   def todos(using UserIO): List[Todo] = todoList
 
-  def markTodo(text: String, status: TodoStatus)(using UserIO): Unit =
+  def markTodo(text: String, status: TodoStatus)(using UserIO): Unit = todoLock.synchronized:
     if !todoList.exists(_.text == text) then
       throw IllegalArgumentException(s"No TODO item with text '$text'. Current: ${todoList.map(_.text).mkString(", ")}")
     setTodos(todoList.map(todo => if todo.text == text then todo.copy(status = status) else todo))
 
   private[atc] def currentTodos: List[Todo] = todoList
 
-  private[atc] def clearTodos(): Unit =
+  private[atc] def clearTodos(): Unit = todoLock.synchronized:
     todoList = Nil
     notes = TaskNotes()
 
