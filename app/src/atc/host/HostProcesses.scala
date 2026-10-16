@@ -191,21 +191,23 @@ private[host] trait HostProcesses:
     spawned.values.foreach(_.managed.kill())
     spawned.clear()
 
-  /** `/kill`: `p3`, `3`, or `all`; returns a user-facing result. */
-  private[atc] def killProcess(ref: String): String = spawned.synchronized:
+  /** `/kill`: `p3`, `3`, or `all`. A user-facing report: `Right` when processes were killed,
+    * `Left` when there was none to kill. */
+  private[atc] def killProcess(ref: String): Either[String, String] = spawned.synchronized:
     reapProcesses()
     ref.trim.toLowerCase(Locale.ROOT) match
       case "" | "all" =>
         val count = spawned.size
         killProcesses()
-        if count == 0 then "no process is running" else s"killed $count process${if count == 1 then "" else "es"}"
+        if count == 0 then Left("no process is running")
+        else Right(s"killed $count process${if count == 1 then "" else "es"}")
       case value =>
         value.stripPrefix("p").toIntOption.flatMap(spawned.get) match
           case Some(process) =>
             process.managed.kill()
             spawned.remove(process.id)
-            s"killed p${process.id} (${process.commandLine})"
-          case None => s"no running process '$ref' (see /ps)"
+            Right(s"killed p${process.id} (${process.commandLine})")
+          case None => Left(s"no running process '$ref' (see /ps)")
 
   /** `/ps`: one line per live process. */
   private[atc] def processSummary: String = spawned.synchronized:

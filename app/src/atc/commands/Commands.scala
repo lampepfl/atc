@@ -60,9 +60,9 @@ final class Commands(app: App):
     case Cmd.Ps => tui.println(Ansi.sanitize(host.processSummary))
     case Cmd.Kill =>
       val result = host.killProcess(arg)
-      tui.println(Ansi.sanitize(result))
+      tui.println(Ansi.sanitize(result.merge))
       // The agent's handles to those processes are dead now; it should hear why.
-      if result.startsWith("killed") then agent.noteProcessesKilled(result)
+      result.foreach(agent.noteProcessesKilled)
     case Cmd.Cost => statusCommands.showCost()
     case Cmd.Output => statusCommands.output(arg)
     case Cmd.Task => statusCommands.showTask()

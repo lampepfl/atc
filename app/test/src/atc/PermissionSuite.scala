@@ -495,8 +495,8 @@ class PermissionSuite extends munit.FunSuite:
     val e3 = intercept[IllegalStateException](env.host.spawn(sleep))
     assert(e3.getMessage.nn.contains("kill()"), e3.getMessage)
     assertEquals(env.host.runningProcesses.size, Host.MaxProcesses)
-    assertEquals(env.host.killProcess("p1"), "no running process 'p1' (see /ps)") // p1 (the sleeper) is gone
-    assert(env.host.killProcess(s"p${many.head.id}").startsWith("killed p"))
+    assertEquals(env.host.killProcess("p1"), Left("no running process 'p1' (see /ps)")) // p1 (the sleeper) is gone
+    assert(env.host.killProcess(s"p${many.head.id}").exists(_.startsWith("killed p")))
     assert(env.host.processSummary.linesIterator.size == Host.MaxProcesses - 1)
     env.host.killProcesses() // what the app does when the session ends
     assert(many.forall(p => p.waitFor(5000).isDefined))
