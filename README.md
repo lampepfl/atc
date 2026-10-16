@@ -133,8 +133,8 @@ scripts, use `atc.cmd`, or allow local scripts with
 `atc`. The first start asks you to choose a provider, paste its API key and choose one of
 its models; the key is saved in `~/.atc/keys.properties`, readable only by you. With a
 ChatGPT plan you can sign in through the browser instead of giving a key, and with a
-Claude plan ATC can use your signed-in [Claude Code](https://claude.com/claude-code) CLI. To set up
-providers by hand instead, choose *Configure providers myself*: ATC writes
+Claude plan ATC can use your signed-in [Claude Code](https://claude.com/claude-code) CLI.
+To set up providers by hand instead, choose *Configure providers myself*: ATC writes
 `~/.atc/config.json` and exits. On Windows, `~/.atc` is `%USERPROFILE%\.atc`.
 
 **2. Open the project.** If no configuration grants access to the current directory and
@@ -158,8 +158,9 @@ atc -p 'summarise the README'
 ## Capabilities and ambient authority
 
 In ordinary Scala, any code can call `Files.readString` or start a process: authority is
-*ambient*, available to anyone who can name the method. The agent-facing library takes that
-away. Every effectful method demands the capability it needs as a `using` parameter:
+*ambient*, available to anyone who can name the method. In ATC, safe mode and the validator
+reject those JDK APIs in agent code, and every effectful method of the agent-facing library
+demands the capability it needs as a `using` parameter:
 
 ```scala
 def read(path: String)(using FileSystem): String
@@ -189,10 +190,10 @@ Runtime.rootUser ──► user: UserIO^                  println · print · as
 ```
 
 `io` is the common capture root for every published machine capability. Local and full mode
-expose it as `IOCap^`. The derivations are sandbox-internal, so
-holding the root does not create a capability omitted by the current mode.
-Command operations require both full capabilities, `Exec^` and `FileSystem^`; every mode that
-publishes `ex` also publishes a full `fs` under the same root.
+expose it as `IOCap^`. The derivations are sandbox-internal, so holding the root does not
+create a capability omitted by the current mode. Command operations require both full
+capabilities, `Exec^` and `FileSystem^`; every mode that publishes `ex` also publishes a
+full `fs` under the same root.
 
 | Capability | What it authorises | Where one comes from |
 |---|---|---|
@@ -208,12 +209,14 @@ conversation, not on the machine, so it survives when the agent may touch nothin
 
 ### Read-only and full views
 
-Each capability type has two views, following the nightly compiler's
+The stateful capabilities `FileSystem`, `FileEntry`, `IOCap` and `UserIO` have two views,
+following the nightly compiler's
 [mutable-capability model](https://nightly.scala-lang.org/docs/reference/experimental/capture-checking/mutability.html):
 the **bare** type (`FileSystem`, `IOCap`) is the **read-only** view; `^`, or `^{io}` ("as
-capable as `io`"), is the **full** view. The mutating operations are declared `update def`
-in the library, and an `update` method can only be called through a full capture set. This
-rule turns "read-only" from a runtime check into a typing rule:
+capable as `io`"), is the **full** view. `Exec` and `Network` have no read-only view; a bare
+`Exec` is already full. The mutating operations are declared `update def` in the library,
+and an `update` method can only be called through a full capture set. This rule turns
+"read-only" from a runtime check into a typing rule:
 
 ```scala
 val e: FileEntry^{fs} = fs.access("notes.md")   // as capable as `fs` itself
@@ -247,14 +250,13 @@ of rules: `readClassified(path)` returns a `Classified[String]`, whose `map` and
 take a function that may capture **read-only** capabilities only (`T ->{any.rd} B`). Every
 untrusted outward channel needs a *full* one (`println`/`ask`/normal-model `chat` need
 `UserIO^`, `write` needs `FileSystem^`, `exec` needs both `Exec^` and `FileSystem^`, and
-`httpGet` needs `Network^`), so none of them can appear inside a `map`. The agent can compute
-on a secret but never see it; `toString` is
-`Classified(***)`. The output paths are `println` (you see the
-value in the terminal, marked `[classified]`; the model sees `Classified(***)`),
-`writeClassified` into a classified path, `classifiedChat` with the configured classified
-model, and `httpPostClassified` / `secretHeaders` to an allow-listed host. A response to a
-request carrying classified content stays `Classified`, so a peer cannot reflect a secret
-header or body back into a plain model-visible value.
+`httpGet` needs `Network^`), so none of them can appear inside a `map`. The agent can
+compute on a secret but never see it; `toString` is `Classified(***)`. The output paths are
+`println` (you see the value in the terminal, marked `[classified]`; the model sees
+`Classified(***)`), `writeClassified` into a classified path, `classifiedChat` with the
+configured classified model, and `httpPostClassified` / `secretHeaders` to an allow-listed
+host. A response to a request carrying classified content stays `Classified`, so a peer
+cannot reflect a secret header or body back into a plain model-visible value.
 
 In this example `secrets/` is classified in the project config, and the agent is asked a
 question about a key it must never see:
@@ -266,8 +268,8 @@ question about a key it must never see:
   │ val key = readClassified("secrets/api.env")
   │ val live = key.map(_.trim.stripPrefix("API_KEY=").startsWith("sk-live"))
   ├ result
-  │ val key: Classified[String] = Classified(***)
-  │ val live: Classified[Boolean] = Classified(***)
+  │ val key: Classified[String]^{} = Classified(***)
+  │ val live: Classified[Boolean]^{} = Classified(***)
   └ ok 41 ms
 
 ● The check ran, but a value computed from a secret is a secret too, so I cannot read
@@ -298,29 +300,21 @@ file, a process, or the network:
   └ failed 88 ms
 ```
 
-`rs$line$3` is the preamble line that holds the `user` given; the `exec` and `write`
-attempts name the lines that hold `ex` and `fs`. The same line can compile in one mode and
-not another, because the view of `fs` changes. In local and full mode `fs` is the full
-view, so even a harmless read inside the `map` captures a full capability and is refused:
-
-```scala
-> key.map(k => k + read("notes.md"))               // local/full: fs is the full view
-Reference `rs$line$4` is not included in the allowed capture set {any.rd} …
-```
-
-In read-only mode `fs` is `FileSystem^{io.rd}`, so the identical line is accepted. Reading
-cannot leak the secret, whereas writing could, and the capability view distinguishes the
-two. The agent can always route a secret to an authorized channel: the terminal, a
-classified file, the classified model, or an allow-listed host.
+`rs$line$3` is the REPL wrapper of the preamble line that holds the `user` given (see
+[the capability design](doc/development.md#the-capability-design)). Reading inside the `map`
+cannot leak the secret, so it compiles through a read-only file system: in read-only mode,
+where `fs` is `FileSystem^{io.rd}`, and in the other modes as `read(path)(using ro)` with
+`val ro: FileSystem^{fs.rd} = fs`. The agent can always route a secret to an authorized
+channel: the terminal, a classified file, the classified model, or an allow-listed host.
 
 ### Runtime permissions
 
 Types decide what compiles, but they know nothing about your configuration. Every host method
 therefore also checks the permission policy for the relevant path, command, or host, and a
-capability from a `request*` block is refused once that block has closed. Underneath sit a
-validator that rejects the obvious escape hatches (`java.io`, reflection, the application's
-own packages) before compilation, and a class loader that shows agent code only the JDK,
-`scala.*` and the agent library. The details are in
+capability from a `request*` block is refused once that block has closed. Before
+compilation, a validator rejects the obvious escape hatches (`java.io`, reflection, the
+application's own packages), and the class loader gives agent code only the JDK, `scala.*`
+and the agent library. The details are in
 [doc/development.md](doc/development.md#defence-in-depth).
 
 ## Modes: read-only, local, full
@@ -334,9 +328,9 @@ agent can express at all, before the permission policy applies:
 | **local** | also write files and run commands |
 | **full** | also reach the network, and let the model's provider search the web |
 
-A mode withdraws an effect while leaving the conversation intact, so the agent can always
-explain what it *would* have done. The policy enforces the same three levels again at run
-time. Switch with `/mode` (cycles the three), **Shift-Tab** on an empty prompt, `--mode`,
+A mode leaves capabilities out of the preamble but keeps the conversation, so the agent can
+still explain what it *would* have done. The policy enforces the same three levels again at
+run time. Switch with `/mode` (cycles the three), **Shift-Tab** on an empty prompt, `--mode`,
 or `"mode"` in the config; switching starts a fresh REPL but keeps the conversation. The
 default is full.
 
