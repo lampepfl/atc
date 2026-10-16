@@ -1455,27 +1455,40 @@ prompt adds to it; answers and secrets typed into pop-ups stay out.
 
 Tests use munit under `app/test/src/atc`. Extend the suite responsible for the behavior:
 
-- `CapabilitySuite`, `ModeSuite`, `SandboxSuite`, `ReplSessionSuite`: compiler boundaries,
-  capability requirements, REPL state and interruption.
-- `PolicySuite`, `PermissionSuite`, `HostSuite`, `ClassifiedSuite`: permission rules and
-  host effects, including classified values and local HTTP requests.
-- `HostEditingSuite`: literal replacements, bounded reads and searches, file previews and classified exclusions.
-- `ModelRequestSuite`, `ProviderCancellationSuite`: cancellation and HTTP client ownership across requests.
-- `SessionStoreSuite`: portable conversation persistence, validation and file permissions.
-- `ConfigSuite`, `LayerSuite`, `ModelSuite`, `GitIgnoreSuite`: configuration and lookup.
-- `ToolOutputSuite`, `PromptsSuite`: tool-result bounding, hints and permission notes; the system prompt.
-- `AgentCoreLoopSuite`, `AgentLoopSuite`, `CompletionPolicySuite`, `ContextManagerSuite`:
-  loop decisions, transcript repair, context fitting and the real REPL integration.
-- `TuiSuite`, `TextLayoutSuite`, `ToolHistorySuite`, `RenderSuite`, `InputPredictorSuite`, `DebugSuite`:
-  terminal helpers, retained output, rendering, prediction and error reporting.
-- `ReplInterruptionSuite`: cancellation recovery in an isolated compiler process.
-- `ProcessesSuite`, `PlatformProcessSuite`, `TextFilesSuite`: process and platform behavior.
-- `MainSuite`, `FirstRunSuite`, `commands.SlashCommandSuite`: command-line parsing, first-run setup and
-  slash-command parsing.
+- `CapabilitySuite`, `ModeSuite`, `SandboxSuite`, `ReplSessionSuite`, `CodeValidatorSuite`:
+  compiler boundaries, capability requirements, the class loader, REPL state and
+  interruption, and the code validator.
+- `ReplInterruptionSuite`: recovery after an interrupted evaluation.
+- `PolicySuite`, `PermissionSuite`, `HostSuite`, `ClassifiedSuite`, `GitIgnoreSuite`: permission
+  rules and host effects, including classified values, local HTTP requests and ignored paths.
+- `HostEditingSuite`: literal replacements, bounded reads and searches, file previews and
+  classified exclusions.
+- `ProcessesSuite`, `PlatformProcessSuite`, `TextFilesSuite`: process output and platform behavior.
+- `ConfigSuite`, `LayerSuite`, `ProviderEditsSuite`, `commands.ConfigCommandsSuite`: configuration
+  files, layers and project trust, key bindings, and the edits `/providers` and `/config` make.
+- `ModelSuite`, `ModelRequestSuite`, `ProviderRequestSuite`, `ProviderCancellationSuite`,
+  `ChatGPTSuite`, `ClaudeCodeSuite`, `LlmJsonSuite`: the model catalog, provider requests and
+  cancellation, and each provider's adapter.
+- `AgentCoreLoopSuite`, `AgentLoopSuite`, `AgentSuite`, `CompletionPolicySuite`,
+  `ContextManagerSuite`, `AgentMessagesSuite`: loop decisions, transcript repair, context
+  fitting and compaction, with the real REPL where Scala runs and end to end with the echo model.
+- `ToolOutputSuite`, `PromptsSuite`, `InputPredictorSuite`, `SessionStoreSuite`: tool results, the
+  system prompt, input prediction and saved conversations.
+- The suites in `ui` test the terminal, each the class it is named after: `TuiSuite`,
+  `ScreenSuite`, `StatusLineSuite`, `PromptReaderSuite`, `KeyReaderSuite`, `DialogsSuite`,
+  `ListMenuSuite`, `ToolBlockSuite`, `ToolHistorySuite`, `RenderSuite`, `TextLayoutSuite`,
+  `AlertsSuite` and `NotifierSuite`.
+- `MainSuite`, `FirstRunSuite`, `commands.SlashCommandSuite`, `JsonSuite`, `DebugSuite`:
+  command-line parsing, first-run setup, slash commands, the agent-facing JSON type and error
+  reporting.
 
-`TestEnv` supplies temporary directories, scripted permissions and recording host ports.
-`ReplAssertions` checks snippets. Prefer `ProcessFixture` over host shell commands for
-portable process tests; reserve native commands for platform integration suites.
+`TestEnv` supplies a temporary root with a scripted permission prompter (`ScriptedPrompter`),
+recording host ports and the host's capabilities as givens; `TestEnv.tempDir` creates the
+temporary directories that the test JVM deletes when it exits. `AgentFixtures.scala` holds
+`ScriptedModel`, `RecordingUI` and `completion`, `LocalServer` stands in for a provider over
+local HTTP, and `ui.TestTerminal` builds the terminals of the ui suites. `ReplAssertions` checks
+snippets. Prefer `ProcessFixture` over host shell commands for portable process tests; reserve
+native commands for `PlatformProcessSuite`.
 `tests/atc_test.sh` uses temporary files and stubbed downloads/Java to test the Unix wrapper
 and checkout environment loading; `tests/atc_test.ps1` does the same for the Windows wrapper
 without touching the registry.
