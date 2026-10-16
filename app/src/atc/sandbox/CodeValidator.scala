@@ -171,6 +171,12 @@ object CodeValidator:
       raw"\bcontrol\.(?:(?:\{[^}]*\b)?(?:Breaks|Exception|NonLocalReturns)\b|\*|_\b|\{\s*[*_]\s*\})".r,
       "scala.util.control.Exception, Breaks and NonLocalReturns are forbidden: they catch fatal errors, the stop signal or control throwables inside the library; use try/catch with a typed arm"
     ),
+    // The REPL turns some warnings into errors (a non-local `return`); `@nowarn` would silence them.
+    Forbidden(
+      "nowarn",
+      raw"\bnowarn\b".r,
+      "@nowarn is forbidden: it would silence warnings the sandbox treats as errors, such as a non-local return"
+    ),
     // Directives
     Forbidden("directive-using", raw"//>\s*using".r, "//> using directives are forbidden"),
     Forbidden("directive-import", """import\s+\$""".r, "import $ directives are forbidden"),

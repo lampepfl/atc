@@ -406,7 +406,9 @@ session; initialization remains deferred. `Agent.turn` and `ScalaToolRunner` acc
 session lazily, and cancellation is checked after initialization before executing code.
 
 `ReplSession` persists definitions until a reset, new session or mode change. Safe mode is
-imported after the trusted preamble. Compiler diagnostics and runtime results are returned
+imported after the trusted preamble. The compiler's warning for a non-local `return` (a
+`return` inside a lambda) is an error in the REPL, and the validator rejects `@nowarn`,
+which would silence it. Compiler diagnostics and runtime results are returned
 as `ExecutionResult`; an exception recorded by `CappedRendering` marks evaluation failure.
 A string containing the word `error` in ordinary output does not determine run success.
 

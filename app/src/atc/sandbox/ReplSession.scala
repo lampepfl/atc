@@ -80,6 +80,9 @@ object ReplSession:
     // Every top-level `val` bound to a Java-returning call (`s.replace(...)`)
     // would warn that it "exposes a flexible type": noise for agent code.
     "-Wconf:msg=exposes a flexible type:s",
+    // A `return` inside a lambda is a deprecated non-local return: it throws a control
+    // throwable through the code that called the lambda, which is easy to misuse.
+    "-Wconf:msg=Non local returns are no longer supported:e",
   )
 
   /** Definitions in scope before any agent code runs, for `mode`.

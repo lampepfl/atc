@@ -266,6 +266,14 @@ class ReplSessionSuite extends munit.FunSuite:
     assertFails(nosafe.run("""val hiddenRuntime = Runtime; hiddenRuntime.rootIO"""), "atc-runtime")
     assertFails(nosafe.run("""import java.{io as jio}; new jio.File("/etc/passwd").exists"""), "import-alias")
     assertFails(nosafe.run("""Runtime.`rootIO`"""), "atc-runtime")
+  test("a return inside a lambda is a compile error, and @nowarn cannot silence it"):
+    val lambda = "def firstBig(xs: List[Int]): Int =\n  xs.foreach(x => if x > 1 then return x)\n  0"
+    assertFails(run(lambda), "Non local returns are no longer supported")
+    assertFails(run("@annotation.nowarn " + lambda), "nowarn")
+    assertFails(nosafe.run(lambda), "Non local returns are no longer supported")
+    // A return from the method itself stays an ordinary return.
+    assertOk(run("def firstPlain(x: Int): Int =\n  if x > 1 then return x\n  0"))
+    assert(assertOk(run("firstPlain(3)")).output.contains("3"))
   test("no safe mode: the library catch helpers are rejected before they run"):
     // allCatch would swallow the stop signal, and Breaks a control throwable from a callback.
     assertFails(nosafe.run("import scala.util.control.Exception.allCatch\nallCatch.opt(1)"), "catch-helper")

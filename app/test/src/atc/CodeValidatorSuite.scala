@@ -550,6 +550,10 @@ class CodeValidatorSuite extends munit.FunSuite:
   test("reject catching InterruptedException"):
     assertRejected("try f() catch case _: InterruptedException => ()", "throwable-interrupted")
   test("reject any use of ThreadDeath") { assertRejected("throw new ThreadDeath()", "throwable-threaddeath") }
+  test("reject @nowarn, which would silence the non-local return error"):
+    assertRejected("@annotation.nowarn def f(xs: List[Int]): Int = 0", "nowarn")
+    assertRejected("import scala.annotation.nowarn\n@nowarn(\"msg=Non local\") def f() = 0", "nowarn")
+    assertAllowed("val nowarnings = 1; val s = \"@nowarn\"")
   test("reject the library catch helpers of scala.util.control"):
     assertRejected("import scala.util.control.Exception.*", "catch-helper")
     assertRejected("scala.util.control.Exception.allCatch.opt(f())", "catch-helper")

@@ -182,13 +182,15 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
     val r = assertOk(run(attack + "\nprintln(s\"bits ${bit('s')} ${bit('z')}\")"))
     assert(r.output.contains("bits false false"), r.output)
 
-  test("a non-local return out of a map callback is kept inside the classified value"):
-    assertNoOracle(
+  test("a non-local return out of a map callback does not compile"):
+    // `map` would keep its control throwable too, as for the one thrown directly below.
+    val attack =
       """val c = readClassified("secrets/s.txt")
         |def bit(ch: Char): Boolean =
         |  c.map(s => if s(0) == ch then return true else 0)
-        |  false""".stripMargin
-    )
+        |  false
+        |println(s"bits ${bit('s')} ${bit('z')}")""".stripMargin
+    assertFails(run(attack), "Non local returns are no longer supported")
 
   test("a finally that returns cannot observe a secret-dependent error from map"):
     assertNoOracle(
