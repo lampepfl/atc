@@ -54,6 +54,10 @@ class ContextManagerSuite extends munit.FunSuite:
     val withoutUser = List(assistant("a"), Msg.Continuation("continue"))
     assertEquals(ContextManager.fitToContext(withoutUser, 0, tenEach), (withoutUser, 0))
     assertEquals(ContextManager.fitToContext(Nil, 0, tenEach), (Nil, 0))
+    // Only as many leading exchanges are dropped as the budget needs.
+    val three = List(user("q1"), assistant("a1"), user("q2"), assistant("a2"), user("q3"), assistant("a3"))
+    assertEquals(ContextManager.fitToContext(three, 45, tenEach), (three.drop(2), 2))
+    assertEquals(ContextManager.fitToContext(three, 1, tenEach), (three.drop(4), 4))
 
   test("prepare leaves an unbounded model unchanged and reports its estimate"):
     val manager = ContextManager()

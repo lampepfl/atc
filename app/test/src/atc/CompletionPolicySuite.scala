@@ -4,15 +4,7 @@ import atc.agent.{AgentMessages, CompletionPolicy}
 import atc.llm.*
 
 class CompletionPolicySuite extends munit.FunSuite:
-  private val usage = TokenUsage(1, 1)
   private def call(id: String = "call-1") = ToolCall(id, "run_scala", "{}")
-  private def completion(
-    text: String = "answer",
-    calls: List[ToolCall] = Nil,
-    native: Option[NativeTurn] = None,
-    reason: String = "end_turn",
-    stop: CompletionStop = CompletionStop.Complete,
-  ): Completion = Completion(text, calls, native, usage, reason, stop)
 
   test("a complete tool request is preserved and selected for execution"):
     val native = NativeTurn("provider", "model", "payload")

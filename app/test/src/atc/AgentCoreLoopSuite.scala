@@ -24,14 +24,8 @@ class AgentCoreLoopSuite extends munit.FunSuite:
       result(call)
 
   private def toolStep(ids: String*): ScriptedModel.Comp =
-    ScriptedModel.Comp(Completion(
-      "running tools",
-      ids.toList.map(id => ToolCall(id, toolSpec.name, s"{\"id\":\"$id\"}")),
-      None,
-      TokenUsage(1, 1),
-      "tool_use",
-      CompletionStop.Complete,
-    ))
+    val calls = ids.toList.map(id => ToolCall(id, toolSpec.name, s"{\"id\":\"$id\"}"))
+    ScriptedModel.Comp(completion("running tools", calls, reason = "tool_use"))
 
   private def setup(
     steps: Seq[ScriptedModel.Step],
@@ -47,13 +41,11 @@ class AgentCoreLoopSuite extends munit.FunSuite:
     agent.history.collect { case results: Msg.ToolResults => results }
 
   test("repeated incomplete streams stop after two continuation attempts without running tools"):
-    val unfinished = ScriptedModel.Comp(Completion(
+    val unfinished = ScriptedModel.Comp(completion(
       "",
       List(ToolCall("partial", toolSpec.name, "{}")),
-      None,
-      TokenUsage(1, 1),
-      "stream_incomplete",
-      CompletionStop.Incomplete,
+      reason = "stream_incomplete",
+      stop = CompletionStop.Incomplete,
     ))
     val (model, ui, agent) = setup(Seq.fill(5)(unfinished))
     val runner = RecordingRunner()
@@ -148,7 +140,7 @@ class AgentCoreLoopSuite extends munit.FunSuite:
 
   test("a runner exception keeps the completed results and closes the batch before propagating"):
     val ids = List("completed-before-throw", "throws", "not-reached")
-    val (_, _, agent) = setup(Seq(toolStep(ids*)))
+    val (_, _, agent) = setup(Seq(toolStep(ids*), ScriptedModel.Reply("recovered")))
     val failure = RuntimeException("runner exploded")
     val runner = RecordingRunner(call =>
       if call.id == "throws" then throw failure
@@ -174,6 +166,9 @@ class AgentCoreLoopSuite extends munit.FunSuite:
     }
     assertEquals(agent.history.drop(requestIndex + 1), List(toolResults(agent).head))
     assertEquals(agent.toolCalls, 2)
+    // The history stays valid for the provider, so the next turn completes.
+    assertEquals(agent.runTurn(RecordingRunner(), "again", () => false), TurnOutcome.Finished)
+    assertEquals(agent.history.last, Msg.Assistant("recovered", Nil, None))
 
   test("turn outcomes distinguish completion, interruption, refusal and budget limits"):
     val (_, _, finished) = setup(Seq(ScriptedModel.Reply("done")))
