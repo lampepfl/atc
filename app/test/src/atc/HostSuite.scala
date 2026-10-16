@@ -446,6 +446,10 @@ class HostSuite extends munit.FunSuite:
       assert(PlatformPath.windowsValidationError(path).nonEmpty, path)
     for path <- List("C:/work/file.txt", ".env") do
       assertEquals(PlatformPath.windowsValidationError(path), None, path)
+    // `parse` serves the host, the command line, `/save` and `/resume`.
+    assertEquals(PlatformPath.parse("~/notes/x.json"), PlatformPath.userHome.resolve("notes").resolve("x.json"))
+    if Platform.isWindows then
+      assert(intercept[IllegalArgumentException](PlatformPath.parse("C:work")).getMessage.nn.contains("drive-relative"))
     assertEquals(
       ScalaSource.stringLiteral("C:\\Users\\alice\nnotes\".txt"),
       "\"C:\\\\Users\\\\alice\\nnotes\\\".txt\"",

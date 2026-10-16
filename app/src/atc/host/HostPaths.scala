@@ -19,10 +19,7 @@ private[host] trait HostPaths:
   /** Resolve a path against the host working directory and canonicalize it for
     * policy evaluation, including symlinks and dangling write targets. */
   private[atc] def canonical(path: String): Path =
-    val expanded = PlatformPath.expandHome(path)
-    PlatformPath.validationError(expanded).foreach: reason =>
-      throw IllegalArgumentException(s"Invalid Windows path ${ScalaSource.stringLiteral(path)}: $reason")
-    val raw = Paths.get(PlatformPath.native(expanded)).nn
+    val raw = PlatformPath.parse(path)
     // Canonicalizing a UNC path contacts its server (DNS, SMB) before any permission check,
     // so even a read-only file system inside `Classified.map` could reach the network.
     if PlatformPath.isUnc(raw) && raw.getRoot != cwd.getRoot then

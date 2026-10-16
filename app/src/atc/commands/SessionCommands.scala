@@ -6,7 +6,7 @@ import atc.llm.CancelledException
 import atc.perms.Mode
 import atc.platform.PlatformPath
 
-import java.nio.file.{FileAlreadyExistsException, Files, Path, Paths}
+import java.nio.file.{FileAlreadyExistsException, Files, Path}
 import scala.util.control.NonFatal
 
 /** The conversation and its REPL: starting over, compacting, saving and
@@ -144,7 +144,7 @@ final class SessionCommands(app: App):
     else restore(SessionStore.read(path))
 
   private def sessionPath(value: String): Path =
-    val path = Paths.get(PlatformPath.native(PlatformPath.expandHome(value))).nn
+    val path = PlatformPath.parse(value)
     (if path.isAbsolute then path else cwd.resolve(path).nn).normalize.nn
 
   /** At the start: offer to continue the conversation saved in this directory. */

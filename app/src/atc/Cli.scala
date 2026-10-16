@@ -3,7 +3,7 @@ package atc
 import atc.perms.Mode
 import atc.platform.PlatformPath
 
-import java.nio.file.{Files, Path, Paths}
+import java.nio.file.{Files, Path}
 
 /** Command-line data, parsing, path resolution, and validation. */
 private[atc] object Cli:
@@ -33,9 +33,9 @@ private[atc] object Cli:
   private def parseRaw(arguments: List[String], current: Args): Args = arguments match
     case Nil => current
     case ("-c" | "--config") :: value :: rest =>
-      parseRaw(rest, current.copy(config = Some(path(value))))
+      parseRaw(rest, current.copy(config = Some(PlatformPath.parse(value))))
     case ("-C" | "--cwd") :: value :: rest =>
-      parseRaw(rest, current.copy(cwd = path(value)))
+      parseRaw(rest, current.copy(cwd = PlatformPath.parse(value)))
     case ("-m" | "--model") :: value :: rest => parseRaw(rest, current.copy(model = Some(value)))
     case ("-p" | "--prompt") :: value :: rest => parseRaw(rest, current.copy(prompt = Some(value)))
     case "--mode" :: value :: rest => parseRaw(rest, current.copy(mode = Some(Mode.parse(value))))
@@ -50,12 +50,6 @@ private[atc] object Cli:
 
   private def resolve(base: Path, value: Path): Path =
     (if value.isAbsolute then value else base.resolve(value).nn).normalize.nn
-
-  private def path(value: String): Path =
-    val expanded = PlatformPath.expandHome(value)
-    PlatformPath.validationError(expanded).foreach: reason =>
-      throw IllegalArgumentException(s"Invalid Windows path ${ScalaSource.stringLiteral(value)}: $reason")
-    Paths.get(PlatformPath.native(expanded)).nn
 
   /** Validate paths only for actions that use them, so `--help` and
     * `--version` remain available from a deleted working directory. */
