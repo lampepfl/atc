@@ -387,17 +387,16 @@ ATC's file and HTTP permissions do not constrain the internals of those commands
 
 ## The sandbox
 
-`SandboxRepl.warm` starts the REPL on a daemon thread as soon as the program is ready for
-input (after the resume offer; before the turn of a `-p` run), because compiling the
-preamble takes about two seconds that would otherwise land inside the first tool call.
-`SandboxRepl.ensure` adopts that session on the first Scala tool call or `/run`, waiting for
-it (with a "starting sandbox" status) only when it is not ready yet, and starts one on the
-spot if none is warming. `SandboxRepl.replace` (reset, mode change, `/new`) drops the live
-session and a warming one alike (`discardWarming`: a daemon thread closes it once its
-initialization ends, so the switch never waits for a compiler it no longer needs) and
-starts warming the next one. Text-only turns never wait for a compiler. Reset and mode changes discard the previous
-session; initialization remains deferred. `Agent.turn` and `ScalaToolRunner` accept the
-session lazily, and cancellation is checked after initialization before executing code.
+`SandboxRepl.warm` starts the REPL on a daemon thread as soon as ATC is ready for input
+(after the resume offer; before the turn of a `-p` run), so the two seconds the preamble takes
+to compile overlap the user's typing and the model's answer. `SandboxRepl.ensure` adopts that
+session on the first Scala tool call or `/run`, showing a "starting sandbox" status only when
+it has to wait, and starts a session itself when none is warming. `Agent.turn` and
+`ScalaToolRunner` take the session by name, so text-only turns never wait for a compiler, and
+`ensure` checks cancellation after initialization, before any code runs.
+`SandboxRepl.replace` (`/reset`, `/mode`, `/new`) kills the session's processes, drops the
+live session and a warming one alike, and starts warming the next. A daemon thread closes a
+dropped warming session once its initialization ends, so the switch does not wait for it.
 
 `ReplSession` persists definitions until a reset, new session or mode change. Safe mode is
 imported after the trusted preamble. The compiler's warning for a non-local `return` (a
@@ -430,8 +429,8 @@ returned indexes and invalidates only the stopped wrapper. Run `ReplInterruption
 separately as well as in the full suite: unrelated compiler sessions can populate Scala's
 shared wrapper-name table and hide this failure.
 
-Output capture retains at most 4 MiB and reports truncation. Top-level value echoes have a
-separate character limit. User-visible prints also enter the REPL capture; the TUI records
+REPL output capture retains at most 4 MiB and reports truncation. Top-level value echoes
+have a separate limit of 2000 characters. User-visible prints also enter the REPL capture; the TUI records
 a bounded prefix to subtract already-displayed output from result panels. Preserve leading
 whitespace in capture because subtraction uses exact text. For the same reason only the
 trace the REPL renders for an uncaught exception loses its host and runtime frames
@@ -441,10 +440,10 @@ reaches the model unchanged.
 `/reset` and `/mode` reset the REPL and its spawned processes, `/mode` with the newly
 selected capabilities. `/new` resets that and the conversation, queued notes, usage
 accounting, task notes, TODOs, retained output and session grants, and clears the window
-and its scrollback; the footer is drawn again from nothing.
-REPL restarts queue a notice for the model's next turn. `/run` queues the user's code and
-its result because definitions are shared with the agent. Closed sessions reject further
-runs. Input predictions are invalidated after state changes and before shutdown.
+and its scrollback. REPL restarts queue a notice for the model's next turn. `/run` queues
+the user's code and its result because definitions are shared with the agent. Closed
+sessions reject further runs. Input predictions are invalidated after state changes and
+before shutdown.
 
 ## The permission model
 
