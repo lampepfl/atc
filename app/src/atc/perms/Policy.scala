@@ -194,13 +194,16 @@ final class Policy(
         s"Access denied: the sandbox is in ${mode.label} mode; writing '$shown' cannot be granted"
       )
     val current = effective(parentId, p)
-    if !(current.access >= access) then
+    // A grant on `p` would also raise every stricter unlocked rule below it, so
+    // a request that needs no approval opens its scope without one.
+    if current.access >= access then openScope(parent)
+    else
       if current.locked then
         throw SecurityException(s"Access denied: '$shown' is locked to ${current.access.label} by the configuration")
       decide(FileRequest(p, access, current, reason), s"${access.label} on '$shown'") {
         base.synchronized(base.fileGrants ::= (p -> access))
       }
-    openScope(parent, fileGrants = List(p -> access))
+      openScope(parent, fileGrants = List(p -> access))
 
   // ── commands ──────────────────────────────────────────────────────
 
@@ -221,12 +224,15 @@ final class Policy(
     if !mode.allowsExec then
       throw SecurityException(s"Access denied: the sandbox is in ${mode.label} mode; commands cannot be run")
     refuseDenied("command", commands, denyCommands, GlobMatcher.matchesCommand)
+    // A pattern counts as held when its own spelling is permitted, which does not make
+    // it a subset: `./run.sh` is held under `*.sh` yet would also permit `./run.sh -x`.
+    // The scope therefore holds only the patterns the user approved.
     val missing = commands.filterNot(command => commandPatterns(parent).exists(GlobMatcher.matchesCommand(command, _)))
     if missing.nonEmpty then
       decide(ExecRequest(missing, reason), s"commands ${missing.mkString(", ")}") {
         base.synchronized(base.commands ++= missing)
       }
-    openScope(parent, commands = commands)
+    openScope(parent, commands = missing)
 
   // ── network ───────────────────────────────────────────────────────
 

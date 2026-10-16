@@ -135,6 +135,28 @@ class PolicySuite extends munit.FunSuite:
     assertEquals(p.effective(ScopeId.Base, f).access, Access.Write)
     assertEquals(prompter.asked.size, 3)
 
+  test("a request that needs no prompt does not raise stricter rules below its path"):
+    val prompter = ScriptedPrompter(Nil)
+    val p = Policy(
+      rules(
+        (".", Some(Access.Write), None, false),
+        ("build", Some(Access.Read), None, false),
+        ("secrets", Some(Access.None), None, false),
+      ),
+      List("*.sh"),
+      Nil,
+      prompter
+    )
+    val read = p.requestFile(ScopeId.Base, root, Access.Read, "")
+    assertEquals(p.effective(read, root.resolve("secrets/key.txt")).access, Access.None)
+    val write = p.requestFile(ScopeId.Base, root, Access.Write, "")
+    assertEquals(p.effective(write, root.resolve("build")).access, Access.Read)
+    // `./run.sh` is held under `*.sh`, but as a pattern it would also permit arguments.
+    val exec = p.requestExec(ScopeId.Base, List("./run.sh"), "")
+    assert(p.commandAllowed(exec, "./run.sh"))
+    assert(!p.commandAllowed(exec, "./run.sh --all"))
+    assertEquals(prompter.asked, Nil)
+
   test("closed scopes cannot access paths covered by locked rules"):
     val p = Policy(rules((".", Some(Access.Read), None, true)), Nil, Nil, _ => Decision.Deny)
     val path = root.resolve("locked.txt")

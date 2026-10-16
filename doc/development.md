@@ -478,9 +478,13 @@ the block closes the scope and kills processes owned by it. Process handles requ
 open originating scope; `runningProcesses` filters by scope visibility.
 
 At runtime, a request resolves its parent scope, checks mode and deny restrictions, and
-asks only for permissions not already held. `AllowOnce` applies to the child scope;
-`AllowSession` also records the grant on `ScopeId.Base`. The callback runs through
-`Host.inScope`, whose `finally` block terminates scoped processes and closes the scope.
+asks only for permissions not already held. The child scope holds only what the prompt
+asked for, and nothing when no prompt was needed. A file grant would also raise every
+stricter unlocked rule below its path, and a command pattern counts as held when its own
+text is permitted although it may match more: `./run.sh` is held under `*.sh` but would
+also allow arguments. `AllowOnce` applies to the child scope; `AllowSession` also records
+the grant on `ScopeId.Base`. The callback runs through `Host.inScope`, whose `finally`
+block terminates scoped processes and closes the scope.
 Denial throws before a child scope is opened. The compiler's lifetime checks and the
 host's scope IDs therefore enforce complementary parts of the same request contract.
 
