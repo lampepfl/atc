@@ -29,7 +29,7 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
   private val env =
     TestEnv(commands = List(ProcessFixture.pattern("echo")), hosts = List("example.com"), prefix = "atc-cap")
   private lazy val session: ReplSession = env.newSession(mode = Mode.Full)
-  private def run(code: String): ExecutionResult = { env.activate(); session.run(code) }
+  private def run(code: String): ExecutionResult = session.run(code)
 
   override def beforeAll(): Unit =
     env.file("a.txt", "content")

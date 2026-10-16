@@ -16,7 +16,7 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
 
   private val env = TestEnv(TestEnv.withSecrets, commands = List("echo"), prefix = "atc-sandbox")
   private lazy val session: ReplSession = env.newSession()
-  private def run(code: String): ExecutionResult = { env.activate(); session.run(code) }
+  private def run(code: String): ExecutionResult = session.run(code)
 
   override def beforeAll(): Unit =
     env.file("secrets/s.txt", "secret")
@@ -46,7 +46,6 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
       val closer = Thread(() => discarded.close(), "discard")
       closer.start()
       closer.join(10000)
-      env.activate()
       assertOk(warmed.run("val warm = 1 + 1"))
       assertOk(warmed.run("warm * 2"))
       assert(!discarded.run("1").success)

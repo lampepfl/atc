@@ -15,12 +15,8 @@ import atc.sandbox.*
   *
   * The capability *typing* rules behind this (read-only views, `update`
   * methods, escapes, the `Classified.map` contract) live in
-  * [[CapabilitySuite]]; here we only check what each mode provides.
-  *
-  * Each mode gets one host and one session, reused across tests. The installed
-  * host is process-global (one sandbox per JVM), so `run` re-installs this
-  * mode's host before evaluating. Otherwise a session could pick up another
-  * mode's host when its `api` object initialises. */
+  * [[CapabilitySuite]]; here we only check what each mode provides. Each mode
+  * gets one host and one session, reused across tests. */
 class ModeSuite extends munit.FunSuite, ReplAssertions:
   override val munitTimeout = scala.concurrent.duration.Duration(5, "min")
 
@@ -35,7 +31,6 @@ class ModeSuite extends munit.FunSuite, ReplAssertions:
     env.decisions = List.fill(20)(Decision.AllowOnce)
     lazy val session: ReplSession = env.newSession(mode = mode)
     def run(code: String): ExecutionResult =
-      env.activate()
       env.policy.mode = mode
       session.run(code)
 

@@ -4,7 +4,7 @@ import atc.host.*
 import atc.lib.{IOCap, Todo, UserIO}
 import atc.perms.*
 import atc.platform.PlatformPath
-import atc.sandbox.{ReplSession, Sandbox, SandboxConfig}
+import atc.sandbox.{ReplSession, SandboxConfig}
 
 import java.io.IOException
 import java.nio.file.{Files, Path}
@@ -130,13 +130,6 @@ final class TestEnv(
   def clearOutput(): Unit =
     agentOut.clear()
     userOut.clear()
-
-  /** Re-install this env's host as the sandbox implementation. The installed
-    * host is process-global (one sandbox per JVM), so a suite that keeps more
-    * than one session alive must activate the right env before evaluating.
-    * Otherwise a session picks up another env's host when its `api` object is
-    * first forced, and its effects land in the wrong temp root. */
-  def activate(): Unit = Sandbox.installHost(host)
 
   /** Open a sandbox session on this host (installs it as the sandbox API). */
   def newSession(
