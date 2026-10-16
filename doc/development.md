@@ -458,7 +458,7 @@ grants may widen access but cannot remove classification or exceed a locked rule
 Access levels form the finite order `None < Read < Write`. For canonical path `p`, let
 `M(p)` be all matching rules and `G(p)` the subset allowed to grant at `p`. A global or
 explicit rule can grant anywhere it matches; a project rule can grant only inside its
-project. The implementation in `configPerm` is equivalent to:
+project. `Policy.configPerm` computes `config` and `Policy.effective` the rest:
 
 ```text
 grant(p)   = maximum explicit access in G(p), default None
@@ -492,14 +492,14 @@ open originating scope; `runningProcesses` filters by scope visibility.
 
 At runtime, a request resolves its parent scope, checks mode and deny restrictions, and
 asks only for permissions not already held. The child scope holds only what the prompt
-asked for, and nothing when no prompt was needed. A file grant would also raise every
-stricter unlocked rule below its path, and a command pattern counts as held when its own
-text is permitted although it may match more: `./run.sh` is held under `*.sh` but would
-also allow arguments. `AllowOnce` applies to the child scope; `AllowSession` also records
-the grant on `ScopeId.Base`. The callback runs through `Host.inScope`, whose `finally`
-block terminates scoped processes and closes the scope.
-Denial throws before a child scope is opened. The compiler's lifetime checks and the
-host's scope IDs therefore enforce complementary parts of the same request contract.
+asked for, and nothing when no prompt was needed, because what is held is not always covered
+by a grant of the same text: a file grant would also raise every stricter unlocked rule below
+its path, and `./run.sh` is held under `*.sh` but as a pattern would also allow arguments.
+`AllowOnce` applies to the child scope; `AllowSession` also records the grant on
+`ScopeId.Base`. Denial throws before a child scope is opened. The callback runs through
+`Host.inScope`, whose `finally` block terminates scoped processes and closes the scope. The
+compiler's lifetime checks and the host's scope IDs therefore enforce complementary parts of
+the same request contract.
 
 Permission requests display numbered command or host rows, and a `note` row when a command
 pattern holds `*`, which allows any arguments and so, for an interpreter, any code. The
@@ -520,11 +520,12 @@ patterns with separators use the layer's base; absolute patterns and `~` use an 
 path. `PathGlob` handles slash-based globs on all platforms. Canonicalization resolves
 symlinks, including dangling write targets. Directory traversal does not follow symlinked
 directories or Windows junctions. Filesystem checks and subsequent operations are not an
-OS-level transactional sandbox. Canonicalization corrects the case of existing names only, so
-on Windows and macOS (`Platform.caseInsensitivePaths`) patterns match case-insensitively: a new
-`.ATC` is the same directory as `.atc` there and must fall under its locked rule. An agent path
-on a UNC share other than the working directory's is refused before canonicalization, which
-would otherwise contact the server even from a read-only file system.
+OS-level transactional sandbox. On Windows and macOS (`Platform.caseInsensitivePaths`) every
+pattern, exact paths and the root of an anchored glob included, compares names
+case-insensitively, because canonicalization corrects the case of existing names only: a new
+`.ATC` or `SECRETS` is the same directory as `.atc` or `secrets` there and must fall under its
+rule. An agent path on a UNC share other than the working directory's is refused before
+canonicalization, which would otherwise contact the server even from a read-only file system.
 
 `GitIgnore` controls visibility in listings and recursive searches, independently of
 permissions. It reads repository and nested `.gitignore` files, caches them for the session
@@ -552,10 +553,13 @@ command execution, which needs `FileSystem^`, still compiles only in local and f
 configured needs a nested `requestFiles` block. The result of a request tells the agent
 what the user decided, so "once" needs another request next time while "for the session"
 does not. In the pop-up, **Tell the agent what to change** sends the typed text back
-instead of a grant: the original request receives nothing, the remaining tool calls of that
-batch are skipped, and the text survives result truncation. Without a menu-capable terminal
-the answer is `y`, `s` or `n`, or free text; only an exact approval grants ("yes, except
-the deployment command" is feedback, not approval).
+instead of a grant: the original request receives nothing and the remaining tool calls of
+that batch are skipped. Empty or cancelled feedback returns to the menu. Without a
+menu-capable terminal the prompt accepts exact `y`/`yes` and `s`/`session` approvals and
+`n`/`no` denials, and any other non-empty answer is `Decision.Revise`, so "yes, except the
+deployment command" is feedback, not approval; EOF and an empty answer deny. A `-p` run never
+prompts: a request fails unless `--approve-all` approves it for the session
+(`App.permissionPrompter`).
 
 ## Host operations
 
