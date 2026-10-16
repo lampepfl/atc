@@ -159,9 +159,9 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
 
   // ── the compact view ──────────────────────────────────────────────
 
-  private def redraw(force: Boolean = false): Unit =
-    val live = region.getOrElse { val r = screen.LiveRegion(); region = Some(r); r }
-    live.redraw(liveRows(), force)
+  private def liveRegion(): screen.LiveRegion = region.getOrElse { val r = screen.LiveRegion(); region = Some(r); r }
+
+  private def redraw(force: Boolean = false): Unit = liveRegion().redraw(liveRows(), force)
 
   /** The running block: the title and the start of the code, then the tail of the
     * output. Code gives way first when the screen is short: the rows must fit
@@ -173,17 +173,14 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
     val lines = output.lineCount - shownFrom
     val lastLines =
       output.tail(ToolBlock.OutputTailRows.toLong.min(lines).toInt).map(l => gutter(Dim) + screen.fit(l, GutterWidth))
+    def moreLines(hidden: Long, bar: Int): String =
+      gutter(bar) + styled(s"${g.ellipsis} ${Format.plural(hidden, "more line")}", Dim)
     def codePart(max: Int): List[String] =
-      if code.size <= max then code
-      else
-        code.take(max - 1) :+
-          (gutter(Magenta) + styled(s"${g.ellipsis} ${Format.plural(code.size - max + 1, "more line")}", Dim))
+      if code.size <= max then code else code.take(max - 1) :+ moreLines(code.size - max + 1, Magenta)
     def outputPart(max: Int): List[String] =
       val tail = lastLines.takeRight(max)
       val hidden = lines - tail.size
-      val header =
-        Option.when(hidden > 0)(gutter(Dim) + styled(s"${g.ellipsis} ${Format.plural(hidden, "more line")}", Dim))
-      Indent + styled(s"${g.tee} output", Dim) :: header.toList ++ tail
+      Indent + styled(s"${g.tee} output", Dim) :: Option.when(hidden > 0)(moreLines(hidden, Dim)).toList ++ tail
     def rows(codeMax: Int, tailMax: Int): List[String] =
       (if headed then titleRow :: codePart(codeMax) else Nil) ++ (if outputStarted then outputPart(tailMax) else Nil)
     var codeMax = ToolBlock.CodePreviewRows
@@ -198,20 +195,25 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
     val first = Ansi.sanitize(currentCode).linesIterator.map(_.trim).find(_.nonEmpty).getOrElse("")
     val more = if currentCode.trim.linesIterator.size > 1 then s" ${g.ellipsis}" else ""
     val head = Option.when(headed)(titleRow + "  " + styled(first + more, Dim))
-    val changes = changeRows
-    val link = styled(s" ${g.dot} /output $id", Dim)
-    val verdict =
+    val start = verdict(r, millis)
+    val link = outputLink(id)
+    val detail =
       if r.success then
         val lines = output.lineCount
-        val shown = if lines > 0 then styled(s" ${g.dot} ${Format.plural(lines, "line")} of output", Dim) else ""
-        Indent + styled(s"${g.end} ok $millis ms", Green) + shown + link
+        if lines > 0 then styled(s" ${g.dot} ${Format.plural(lines, "line")} of output", Dim) else ""
       else
-        val start = Indent + styled(s"${g.end} failed $millis ms", Red)
-        val reason = ToolBlock.firstProblem(r, printed.toString).map(Ansi.sanitize).fold(""): problem =>
+        ToolBlock.firstProblem(r, printed.toString).map(Ansi.sanitize).fold(""): problem =>
           val used = Screen.displayWidth(start) + Screen.displayWidth(link) + 3
           styled(s" ${g.dot} ", Red) + styled(screen.fit(problem, used), Red)
-        start + reason + link
-    head.toList ++ changes :+ verdict
+    head.toList ++ changeRows :+ (start + detail + link)
+
+  /** The start of the verdict row: `└ ok 12 ms` or `└ failed 12 ms`. */
+  private def verdict(r: ExecutionResult, millis: Long): String =
+    val (word, colour) = if r.success then ("ok", Green) else ("failed", Red)
+    Indent + styled(s"${g.end} $word $millis ms", colour)
+
+  /** Where the whole result can be read again. */
+  private def outputLink(id: Int): String = styled(s" ${g.dot} /output $id", Dim)
 
   /** A row per file change, with a change repeated in a row (four one-line edits of a
     * file) folded into one row that counts them. */
@@ -232,7 +234,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
     val record = history.add(currentCode, r, millis, liveText, fileChanges.toList)
     screen.stopSpinner()
     if compact then
-      val live = region.getOrElse { val r = screen.LiveRegion(); region = Some(r); r }
+      val live = liveRegion()
       live.redraw(summaryRows(r, millis, record.id), force = true)
       live.freeze()
       region = None
@@ -257,9 +259,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
         write(section("error", Red))
         cleaned.foreach(l => write(gutter(Red) + l + "\n"))
     changeRows.foreach(row => write(row + "\n"))
-    val verdict =
-      if r.success then styled(s"${g.end} ok ${millis} ms", Green) else styled(s"${g.end} failed ${millis} ms", Red)
-    write(Indent + verdict + styled(s" ${g.dot} /output $id", Dim) + "\n")
+    write(verdict(r, millis) + outputLink(id) + "\n")
 
   /** Something else takes the screen (a pop-up, a notice): what the running block shows
     * stays as ordinary output, and what follows is drawn below it. */
