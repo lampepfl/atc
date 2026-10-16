@@ -63,12 +63,14 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
   /** Tab completion for slash commands, by plain string matching: given the
     * words typed so far (the last one possibly empty or partial), the values
     * the last word may take. The app fills this in with its commands and
-    * their arguments; nothing else on the line is completed. */
+    * their arguments; nothing else on the line is completed. Values can be
+    * model aliases from a project config or ids a provider listed, so terminal
+    * controls are removed from what is listed and inserted. */
   @volatile var completions: List[String] => List[String] = _ => Nil
   private val commandCompleter: Completer = (_, line, candidates) =>
     val words = line.words.asScala.toList
     if words.headOption.exists(_.startsWith("/")) then
-      completions(words.take(line.wordIndex + 1)).foreach(c => candidates.add(Candidate(c)))
+      completions(words.take(line.wordIndex + 1)).foreach(c => candidates.add(Candidate(Ansi.sanitize(c))))
 
   /** `readBlock` is reading: Enter continues until an empty line. */
   @volatile var blockMode = false

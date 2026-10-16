@@ -40,3 +40,11 @@ class PromptReaderSuite extends munit.FunSuite:
       assert(ghost >= 0, text)
       assert(text.indexOf("\u001b[K", ghost) > ghost, text.replace("\u001b", "ESC"))
     finally terminal.close()
+
+  test("completion lists and inserts model names without terminal controls"):
+    val (prompt, terminal, out) = promptOn("/model x\t\r")
+    prompt.completions = _ => List("x\u001b]0;pwned\u0007y")
+    try
+      assertEquals(prompt.read("> ", "").trim, "/model x]0;pwnedy")
+      assert(!out.toString(UTF_8).contains("\u001b]0;pwned"), out.toString(UTF_8).replace("\u001b", "ESC"))
+    finally terminal.close()
