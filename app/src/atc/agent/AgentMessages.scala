@@ -16,6 +16,10 @@ object AgentMessages:
   val toolBudgetLoopWarning: String =
     "model kept requesting tools after exhausting the tool budget; stopping this turn"
   val cancelledBeforeExecution: String = "Cancelled by the user before execution."
+  val notRunAfterFailure: String = "Not executed: an earlier tool call in this batch failed."
+  def toolCallFailed(error: Throwable): String =
+    val detail = Option(error.getMessage).getOrElse(error.toString)
+    s"Tool call failed: $detail. Some of its effects may have taken place."
   val skippedAfterFeedback: String =
     "Not executed: the user supplied new instructions. Revise the plan before requesting more tools."
   val missingCodeArgument: String = "Missing 'code' argument."

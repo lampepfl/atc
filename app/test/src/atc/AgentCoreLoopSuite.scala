@@ -146,27 +146,34 @@ class AgentCoreLoopSuite extends munit.FunSuite:
     assert(ui.warnings.contains(AgentMessages.interruptedWarning), ui.warnings.toString)
     assertEquals(agent.toolCalls, 1)
 
-  test("a runner exception repairs every pending tool call in the transcript"):
+  test("a runner exception keeps the completed results and closes the batch before propagating"):
     val ids = List("completed-before-throw", "throws", "not-reached")
     val (_, _, agent) = setup(Seq(toolStep(ids*)))
+    val failure = RuntimeException("runner exploded")
     val runner = RecordingRunner(call =>
-      if call.id == "throws" then throw RuntimeException("runner exploded")
+      if call.id == "throws" then throw failure
       else ToolResult(call.id, s"result:${call.id}", isError = false)
     )
 
     val error = intercept[RuntimeException](agent.runTurn(runner, "go", () => false))
 
-    assertEquals(error.getMessage, "runner exploded")
+    assertEquals(error, failure)
     assertEquals(runner.calls.map(_.id).toList, ids.take(2))
-    val results = toolResults(agent).last.results
-    assertEquals(results.map(_.callId), ids)
-    assert(results.forall(_.isError), results.toString)
-    assert(results.forall(_.output == "[turn failed: runner exploded]"), results.toString)
+    assertEquals(toolResults(agent).size, 1)
+    assertEquals(
+      toolResults(agent).head.results,
+      List(
+        ToolResult("completed-before-throw", "result:completed-before-throw", isError = false),
+        ToolResult("throws", AgentMessages.toolCallFailed(failure), isError = true),
+        ToolResult("not-reached", AgentMessages.notRunAfterFailure, isError = true),
+      ),
+    )
     val requestIndex = agent.history.indexWhere {
       case Msg.Assistant(_, calls, _) => calls.nonEmpty
       case _ => false
     }
-    assertEquals(agent.history(requestIndex + 1), Msg.ToolResults(results))
+    assertEquals(agent.history.drop(requestIndex + 1), List(toolResults(agent).head))
+    assertEquals(agent.toolCalls, 2)
 
   test("turn outcomes distinguish completion, interruption, refusal and budget limits"):
     val (_, _, finished) = setup(Seq(ScriptedModel.Reply("done")))

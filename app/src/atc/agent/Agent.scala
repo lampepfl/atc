@@ -369,12 +369,16 @@ final class Agent(
         active.set(false)
         ui.assistantEnd()
 
-    /** Run the requested tools in order, honouring cancellation and the per-turn budget. */
+    /** Run the requested tools in order, honouring cancellation and the per-turn budget.
+      * When a call throws, the batch still gets one result per call before the exception
+      * propagates: the completed results, a failure for that call and "not run" for the rest. */
     private def runTools(calls: List[ToolCall]): Outcome =
       var overBudget = false
       var needsReplan = false
+      var failure: Option[Throwable] = None
       val results = calls.map: call =>
-        if cancelled() then ToolResult(call.id, AgentMessages.cancelledBeforeExecution, isError = true)
+        if failure.isDefined then ToolResult(call.id, AgentMessages.notRunAfterFailure, isError = true)
+        else if cancelled() then ToolResult(call.id, AgentMessages.cancelledBeforeExecution, isError = true)
         else if needsReplan || !queuedInput.isEmpty then
           ToolResult(call.id, AgentMessages.skippedAfterFeedback, isError = true)
         else if used >= budget && !extendBudget() then
@@ -383,10 +387,16 @@ final class Agent(
         else
           used += 1
           toolCallCount += 1
-          val result = runner.run(call)
-          needsReplan = result.needsReplan
-          result
+          try
+            val result = runner.run(call)
+            needsReplan = result.needsReplan
+            result
+          catch
+            case NonFatal(e) =>
+              failure = Some(e)
+              ToolResult(call.id, AgentMessages.toolCallFailed(e), isError = true)
       conversation.append(Msg.ToolResults(results))
+      failure.foreach(throw _)
       if cancelled() then interrupted()
       else if !overBudget then Continue
       else

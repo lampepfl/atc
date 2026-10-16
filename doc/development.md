@@ -1084,8 +1084,10 @@ executor between tool calls. Provider tests cover authentication, cancellation b
 cancellation between chunked events, subsequent requests and garbage collection. Error messages
 include a bounded cause chain; `ATC_DEBUG=1` adds the complete stack trace.
 
-`Conversation` repairs pending tool results after a failure and inserts assistant markers
-when needed. Pending REPL notices are prepended to the next user message. Real user input
+When a tool call throws, `Agent` appends the results of the calls that completed, a failure
+for that call (its effects may have happened) and a "not run" result for each later call
+before the exception propagates. `Conversation` repairs pending tool results after any other
+failure and inserts assistant markers when needed. Pending REPL notices are prepended to the next user message. Real user input
 and internal continuation messages remain distinct for context fitting and prediction.
 
 `ContextManager` estimates tokens from text and replay payloads, then calibrates against
