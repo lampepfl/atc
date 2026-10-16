@@ -282,16 +282,19 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
       listing = false
       alerts.reportFocus(false) // Ctrl-C and Ctrl-D leave without `callback-finish`
 
-  /** Read a typed answer; `None` when it is empty or cancelled. */
-  def readAnswer(prompt: String): Option[String] = PromptReader.readAnswer(read(prompt, "", commands = false))
+  /** Read a typed answer, kept out of the prompt history; `None` when it is empty or cancelled. */
+  def readAnswer(prompt: String): Option[String] =
+    withoutHistory(PromptReader.readAnswer(read(prompt, "", commands = false)))
 
   /** Read a secret: echoed as `*` and kept out of the history. */
   def readSecret(prompt: String): Option[String] =
+    try withoutHistory(PromptReader.readAnswer(reader.readLine(prompt, Character.valueOf('*'))))
+    finally alerts.reportFocus(false)
+
+  private def withoutHistory[T](body: => T): T =
     reader.setVariable(LineReader.DISABLE_HISTORY, true)
-    try PromptReader.readAnswer(reader.readLine(prompt, Character.valueOf('*')))
-    finally
-      reader.setVariable(LineReader.DISABLE_HISTORY, false)
-      alerts.reportFocus(false)
+    try body
+    finally reader.setVariable(LineReader.DISABLE_HISTORY, false)
 
   /** Redraw the prompt (new ghost text), under the reader's lock and only while it is reading. */
   def redisplay(): Unit =

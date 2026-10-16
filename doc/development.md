@@ -1372,6 +1372,7 @@ highlighted with earlier lines as context: the last eight, or, while `Continuati
 finds a comment or triple-quoted string open, up to 200 lines back (the compiler's colours
 cannot tell what is open, since it resets them after the last coloured character). Layout calculations use
 terminal cell widths. History is owner-only on POSIX systems and rejects final symlinks.
+Only the main prompt adds to it; answers and secrets typed into pop-ups stay out.
 Non-interactive runs use a dumb UTF-8 terminal and do not prompt for permission unless
 explicitly configured to auto-approve requests.
 

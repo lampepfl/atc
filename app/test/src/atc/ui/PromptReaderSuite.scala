@@ -6,6 +6,7 @@ import org.jline.terminal.impl.ExternalTerminal
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Files
+import scala.jdk.CollectionConverters.*
 
 /** The main prompt as the terminal shows it. */
 class PromptReaderSuite extends munit.FunSuite:
@@ -47,4 +48,12 @@ class PromptReaderSuite extends munit.FunSuite:
     try
       assertEquals(prompt.read("> ", "").trim, "/model x]0;pwnedy")
       assert(!out.toString(UTF_8).contains("\u001b]0;pwned"), out.toString(UTF_8).replace("\u001b", "ESC"))
+    finally terminal.close()
+
+  test("answers stay out of the prompt history; prompts go in"):
+    val (prompt, terminal, _) = promptOn("my answer\rhello\r")
+    try
+      assertEquals(prompt.readAnswer("answer> "), Some("my answer"))
+      assertEquals(prompt.read("> ", ""), "hello")
+      assertEquals(prompt.reader.getHistory.asScala.map(_.line).toList, List("hello"))
     finally terminal.close()
