@@ -24,8 +24,8 @@ class LayerSuite extends munit.FunSuite:
     explicit: String = "",
     runIn: String = ""
   ):
-    val home: Path = Files.createTempDirectory("atc-layer-home").nn.toRealPath().nn
-    val cwd: Path = Files.createTempDirectory("atc-layer-cwd").nn.toRealPath().nn
+    val home: Path = TestEnv.tempDir("atc-layer-home").toRealPath().nn
+    val cwd: Path = TestEnv.tempDir("atc-layer-cwd").toRealPath().nn
     /** `$HOME` and `$CWD` in a layer's text become this world's directories. */
     private def jsonStringContent(value: String): String =
       val quoted = ujson.write(value)
@@ -199,7 +199,7 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(Config.projectRoot(w.cwd), Some(w.cwd)) // and the directory is a project now
 
   test("ensureGlobal writes the starting config and key bindings once, and never again"):
-    val home = Files.createTempDirectory("atc-ensure").nn
+    val home = TestEnv.tempDir("atc-ensure")
     val path = home.resolve(".atc").resolve("config.json").nn
     val keys = home.resolve(".atc").resolve(Config.KeysFile).nn
     assertEquals(Config.ensureGlobal(path), List(path, keys))
@@ -637,7 +637,7 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(again.settings.maxToolCalls, 8)
 
   test("running in the home directory keeps ~/.atc/config.json a granting layer"):
-    val home = Files.createTempDirectory("atc-home-cwd").nn.toRealPath().nn
+    val home = TestEnv.tempDir("atc-home-cwd").toRealPath().nn
     val globalPath = home.resolve(".atc").resolve("config.json").nn
     Files.createDirectories(globalPath.getParent)
     Files.writeString(globalPath, GrantCwd)
@@ -648,8 +648,8 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(loaded.rules.map(_.base), List(None)) // granting, not anchored to a project
 
   test("a file named twice through a symbolic link is still read once, in its first role"):
-    val home = Files.createTempDirectory("atc-home-real").nn.toRealPath().nn
-    val linkParent = Files.createTempDirectory("atc-home-link").nn.toRealPath().nn
+    val home = TestEnv.tempDir("atc-home-real").toRealPath().nn
+    val linkParent = TestEnv.tempDir("atc-home-link").toRealPath().nn
     val linkedHome = linkParent.resolve("home").nn
     assume(TestEnv.trySymbolicLink(linkedHome, home), "symbolic links are unavailable for this account")
     Files.createDirectories(home.resolve(".atc"))
@@ -673,20 +673,20 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(again.settings.commands, Nil, "the untrusted project grants no commands")
 
   test("the starter project config is never written as the global config"):
-    val home = Files.createTempDirectory("atc-init-home").nn.toRealPath().nn
+    val home = TestEnv.tempDir("atc-init-home").toRealPath().nn
     val global = home.resolve(".atc/config.json").nn
     val e = intercept[IllegalArgumentException](Config.initProject(home, global))
     assert(e.getMessage.nn.contains("global config"), e.getMessage)
     assert(!Files.exists(global))
-    val linkParent = Files.createTempDirectory("atc-init-link").nn.toRealPath().nn
+    val linkParent = TestEnv.tempDir("atc-init-link").toRealPath().nn
     val linkedHome = linkParent.resolve("home").nn
     assume(TestEnv.trySymbolicLink(linkedHome, home), "symbolic links are unavailable for this account")
     intercept[IllegalArgumentException](Config.initProject(home, linkedHome.resolve(".atc/config.json").nn))
     assert(!Files.exists(global))
 
   test("the starter project config is not written through links a repository ships"):
-    val outside = Files.createTempDirectory("atc-init-outside").nn.toRealPath().nn
-    def project(): Path = Files.createTempDirectory("atc-init-links").nn.toRealPath().nn
+    val outside = TestEnv.tempDir("atc-init-outside").toRealPath().nn
+    def project(): Path = TestEnv.tempDir("atc-init-links").toRealPath().nn
     def noGlobal(dir: Path) = dir.resolve("no-such-global.json").nn
     // `.atc` itself a link
     val linkedDir = project()
@@ -778,8 +778,8 @@ class LayerSuite extends munit.FunSuite:
   test("a project reached through a symlink still grants its own tree"):
     // The policy evaluates canonical paths, so the project layer's base must also
     // be canonical. Otherwise, a project reached through a symlink never grants.
-    val real = Files.createTempDirectory("atc-symlink-real").nn.toRealPath().nn
-    val linkParent = Files.createTempDirectory("atc-symlink-base").nn.toRealPath().nn
+    val real = TestEnv.tempDir("atc-symlink-real").toRealPath().nn
+    val linkParent = TestEnv.tempDir("atc-symlink-base").toRealPath().nn
     val link = linkParent.resolve("proj").nn
     assume(TestEnv.trySymbolicLink(link, real), "symbolic links are unavailable for this account")
     Files.createDirectories(real.resolve(".atc"))

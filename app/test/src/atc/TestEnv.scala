@@ -7,8 +7,12 @@ import atc.platform.PlatformPath
 import atc.sandbox.{ReplSession, SandboxConfig}
 
 import java.io.IOException
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, LinkOption, Path}
+import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.ConcurrentLinkedQueue
 import scala.collection.mutable.ListBuffer
+import scala.jdk.CollectionConverters.*
+import scala.util.Using
 
 /** A recording test environment: a fresh temp root, a policy with a scripted
   * permission prompter, and a [[Host]] whose output, LLM calls, questions and
@@ -24,7 +28,7 @@ final class TestEnv(
   denyCommands: List[String] = Nil,
   denyHosts: List[String] = Nil,
 ):
-  val root: Path = Files.createTempDirectory(prefix).nn.toRealPath().nn
+  val root: Path = TestEnv.tempDir(prefix).toRealPath().nn
 
   val prompter: ScriptedPrompter = ScriptedPrompter()
   export prompter.{decisions, decisions_=, onRequest, onRequest_=, requests}
@@ -154,6 +158,28 @@ final class ScriptedPrompter(var decisions: List[Decision] = Nil) extends Permis
       case Nil => Decision.Deny
 
 object TestEnv:
+  private val tempDirs = ConcurrentLinkedQueue[Path]()
+  java.lang.Runtime.getRuntime.nn.addShutdownHook(Thread(() => tempDirs.asScala.foreach(deleteTree)))
+
+  /** A new temporary directory, deleted with its contents when the test JVM exits. */
+  def tempDir(prefix: String): Path =
+    val dir = Files.createTempDirectory(prefix).nn
+    tempDirs.add(dir)
+    dir
+
+  /** Delete `path` and whatever a directory holds. A link, or a Windows junction, which
+    * reads as a directory that is also "other", is removed without being entered. */
+  private def deleteTree(path: Path): Unit =
+    val attributes =
+      try Some(Files.readAttributes(path, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS).nn)
+      catch case _: IOException => None
+    for a <- attributes do
+      if a.isDirectory && !a.isOther then
+        try Using.resource(Files.list(path).nn)(_.iterator.nn.asScala.foreach(deleteTree))
+        catch case _: IOException => ()
+      try Files.deleteIfExists(path)
+      catch case _: IOException => ()
+
   /** Create a symbolic link when the platform/account permits it. Ordinary
     * Windows users may not have Developer Mode or SeCreateSymbolicLinkPrivilege. */
   def trySymbolicLink(link: Path, target: Path): Boolean =
@@ -175,6 +201,6 @@ object TestEnv:
 
   /** A second temp directory outside any root, with one readable file. */
   def outsideDir(content: String = "outside"): Path =
-    val d = Files.createTempDirectory("atc-outside").nn.toRealPath().nn
+    val d = tempDir("atc-outside").toRealPath().nn
     Files.writeString(d.resolve("o.txt"), content)
     d

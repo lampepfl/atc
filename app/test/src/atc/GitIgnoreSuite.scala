@@ -13,7 +13,7 @@ class GitIgnoreSuite extends munit.FunSuite:
 
   /** A repository-shaped temp tree; `ignore` is written as the root `.gitignore`. */
   private def repo(ignore: String, files: (String, String)*): Path =
-    val root = Files.createTempDirectory("atc-gitignore").nn.toRealPath().nn
+    val root = TestEnv.tempDir("atc-gitignore").toRealPath().nn
     Files.createDirectories(root.resolve(".git"))
     Files.writeString(root.resolve(".gitignore"), ignore)
     for (rel, content) <- files do
@@ -99,7 +99,7 @@ class GitIgnoreSuite extends munit.FunSuite:
     assert(!gi.ignores(root.resolve("sub/b.txt")))
 
   test("a missing or unreadable .gitignore ignores nothing but `.git`"):
-    val root = Files.createTempDirectory("atc-gitignore-none").nn.toRealPath().nn
+    val root = TestEnv.tempDir("atc-gitignore-none").toRealPath().nn
     Files.createDirectories(root.resolve(".git"))
     Files.writeString(root.resolve("a.log"), "")
     val gi = GitIgnore(root, policyOn(root))
@@ -159,7 +159,7 @@ class GitIgnoreSuite extends munit.FunSuite:
   test("a .gitignore the agent may not read, directly or through a link, hides nothing"):
     // Its rules decide which public names a listing shows, so they would reveal its content.
     val root = repo("alpha\n", "alpha" -> "", "beta" -> "", "shared-rules" -> "beta\n")
-    val outside = Files.createTempDirectory("atc-gitignore-outside").nn.toRealPath().nn
+    val outside = TestEnv.tempDir("atc-gitignore-outside").toRealPath().nn
     Files.writeString(outside.resolve("rules"), "beta\n")
     val policy = policyOn(root, FileRule(PathPattern(".gitignore", root), None, Some(true)))
     val host = hostOn(root, GitIgnore(root, policy), policy)

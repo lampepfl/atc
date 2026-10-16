@@ -1,5 +1,6 @@
 package atc.commands
 
+import atc.TestEnv
 import atc.config.{Config, ProjectTrust}
 
 import java.nio.file.Files
@@ -30,9 +31,9 @@ class ConfigCommandsSuite extends munit.FunSuite:
     assertEquals(named("maxToolCalls"), None)
 
   test("a config edit keeps a trusted project trusted, and a failed one restores the files and the trust"):
-    val atcDir = Files.createTempDirectory("atc-home").nn
+    val atcDir = TestEnv.tempDir("atc-home")
     def project(trusted: Boolean) =
-      val root = Files.createTempDirectory("atc-project").nn
+      val root = TestEnv.tempDir("atc-project")
       Files.createDirectories(root.resolve(".atc"))
       Files.writeString(Config.projectPath(root), """{ "commands": ["ls"] }""")
       if trusted then ProjectTrust.trust(root, atcDir)

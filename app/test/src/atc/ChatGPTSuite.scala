@@ -49,7 +49,7 @@ class ChatGPTSuite extends munit.FunSuite:
     "token_type" -> "Bearer",
   ))
 
-  private def tempFile(): Path = Files.createTempDirectory("atc-chatgpt").nn.resolve("chatgpt-auth.json").nn
+  private def tempFile(): Path = TestEnv.tempDir("atc-chatgpt").resolve("chatgpt-auth.json").nn
 
   private def query(url: String): Map[String, String] =
     url.dropWhile(_ != '?').drop(1).split('&').toList.map { pair =>

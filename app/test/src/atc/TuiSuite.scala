@@ -4,7 +4,6 @@ import atc.ui.{Ansi, Format, Glyphs, TailBuffer, Tui}
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
 
 /** The terminal front-end on a non-interactive terminal, and the helpers no other
   * ui suite owns: formatting, sanitizing, the tail buffer and multi-line input. */
@@ -32,7 +31,7 @@ class TuiSuite extends munit.FunSuite:
     // The non-interactive terminal writes to the `System.out` of when it is built.
     System.setOut(java.io.PrintStream(out, true, StandardCharsets.UTF_8))
     val tui =
-      try Tui(Files.createTempDirectory("atc-tui").nn.resolve("history").nn, nonInteractive = true)
+      try Tui(TestEnv.tempDir("atc-tui").resolve("history").nn, nonInteractive = true)
       finally System.setOut(saved)
     try
       tui.beginTurn()
@@ -50,7 +49,7 @@ class TuiSuite extends munit.FunSuite:
     val saved = System.out
     System.setOut(java.io.PrintStream(out, true, StandardCharsets.UTF_8))
     val tui =
-      try Tui(Files.createTempDirectory("atc-tui").nn.resolve("history").nn, nonInteractive = true)
+      try Tui(TestEnv.tempDir("atc-tui").resolve("history").nn, nonInteractive = true)
       finally System.setOut(saved)
     try
       import atc.lib.{Todo, TodoStatus}

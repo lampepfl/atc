@@ -116,7 +116,7 @@ class ModelSuite extends munit.FunSuite:
     finally m.close()
 
   test("provider web search follows the sandbox mode: only full mode reaches the network"):
-    val dir = java.nio.file.Files.createTempDirectory("atc-search-mode").nn
+    val dir = TestEnv.tempDir("atc-search-mode")
     val global = dir.resolve("global.json").nn
     java.nio.file.Files.writeString(
       global,
@@ -237,7 +237,7 @@ class ModelSuite extends munit.FunSuite:
 
   test("listing every model waits a bounded time for a slow provider, which keeps its stored list until it answers"):
     val store = atc.config.ModelListStore(
-      java.nio.file.Files.createTempDirectory("atc-lists").nn.resolve("model-lists.json").nn
+      TestEnv.tempDir("atc-lists").resolve("model-lists.json").nn
     )
     val slow = ModelSpec("slow", "", "openai", "", Some("http://localhost:1"), None, ModelConfig())
     store.save(slow, List(slow.listed("old", ModelConfig())))
@@ -257,7 +257,7 @@ class ModelSuite extends munit.FunSuite:
     assertEquals(c.models.map(_.ref), List("slow/new"))
 
   test("a config model that names no model is ignored with a warning naming its file; -m is not"):
-    val dir = java.nio.file.Files.createTempDirectory("atc-models").nn
+    val dir = TestEnv.tempDir("atc-models")
     val global = dir.resolve("global.json").nn
     java.nio.file.Files.writeString(global, """{ "providers": { "p": { "api": "echo", "models": { "a": {} } } } }""")
     val project = dir.resolve("project").nn
@@ -291,7 +291,7 @@ class ModelSuite extends munit.FunSuite:
     ).initial(_ => ()))
 
   test("the model last chosen is kept in the atc directory the session started with"):
-    val dir = java.nio.file.Files.createTempDirectory("atc-last").nn
+    val dir = TestEnv.tempDir("atc-last")
     val global = dir.resolve("config.json").nn
     java.nio.file.Files.writeString(
       global,
@@ -306,7 +306,7 @@ class ModelSuite extends munit.FunSuite:
     finally models.close()
 
   test("a project config cannot move the global classified model to another model"):
-    val dir = java.nio.file.Files.createTempDirectory("atc-classified").nn
+    val dir = TestEnv.tempDir("atc-classified")
     val global = dir.resolve(".atc").resolve("config.json").nn
     java.nio.file.Files.createDirectories(global.getParent)
     java.nio.file.Files.writeString(
@@ -339,7 +339,7 @@ class ModelSuite extends munit.FunSuite:
     assertEquals(classified("""{ "providers": { "local": { "models": { "safe": { "name": "other" } } } } }""")._1, None)
 
   test("the config's effort replaces the model's reasoning at start, unless the model does not take it"):
-    val dir = java.nio.file.Files.createTempDirectory("atc-effort").nn
+    val dir = TestEnv.tempDir("atc-effort")
     val global = dir.resolve("global.json").nn
     java.nio.file.Files.writeString(
       global,

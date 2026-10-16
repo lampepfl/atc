@@ -157,7 +157,7 @@ class PermissionSuite extends munit.FunSuite:
 
   test("exec's default working directory is allowed even when cwd is reached through a symlink"):
     val env = TestEnv(commands = permits("pwd"))
-    val link = Files.createTempDirectory("atc-link").nn.resolve("proj").nn
+    val link = TestEnv.tempDir("atc-link").resolve("proj").nn
     assume(TestEnv.trySymbolicLink(link, env.root), "symbolic links are unavailable for this account")
     // A host whose cwd is the symlink (as `atc -C /tmp/proj` would be on macOS, where /tmp -> /private/tmp).
     val host = Host(env.policy, link, env.output, env.llm, env.ui)

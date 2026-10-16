@@ -26,8 +26,8 @@ class WindowsProcessIntegrationSuite extends munit.FunSuite:
 
   test("PATH/PATHEXT resolution excludes cwd and validates script entry points"):
     assume(Platform.isWindows)
-    val cwd = Files.createTempDirectory("atc-win-cwd").nn.toRealPath().nn
-    val bin = Files.createTempDirectory("atc-win-path").nn.toRealPath().nn
+    val cwd = TestEnv.tempDir("atc-win-cwd").toRealPath().nn
+    val bin = TestEnv.tempDir("atc-win-path").toRealPath().nn
     val shadow = Files.writeString(cwd.resolve("tool.exe"), "not an executable").nn
     Files.writeString(bin.resolve("tool.exe"), "not an executable")
     val cmd = Files.writeString(bin.resolve("tool.cmd"), "@exit /b 0\r\n").nn

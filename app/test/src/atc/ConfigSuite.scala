@@ -18,7 +18,7 @@ class ConfigSuite extends munit.FunSuite:
   /** Load `file` as the explicit config, from its own directory. */
   private def load(file: Path): Configuration = load(file.getParent.nn, Some(file))
 
-  private def tempDir(): Path = Files.createTempDirectory("atc-cfg").nn
+  private def tempDir(): Path = TestEnv.tempDir("atc-cfg")
 
   private def writeCfg(dir: Path, name: String, json: String): Path =
     val p = dir.resolve(name)
@@ -884,7 +884,7 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(ModelCatalog.from(c.copy(webSearch = None)).find("on").settings.webSearch, None)
 
   test("a stored list names models without fetching, and a refresh replaces it in the background"):
-    val store = ModelListStore(Files.createTempDirectory("atc-lists").nn.resolve("model-lists.json").nn)
+    val store = ModelListStore(TestEnv.tempDir("atc-lists").resolve("model-lists.json").nn)
     val open = ModelCatalog.from(listing).discoverable.head
     store.save(
       open,

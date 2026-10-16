@@ -17,7 +17,7 @@ class PromptReaderSuite extends munit.FunSuite:
     val terminal = TestTerminal.external(ByteArrayInputStream(input.getBytes(UTF_8)), out)
     val screen = Screen(terminal, plain = false, Glyphs.unicode)
     val alerts = Alerts(terminal, plain = false, _ => ())
-    (PromptReader(screen, Files.createTempDirectory("atc-prompt").nn.resolve("history").nn, alerts), terminal, out)
+    (PromptReader(screen, TestEnv.tempDir("atc-prompt").resolve("history").nn, alerts), terminal, out)
 
   test("Ctrl-L lifts the footer's scroll region and erases its row before clearing"):
     val (prompt, terminal, out) = promptOn("\f\u0004")
@@ -79,7 +79,7 @@ class PromptReaderSuite extends munit.FunSuite:
     finally Thread.interrupted()
 
   test("history is an owner-only regular file where POSIX permissions exist"):
-    val dir = Files.createTempDirectory("atc-history").nn
+    val dir = TestEnv.tempDir("atc-history")
     val history = dir.resolve("nested/history").nn
     assertEquals(PromptReader.secureHistoryFile(history), history.toRealPath())
     assert(Files.isRegularFile(history))
@@ -92,7 +92,7 @@ class PromptReaderSuite extends munit.FunSuite:
       assertEquals(perms, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"))
 
   test("history refuses a final symbolic link"):
-    val dir = Files.createTempDirectory("atc-history-link").nn
+    val dir = TestEnv.tempDir("atc-history-link")
     val target = dir.resolve("target").nn
     Files.writeString(target, "do not append here")
     val link = dir.resolve("history-link").nn

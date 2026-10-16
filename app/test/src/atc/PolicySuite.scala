@@ -8,7 +8,7 @@ import scala.util.matching.Regex
 
 class PolicySuite extends munit.FunSuite:
 
-  val root: Path = Files.createTempDirectory("atc-policy").toRealPath()
+  val root: Path = TestEnv.tempDir("atc-policy").toRealPath()
   Files.createDirectories(root.resolve("src/main"))
   Files.createDirectories(root.resolve("build"))
   Files.createDirectories(root.resolve("secrets/inner"))

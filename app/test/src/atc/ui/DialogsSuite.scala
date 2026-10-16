@@ -1,10 +1,10 @@
 package atc.ui
 
+import atc.TestEnv
 import atc.perms.{Decision, ExecRequest}
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InputStream}
 import java.nio.charset.StandardCharsets.UTF_8
-import java.nio.file.Files
 
 /** Pop-ups as the user meets them: what they show and what a key does. */
 class DialogsSuite extends munit.FunSuite:
@@ -19,7 +19,7 @@ class DialogsSuite extends munit.FunSuite:
     val screen = Screen(terminal, plain, Glyphs.unicode)
     val alerts = Alerts(terminal, plain = false, _ => ())
     val status = StatusLine(screen, () => true, () => true, () => 0)
-    val prompt = PromptReader(screen, Files.createTempDirectory("atc-dialogs").nn.resolve("history").nn, alerts)
+    val prompt = PromptReader(screen, TestEnv.tempDir("atc-dialogs").resolve("history").nn, alerts)
     (Dialogs(screen, alerts, status, prompt), out)
 
   private def written(out: ByteArrayOutputStream): String = Ansi.Sgr.replaceAllIn(out.toString(UTF_8), "")
