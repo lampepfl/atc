@@ -1260,49 +1260,51 @@ the framing of pop-ups. It composes parts that live in their own files: `Screen`
 that track line boundaries, styles, width, live regions and the spinner; its monitor is the
 TUI's lock), `StatusLine` (the footer and the window title), `ToolBlock` (one tool call's
 block, its live output, its summary and the `/output` history), `ThinkingView` (the
-reasoning window), `Dialogs` (what pop-ups show and read, through
-`ListMenu`), `KeyReader` (the key thread during a turn), `PromptReader` (the
-JLine line reader and its bindings) and `Alerts` (notifications and focus tracking).
-`Format` holds the short number, duration and plural forms of status and summary lines.
-`Ansi` removes terminal controls from external text before display. Keep model-visible
-capture text unchanged; sanitize only at display boundaries. `TextSink` incrementally
-handles UTF-8 and BOM-marked UTF-16 process output.
+reasoning window), `Dialogs` (what pop-ups show and read, through `ListMenu`), `KeyReader`
+(the key thread during a turn), `PromptReader` (the JLine line reader and its bindings) and
+`Alerts` (notifications and focus tracking). `Format` holds the short number, duration and
+plural forms of status and summary lines. `Glyphs` chooses Unicode or ASCII markers, menu
+markers and control separators included: ASCII with `ATC_ASCII` or on a terminal that
+reports no UTF encoding. `Ansi` removes terminal controls from external text before display.
+Keep model-visible capture text unchanged; sanitize only at display boundaries. A `-p` run
+uses a dumb UTF-8 terminal.
 
-`Continuation` handles open brackets, strings and comments for `/run`. Shift+Enter and
+`Continuation` handles open brackets, strings and comments for `/run`. Shift-Enter and
 backslash followed by Enter insert a newline. An empty line submits a code block; Ctrl-C
 cancels block input. During a turn, a separate reader collects corrections and unsent
 draft text and handles escape sequences, stopping on timeout or EOF. Menu reads pause that
 reader.
 
-Slash-command menus share one pattern, through `Tui`. A one-shot picker (`/model`, `/effort`,
-`/perms revoke`) acts on the choice and closes. A menu the user comes back to after each
-change (`/providers`, `/config`) is a `menuLoop`: its rows are rebuilt every time, so they show
-the change, and its last row is Done. A menu opened from another is `chooseOrBack`, whose last
-row is Back; a confirmation inside a command is such a sub-menu, with one action row. Carrying
-out an action returns to the looping menu; Back, or an action that did not go through (a
-refused change, a cancelled checkbox), returns to the menu one level up. Esc goes back one
-level everywhere, and the footer says so (`Esc back`); the agent's questions say `Esc cancel`,
-and permission requests, which Esc denies, say `Esc deny`.
+Slash-command menus share one pattern, through `Tui`. A one-shot picker (`/model`,
+`/effort`, `/perms revoke`) acts on the choice and closes. A menu the user comes back to
+after each change (`/providers`, `/config`) is a `menuLoop`: its rows are rebuilt every
+time, so they show the change, and its last row is Done. A menu opened from another is
+`chooseOrBack`, whose last row is Back; a confirmation inside a command is such a sub-menu,
+with one action row. Carrying out an action returns to the looping menu; Back, or an action
+that did not go through (a refused change, a cancelled checkbox), returns to the menu one
+level up. Esc goes back one level everywhere, and the footer says so (`Esc back`); the
+agent's questions say `Esc cancel`, and permission requests, which Esc denies, say
+`Esc deny`.
 
 Every menu is a `ListMenu`, drawn in a live region and read in raw mode; `MenuState` holds
 what it shows apart from the terminal, and `MenuKey` decodes keys with `KeyReader`'s escape
-parsing. A pop-up's menu (a permission request, a question, a confirmation) has no title row:
-its question stands above it, and its rows, then the answer it leaves (`› Yes`), are indented
-to the question's text. A slash command's menu shows its title, then at most twelve rows, fewer when the screen is short, so
-the whole menu stays shorter than the screen; the window scrolls with the cursor and says how
-many rows are out of view above and below. A longer list is filtered by typing, every word
-matching, with the filter and the number of matches on a line of its own; Backspace edits it
-and Esc clears it before it leaves the menu. Ticks belong to items, so they survive a change
-of filter, the ticked items open first, and the title counts them. PgUp, PgDn, Home and End
-move by a page or to the ends. A menu opens on the value in use (`/model`, `/effort`,
-`/classifiedmodel`) or, in a `menuLoop`, on the row last chosen. When it ends, one line says
-what was chosen; leaving it leaves nothing. The footer shows its keys, or the menu's last row
-when there is no footer. Menus read focus reports, and a resize redraws them at the new size.
-A menu turns bracketed paste on while it reads and takes nothing inside a paste as a key; the
-turn's key reader leaves paste mode after a pop-up, which may have read the paste's end.
-Enter counts only 300 ms after a menu
-opens (`ListMenu.EnterDelayNanos`): a newline typed or pasted just before a permission request
-must not choose its first row, Allow once.
+parsing. A pop-up's menu (a permission request, a question, a confirmation) has no title
+row: its question stands above it, and its rows, then the answer it leaves (`› Yes`), are
+indented to the question's text. A slash command's menu shows its title, then at most twelve
+rows, fewer when the screen is short, so the whole menu stays shorter than the screen; the
+window scrolls with the cursor and says how many rows are out of view above and below. A
+longer list is filtered by typing, every word matching, with the filter and the number of
+matches on a line of its own; Backspace edits it and Esc clears it before it leaves the
+menu. Ticks belong to items, so they survive a change of filter, the ticked items open
+first, and the title counts them. PgUp, PgDn, Home and End move by a page or to the ends. A
+menu opens on the value in use (`/model`, `/effort`, `/classifiedmodel`) or, in a
+`menuLoop`, on the row last chosen. When it ends, one line says what was chosen; leaving it
+leaves nothing. The footer shows its keys, or the menu's last row when there is no footer.
+Menus read focus reports, and a resize redraws them at the new size. A menu turns bracketed
+paste on while it reads and takes nothing inside a paste as a key; the turn's key reader
+leaves paste mode after a pop-up, which may have read the paste's end. Enter counts only
+300 ms after a menu opens (`ListMenu.EnterDelayNanos`), so a newline typed or pasted just
+before a permission request cannot choose its first row, Allow once.
 
 While the main prompt holds a single word starting with `/`, `PromptReader` lists the matching
 `SlashCommand.table` rows in JLine's `post` area under the buffer, with an exact name
@@ -1317,81 +1319,80 @@ no other `/`: a mistyped name is reported as an unknown command, and a line that
 an absolute path goes to the agent.
 
 During a turn, Enter submits a correction and unsent text is shown in the status line.
-Bracketed pastes are collected without submitting individual lines, and the footer shows the
-pasted text once, when the paste ends. The status line uses
-JLine `Status`, updates on phase/input changes, and reserves a terminal row for the active
-operation, elapsed time and mode/model/directory context. Spinner writes and status updates
+Bracketed pastes keep their newlines and are collected without submitting individual lines,
+and the footer shows the pasted text once, when the paste ends. The footer uses JLine
+`Status`, updates on phase and input changes, and reserves a terminal row for the active
+operation, elapsed time and mode, model and directory. Spinner writes and status updates
 share the TUI lock. The footer is reserved before the first content line, so adding it does
 not scroll the banner away. Its activity indicator replaces a separate spinner when the
 terminal supports a status line. Idle state shows a short mode, model and directory label;
 menus and answer fields replace it with the applicable keyboard controls.
+
+Every footer update goes through `StatusLine.draw`, which flushes the terminal writer after
+JLine's `Status.update`: JLine leaves the closing synchronized-output sequence
+(`ESC[?2026l`) buffered, and a terminal that honours mode 2026 freezes rendering until it
+arrives (`TuiSuite` checks the closer is written). Before a clear (`/new`, Ctrl-L),
+`Screen.beforeClear` lifts the footer's scroll region and erases its row, because VS Code
+moves a cleared window into the scrollback and only the rows inside the scroll region.
+
 Resize signals update the footer even while a menu has paused the turn's key reader.
 `Screen` measures the terminal once per resize, since the views ask for the width for every
-line; the footer is resized to that measurement as well. JLine's line reader takes the resize signal while it reads,
-so `Tui` measures again when a prompt or pop-up returns and redraws what depends on the size
-if it changed; otherwise output after a resize at the prompt would keep the old width. A live
-region redraws in place at the new width. Terminals that reflow on a narrower width (most
-do, VS Code's included) rewrap the region's old rows, so a shrink can leave some of them
-above the redrawn region.
-Every footer update goes through `StatusLine.draw`, which flushes the terminal writer after
-JLine's `Status.update`: JLine flushes the footer text but leaves the closing
-synchronized-update sequence (`ESC[?2026l`) buffered, and a terminal that honours mode 2026
-(xterm.js in VS Code, iTerm2, kitty, Ghostty, WezTerm) freezes rendering until it arrives.
-Without that flush, a footer repainted from the input-poll clock stalled the window for up to
-a poll interval per repaint (`TuiSuite` checks the closer is written).
-Before a clear (`/new`, Ctrl-L), `Screen.beforeClear` lifts the footer's scroll region and
-erases its row. VS Code runs xterm.js with `scrollOnEraseInDisplay`, which moves a cleared
-window into the scrollback instead of erasing it, and only the rows inside the scroll region:
-the old footer stayed on the last row, and the line feeds with which JLine reserves the row
-again scrolled it up into view, so the footer showed twice.
-ASCII mode also selects ASCII menu markers and control separators.
+line, and the footer is resized to that measurement. JLine's line reader takes the resize
+signal while it reads, so `Tui` measures again when a prompt or pop-up returns and redraws
+what depends on the size if it changed. A live region redraws in place at the new width.
+Terminals that reflow on a narrower width (most do, VS Code's included) rewrap the region's
+old rows, so a shrink can leave some of them above the redrawn region.
+
 Streaming text is flushed at the end of each incoming update. Nested rendering helpers share
-that flush instead of flushing every gutter and style fragment. Live previews compare their
-rows with the previous view and immediately repaint only changed rows. `LiveRegion.redraw` cuts
-every row to one terminal row, measured from column 0 with its gutter and tab stops, with
-newlines shown as spaces: a row that wrapped would take two terminal rows and shift every later
-redraw. `Screen.fit` stops scanning once the row is full, so a very long output line costs no
-more than a short one. They use line erasure,
-not erase-to-end-of-screen, so updating a preview cannot erase the footer. Footer work runs on
-state changes and the existing input-loop clock; writing text does not trigger a footer redraw.
-There is no frame-rate cap or deferred stream queue. `TuiSuite` checks preview growth,
-replacement, shrinkage and clearing while preserving a footer outside the owned rows.
-Process events wait while a pop-up is open, and during a turn until a tool block opens, where
-they join its output, or the turn ends; written into streaming prose they would land mid-line.
-Between turns they use `LineReader.printAbove` while the prompt reads, so they do not overwrite
-the user's input.
+that flush instead of flushing every gutter and style fragment. Live regions compare their
+rows with the previous view and immediately repaint only changed rows. `LiveRegion.redraw`
+cuts every row to one terminal row, measured from column 0 with its gutter and tab stops,
+with newlines shown as spaces, since a row that wrapped would take two terminal rows and
+shift every later redraw. `Screen.fit` stops scanning once the row is full, so a very long
+output line costs no more than a short one. Live regions erase lines, never to the end of
+the screen, so updating one cannot erase the footer. Footer work runs on state changes and
+the input loop's clock; writing text does not redraw the footer. `TuiSuite` checks preview
+growth, replacement, shrinkage and clearing while preserving a footer outside the owned
+rows. Process events wait while a pop-up is open, and during a turn until a tool block
+opens, where they join its output, or the turn ends, since written into streaming prose
+they would land mid-line. Between turns they use `LineReader.printAbove` while the prompt
+reads, so they do not overwrite the user's input.
 
 `Notifier` sends the `notifications` alert when a turn ends, a permission request or
 question opens, or the tool budget runs out. `Alerts` schedules it ten seconds ahead
 (`QuestionDelayMillis`; `TurnDelayMillis`, thirty, for a finished turn) unless the terminal
-is known to be focused, and drops it on focus coming back or on any key, answer or Ctrl-C: the turn's key reader, the prompt highlighter (a
-changed buffer) and the end of a pop-up count as input. The terminal's focus reports
-(`ESC[?1004h`) come through JLine's focus widgets at the prompt and through the key reader
-during a turn. Reporting is on only while one of those raw-mode readers runs (`callback-init`
-to `callback-finish` for the line reader, `KeyReader.start` to `KeyReader.stop`): between reads the
-terminal is in line mode and its driver would echo a report as `^[[I`. Losing focus sends nothing early. Focus is
-known only once the terminal has sent a report, since JLine assumes support for every `xterm*`
-type and such a terminal may send none; until then only keys count. Menus read focus reports as well. There are no alerts for `-p` runs or dumb terminals.
+is known to be focused, and drops it on focus coming back or on any key, answer or Ctrl-C:
+the turn's key reader, the prompt highlighter (a changed buffer) and the end of a pop-up
+count as input. The terminal's focus reports (`ESC[?1004h`) come through JLine's focus
+widgets at the prompt and through the key reader during a turn. Reporting is on only while
+one of those raw-mode readers runs (`callback-init` to `callback-finish` for the line
+reader, `KeyReader.start` to `KeyReader.stop`), because between reads the terminal is in
+line mode and its driver would echo a report as `^[[I`. Losing focus sends nothing early.
+Focus is known only once the terminal has sent a report, since JLine assumes support for
+every `xterm*` type and such a terminal may send none; until then only keys count. There are
+no alerts for `-p` runs or dumb terminals.
+
 The alert title is `atc · <directory>`. A turn's alert shows the start of its last prose
 block as plain text (`Notifier.plainText`), or the outcome with the error or duration when
 the turn did not finish normally (`Alerts.turnText`). Permission alerts name the request and
-its details, and question alerts show the question.
-`StatusLine.refreshTitle` sets the window title (OSC 0) from `busy` and the pop-up depth whenever
-the status refreshes, on one line, writing only changes. The previous title is pushed on xterm's title
-stack (`CSI 22;0t`) at start and popped (`CSI 23;0t`) by `close`; terminals without the
-stack keep ATC's title until the shell sets its own.
-The same refresh sends the program status (OSC 7501, the Program Status Protocol) when it
-changes: `idle` at start, `working` with the footer's operation during a turn, `blocked` with
-`permission`, `question` or `auth` while a pop-up waits during one, then `done` or `error` with
-the turn's alert text, or `idle` after an interruption, until the next turn. `close` clears it.
-ATC sends it without querying for support, since terminals ignore an OSC they do not know, and
+its details, and question alerts show the question. Terminal alerts are OSC 9, 99 (kitty) or
+777 sequences, chosen from `TERM` and `TERM_PROGRAM` and wrapped for tmux passthrough; they
+are written as style text so they leave the line tracking alone. System alerts start
+`osascript`, a Base64-encoded PowerShell toast script or `notify-send` on a daemon thread,
+passing the text as arguments (after `--` for `notify-send`, so a body starting with `-` is
+not an option) or quoted script data, and ring the bell if the command cannot start. Alert
+text is sanitized, put on one line and capped at 200 characters.
+
+`StatusLine.refreshTitle` sets the window title (OSC 0) from `busy` and the pop-up depth
+whenever the status refreshes, on one line, writing only changes. The previous title is
+pushed on xterm's title stack (`CSI 22;0t`) at start and popped (`CSI 23;0t`) by `close`;
+terminals without the stack keep ATC's title until the shell sets its own. The same refresh
+sends the program status (OSC 7501, the Program Status Protocol) when it changes: `idle` at
+start, `working` with the footer's operation during a turn, `blocked` with `permission`,
+`question` or `auth` while a pop-up waits during one, then `done` or `error` with the turn's
+alert text, or `idle` after an interruption, until the next turn. `close` clears it. ATC
+sends it without querying for support, since terminals ignore an OSC they do not know, and
 does not wrap it for tmux, where the status would belong to the pane rather than the window.
-Terminal alerts are OSC 9, 99 (kitty) or 777 sequences, chosen from `TERM` and
-`TERM_PROGRAM` and wrapped for tmux passthrough; they are written as style text so they
-leave the line tracking alone. System alerts start `osascript`, a Base64-encoded PowerShell
-toast script or `notify-send` on a daemon thread, passing the text as arguments (after `--` for `notify-send`, so a body starting with `-` is
-not an option) or quoted script data, and ring the bell if the command cannot start. Alert text is sanitized, put
-on one line and capped at 200 characters.
 
 `TextLayout` wraps complete lines by terminal cell width, preserving ANSI styles and whole
 Unicode code points. It scans long lines once, with word boundaries preferred over hard
@@ -1401,12 +1402,22 @@ gutter. Help and banner fields retain aligned continuation lines; when their val
 would be too narrow, values move below labels. Tool code, diagnostics, permission details
 and TODOs use the same wrapping rules.
 
-Markdown tables retain their natural columns when they fit. Wider tables cap column widths
-and wrap individual cells. A table with three or more columns switches to labeled records
-when wrapping would leave fewer than 24 cells per column on average; tables whose minimum
-column widths cannot fit use the same fallback. This preserves information without turning
-long identifiers and sentences into narrow strips. Completed output panels remove the
-Ctrl-O hint once that live view is no longer active.
+`MarkdownStream` incrementally renders supported Markdown and buffers tables until column
+widths are known. It wraps paragraph, heading, list and quote text at word boundaries to the
+width, a list item or quote continuing under its text, since the terminal's own wrapping
+would continue a long line at column 0, outside the prose gutter, and break inside words.
+The word being written, and the spaces before it, are held until the word ends, since only
+then is it known whether it fits; without a column limit (tests) text passes through at
+once. Markdown tables retain their natural columns when they fit. Wider tables cap column
+widths and wrap individual cells. A table with three or more columns switches to labeled
+records when wrapping would leave fewer than 24 cells per column on average; tables whose
+minimum column widths cannot fit use the same fallback, so long identifiers and sentences
+do not become narrow strips.
+
+`Highlight` uses the compiler's Scala scanner. A fenced Scala line is highlighted with
+earlier lines as context: the last eight, or, while `Continuation.unclosed` finds a comment
+or triple-quoted string open, up to 200 lines back, because the compiler's colours cannot
+tell what is open (they reset after the last coloured character).
 
 In the compact view (the default on a terminal), a running tool block is one `LiveRegion`:
 the title, up to eight rows of code and the last ten lines of output, both cut further so
@@ -1415,57 +1426,39 @@ region becomes its summary: the title with the code's first line, the files chan
 verdict, which names how much output it held or, for a failure, the first line of the
 error (`ToolBlock.firstProblem`; a compiler heading gives its code or its message, and a
 `java.lang` exception its simple name). The same change made to a file several times in a
-row (one-line edits, one after another) is one row with a count. A
-pop-up, or any line written outside the block, freezes what the region shows and the
-block continues below. Output that `parallel` tasks write while a pop-up is open is held, up to
-its last million characters, and written when the pop-up closes; Ctrl-O takes the region down and writes the block out in full. The
-expanded view and a plain terminal write every block in full, with the result panel; the
-expanded view breaks output lines at the row's end (`Screen.breakLines`, which keeps the
-column across chunks), so a long line stays inside the block's gutter.
+row (one-line edits, one after another) is one row with a count. A pop-up, or any line
+written outside the block, freezes what the region shows and the block continues below.
+Output that `parallel` tasks write while a pop-up is open is held, up to its last million
+characters, and written when the pop-up closes. Ctrl-O takes the region down and writes the
+block out in full. The expanded view and a plain terminal write every block in full, with
+the result panel; the expanded view breaks output lines at the row's end
+(`Screen.breakLines`, which keeps the column across chunks), so a long line stays inside the
+block's gutter.
 
 The TODO panel is drawn once per tool call. A new list is drawn whole; when only statuses
 changed, the header gives the progress (`· 3 of 7 done`) and only the items that changed are
-drawn, since the agent marks one item per call and the whole list each time buried the work
-between. `/todos` always draws the whole list.
+drawn, so marking one item per call does not repeat the whole list each time. `/todos`
+always draws the whole list.
 
 `ToolHistory` retains up to 20 results within an eight-million-character budget. Each
 result retains at most two million output characters plus bounded code and file previews;
 live command output is capped separately at one million characters. A live view keeps its
-text in a `TailBuffer`, which grows to half again its cap before cutting back, so small appends
-do not move the whole text. `/output` displays
-200-line windows without evaluating code again, with file-change previews coloured as diffs
-(`ToolHistory.Entry.changesFrom` says where they start). Classified terminal-only output is never
-added to the history, and `/new` clears it. These records are for inspection and are not
-part of saved conversations.
+text in a `TailBuffer`, which grows to half again its cap before cutting back, so small
+appends do not move the whole text. `/output` lists the retained results, and
+`/output <n|last> [line]` shows one in 200-line windows without evaluating code again, with
+file-change previews coloured as diffs (`ToolHistory.Entry.changesFrom` says where they
+start). Classified terminal-only output is never added to the history, and `/new` clears it.
+These records are for inspection and are not part of saved conversations.
 
-Permission menus include **Tell the agent what to change**, followed by free-text input.
-Empty or cancelled feedback returns to the menu with the cursor on that row.
-`PromptReader.readAnswer` consumes JLine's
-preserved input-cancellation interrupt so the next menu can read normally.
-Plain prompts accept exact `y`/`yes` or
-`s`/`session` approvals, exact `n`/`no` denials, and treat other non-empty input as
-`Decision.Revise`. A qualified answer starting with “yes” or “skip” must not become an
-approval by prefix matching. EOF and empty plain replies deny the request. A plain yes/no
-confirmation (`Tui.confirm`) likewise takes only `y` or `yes`.
+`PromptReader.readAnswer` consumes JLine's preserved input-cancellation interrupt so the
+next menu can read normally. A plain yes/no confirmation (`Tui.confirm`) takes only `y` or
+`yes`. Question menus always include a custom-answer option. Questions wrap with their
+continuation lines under the question text, like permission details. For multiple
+selections, chosen answers retain their display order and custom text is appended. User
+input is returned to the host's `ask` call; only its terminal display is sanitized.
 
-Question menus always include a custom-answer option. Questions wrap with their continuation
-lines under the question text, like permission details. For multiple selections, chosen
-answers retain their display order and custom text is appended. User input is returned to
-the host's `ask` call; only its terminal display is sanitized.
-
-`MarkdownStream` incrementally renders supported Markdown and buffers tables until column
-widths are known. It wraps paragraph, heading, list and quote text at word boundaries to the
-width, a list item or quote continuing under its text: left to the terminal, the rest of a long
-line continued at column 0, outside the prose gutter, and broke inside words. The word being
-written, and the spaces before it, are held until the word ends, since only then is it known
-whether it fits; without a column limit (tests) text passes through at once. `Highlight` uses the compiler's Scala scanner. A fenced Scala line is
-highlighted with earlier lines as context: the last eight, or, while `Continuation.unclosed`
-finds a comment or triple-quoted string open, up to 200 lines back (the compiler's colours
-cannot tell what is open, since it resets them after the last coloured character). Layout calculations use
-terminal cell widths. History is owner-only on POSIX systems and rejects final symlinks.
-Only the main prompt adds to it; answers and secrets typed into pop-ups stay out.
-Non-interactive runs use a dumb UTF-8 terminal and do not prompt for permission unless
-explicitly configured to auto-approve requests.
+The prompt history is owner-only on POSIX systems and rejects final symlinks. Only the main
+prompt adds to it; answers and secrets typed into pop-ups stay out.
 
 ## Testing and conventions
 
