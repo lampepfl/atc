@@ -3,6 +3,7 @@ package atc.ui
 import atc.perms.{Decision, PermissionRequest}
 
 import java.util.Locale
+import scala.annotation.tailrec
 
 import Ansi.{Bold, Cyan, Dim, Green, Red, Yellow}
 
@@ -49,33 +50,31 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
     req.details.foreach: detail =>
       TextLayout.wrap(Ansi.sanitize(detail), width - 5, Under.length)
         .foreach(line => write(Indent + Indent + styled(line, Yellow) + "\n"))
-    var cancelled = false
-    val decision =
-      if plain then
-        Menus.permissionReply(freeText(styled("Allow? [y]es once / [s]ession / [n]o / type instructions: ", Yellow)))
+    val choices = List(Menus.AllowOnce, Menus.AllowSession, Menus.DenyLabel, Menus.ReviseLabel)
+    /** The decision, `None` when the menu is cancelled. After empty instructions the menu
+      * opens again on that row, never on Allow once. */
+    @tailrec def choose(initial: Int): Option[Decision] =
+      menu(choices, escape = "deny", initial) match
+        case Some(Menus.AllowOnce) => Some(Decision.AllowOnce)
+        case Some(Menus.AllowSession) => Some(Decision.AllowSession)
+        case Some(Menus.ReviseLabel) =>
+          note("Describe what to change. The current request will not be approved.")
+          freeText(Under + styled("instructions> ", Cyan)) match
+            case Some(text) => Some(Decision.Revise(text))
+            case None => choose(choices.indexOf(Menus.ReviseLabel))
+        case Some(_) => Some(Decision.Deny)
+        case None => None
+    val chosen =
+      if !plain then choose(0)
       else
-        val choices = List(Menus.AllowOnce, Menus.AllowSession, Menus.DenyLabel, Menus.ReviseLabel)
-        var selected: Option[Decision] = None
-        // After empty instructions the menu opens again on that row, never on Allow once.
-        var initial = 0
-        while selected.isEmpty do
-          selected = menu(choices, escape = "deny", initial) match
-            case Some(Menus.AllowOnce) => Some(Decision.AllowOnce)
-            case Some(Menus.AllowSession) => Some(Decision.AllowSession)
-            case Some(Menus.ReviseLabel) =>
-              note("Describe what to change. The current request will not be approved.")
-              initial = choices.indexOf(Menus.ReviseLabel)
-              freeText(Under + styled("instructions> ", Cyan)).map(Decision.Revise(_))
-            case Some(_) => Some(Decision.Deny)
-            case None =>
-              cancelled = true
-              Some(Decision.Deny)
-        selected.get
+        val reply = freeText(styled("Allow? [y]es once / [s]ession / [n]o / type instructions: ", Yellow))
+        Some(Menus.permissionReply(reply))
+    val decision = chosen.getOrElse(Decision.Deny)
     // The menu echoes the choice and the instructions stay where they were typed; confirm
     // only what the user did not see.
     decision match
       case Decision.Revise(_) => write(Under + styled(s"${g.arrow} sent to the agent", Cyan) + "\n")
-      case _ if plain || cancelled =>
+      case _ if plain || chosen.isEmpty =>
         val label = decision match
           case Decision.AllowOnce => styled(s"${g.arrow} allowed once", Green)
           case Decision.AllowSession => styled(s"${g.arrow} allowed for this session", Green)
@@ -117,7 +116,7 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
       else if multiple then
         val labels = cleanOptions :+ Menus.AddAnswerLabel
         menus.run("", labels, multi = true, 0, Set.empty, "cancel", Under).flatMap: ids =>
-          val chosen = ids.sorted.filter(_ < options.size).flatMap(options.lift)
+          val chosen = ids.sorted.flatMap(options.lift)
           if ids.contains(cleanOptions.size) then freeText(answerPrompt).map(t => (chosen :+ t).mkString("; "))
           else Option.when(chosen.nonEmpty)(chosen.mkString("; "))
       else
