@@ -85,10 +85,14 @@ final class RecordingUI extends AgentUI:
   val toolEnds = ListBuffer[Boolean]()
   var ends = 0
   var onEnd: () => Unit = () => ()
+  /** Called with each streamed piece of answer text, on the model request's thread. */
+  var onDelta: String => Unit = _ => ()
   /** When set, `toolStart` throws, a stand-in for anything that can fail while a
     * tool call is being run, after its `Msg.Assistant` is in history. */
   var toolStartThrows: Boolean = false
-  def assistantDelta(text: String): Unit = deltas += text
+  def assistantDelta(text: String): Unit =
+    deltas += text
+    onDelta(text)
   def assistantNote(text: String): Unit = notes += text
   def assistantEnd(): Unit =
     ends += 1
@@ -828,7 +832,7 @@ class AgentLoopSuite extends munit.FunSuite:
     assertEquals(agent.turn(session, "next", cancelled), TurnOutcome.Interrupted)
     assertEquals(model.i, 2)
     assertEquals(agent.history.take(3), List(Msg.User("task"), Msg.Assistant(answer, Nil, None), Msg.User("next")))
-    assertEquals(agent.history.size, 4, "only the usual closing marker of an interrupted turn was added")
+    assertEquals(agent.history.drop(3), List(Msg.Assistant(AgentMessages.interrupted, Nil, None)))
     assert(ui.warnings.exists(_.contains("interrupted")), ui.warnings.toString)
 
   test("compaction refuses a transcript that cannot fit the model's input allowance"):

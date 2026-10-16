@@ -207,6 +207,15 @@ class AgentCoreLoopSuite extends munit.FunSuite:
     assertEquals(model.seenHistories(1).last, Msg.User("Skip deployment; run only unit tests."))
     assertEquals(agent.queuedInputCount, 0)
 
+  test("input queued during a model request joins the user's message without an interruption marker"):
+    val (model, ui, agent) = setup(Seq(ScriptedModel.Reply("superseded"), ScriptedModel.Reply("done")))
+    ui.onDelta = text => if text == "superseded" then agent.submit("use the staging database")
+    assertEquals(agent.runTurn(RecordingRunner(), "migrate", () => false), TurnOutcome.Finished)
+    assertEquals(model.i, 2)
+    assertEquals(model.seenHistories(1), List(Msg.User("migrate\n\nuse the staging database")))
+    assertEquals(agent.history.last, Msg.Assistant("done", Nil, None))
+    assertEquals(agent.queuedInputCount, 0)
+
   test("a turn carrying only queued input sends it without empty leading text"):
     // The TUI starts such a turn with an empty request so that input typed during
     // the previous one is answered; the model must see the text alone.

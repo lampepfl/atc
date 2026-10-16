@@ -56,13 +56,13 @@ private[agent] final class Conversation:
     pendingNotes = queued
     requests = inputs.toVector
 
-  /** Close whichever protocol edge a failed round left open, since providers reject
-    * consecutive user messages and tool requests without matching results. Pending
-    * tool requests each get an error result; a trailing user message or continuation
-    * gets an assistant marker. A history that already ends with an assistant message
-    * or tool results needs no repair, and another assistant message would be invalid. */
-  def repairAfter(error: Throwable): Unit =
-    val marker = AgentMessages.turnFailed(error)
+  /** Close whichever protocol edge a failed or cancelled round left open, since providers
+    * reject consecutive user messages and tool requests without matching results. Pending
+    * tool requests each get an error result holding `marker`; a trailing user message or
+    * continuation gets `marker` as an assistant message. A history that already ends with
+    * an assistant message or tool results needs no repair, and another assistant message
+    * would be invalid. */
+  def repairAfter(marker: String): Unit =
     messages.lastOption match
       case Some(Msg.Assistant(_, calls, _)) if calls.nonEmpty =>
         append(Msg.ToolResults(calls.map(call => ToolResult(call.id, marker, isError = true))))

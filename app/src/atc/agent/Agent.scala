@@ -263,12 +263,12 @@ final class Agent(
         case Done(result) => result
       try loop()
       catch
-        case error: CancelledException =>
-          conversation.repairAfter(error)
+        case _: CancelledException =>
+          conversation.repairAfter(AgentMessages.interrupted)
           interrupted()
           TurnOutcome.Interrupted
         case NonFatal(e) =>
-          conversation.repairAfter(e)
+          conversation.repairAfter(AgentMessages.turnFailed(e))
           throw e
 
     /** Ask the model once, record its answer, then act on it. */
@@ -284,9 +284,8 @@ final class Agent(
         prepared.warnings.foreach(ui.warn)
         ui.status(AgentMessages.thinkingStatus)
         completeRound() match
-          case None if !cancelled() && !queuedInput.isEmpty =>
-            conversation.interrupt()
-            Continue
+          // Queued input cancelled the request; `steer` closes the open edge when it accepts it.
+          case None if !cancelled() && !queuedInput.isEmpty => Continue
           case None => interrupted()
           case Some(raw) =>
             recordUsage(Agent.Turns, raw.usage)

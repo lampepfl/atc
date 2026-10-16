@@ -1086,8 +1086,11 @@ include a bounded cause chain; `ATC_DEBUG=1` adds the complete stack trace.
 
 When a tool call throws, `Agent` appends the results of the calls that completed, a failure
 for that call (its effects may have happened) and a "not run" result for each later call
-before the exception propagates. `Conversation` repairs pending tool results after any other
-failure and inserts assistant markers when needed. Pending REPL notices are prepended to the next user message. Real user input
+before the exception propagates. After any other failure `Conversation` closes the open edge
+with `[turn failed: ...]` as each pending tool result or as an assistant message, and after a
+cancellation with the interruption marker. Input queued during a model request cancels it
+without a marker; `Conversation.steer` closes that edge when the next round accepts the
+input. Pending REPL notices are prepended to the next user message. Real user input
 and internal continuation messages remain distinct for context fitting and prediction.
 
 `ContextManager` estimates tokens from text and replay payloads, then calibrates against
