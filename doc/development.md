@@ -37,11 +37,11 @@ PowerShell launcher with the same JARs. The batch launcher is a compatibility en
 Before the build they read only `ATC_SKIP_BUILD` from the environment file, so a Mill server
 the build starts does not keep API keys in its environment. The distribution is stale when a
 file in `build.mill`, `app/src`, `app/resources`, `lib/src` or `windows` is newer than
-`out/dist.dest/build.stamp`, which the scripts write after each successful build; tests are
-not among those files, and the stamp is the reference because Mill does not rewrite a jar
-whose inputs have the same content. They preserve non-empty exported environment values and pass application arguments through.
-The build runs in the checkout; ATC retains the launch directory unless `-C` overrides it.
-Environment files contain literal `KEY=value` entries; shell expansion is not performed.
+`out/dist.dest/build.stamp`, which the scripts write after each successful build; the stamp
+is the reference because Mill does not rewrite a jar whose inputs have the same content.
+Environment files hold literal `KEY=value` entries without shell expansion, and a non-empty
+exported value wins over the file. Application arguments pass through. The build runs in the
+checkout; ATC keeps the launch directory unless `-C` overrides it.
 
 | Variable | Purpose |
 |---|---|
@@ -49,7 +49,7 @@ Environment files contain literal `KEY=value` entries; shell expansion is not pe
 | `ATC_ENV_FILE` | Alternative environment file |
 | `ATC_SKIP_BUILD=1` | Skip the start script's rebuild check |
 | `ATC_JAVA_OPTS` | Additional JVM flags for every launcher, applied after the defaults and before the command line's `-Xmx`/`-Xms` |
-| `-Xmx<size>`, `-Xms<size>` (launcher arguments) | JVM heap flags that `atc`, `start.sh`, `start.ps1` and `atc.ps1` take out of the arguments (the value of an option such as `-p` is never taken for one) and pass to `java` after the defaults and `ATC_JAVA_OPTS`, so they win; ATC never sees them |
+| `-Xmx<size>`, `-Xms<size>` (launcher arguments) | JVM heap flags that `atc`, `start.sh`, `start.ps1` and `atc.ps1` remove from the arguments (never the value of an option such as `-p`) and pass to `java` last, so they win |
 | `ATC_STARTUP_CACHE=0` | Run without the JVM startup cache (`atc`, `start.sh`) |
 | `ATC_DEBUG` | Enable stack traces and stream/terminal diagnostics when set; logged text has terminal controls removed |
 | `ATC_ASCII` | Select ASCII terminal glyphs when set |
@@ -58,43 +58,36 @@ Environment files contain literal `KEY=value` entries; shell expansion is not pe
 
 Every launcher starts the JVM with `-Xms256m -Xmx2g -Xss4m -XX:-UsePerfData`
 (`DEFAULT_JVM_OPTS` in `atc`; the same list in `start.sh`, the dist `atc` script, `atc.ps1`
-and `start.ps1`), and on Java 23+ `--sun-misc-unsafe-memory-access=allow`
-(`VERSIONED_JVM_OPTS`; the dist `atc` script leaves it out since it does not detect the Java
-version), because Scala's `LazyVals` still use `sun.misc.Unsafe` and JEP 471 makes the JVM
-print four warning lines on every run otherwise. On Java 24+ the same list adds
-`--enable-native-access=ALL-UNNAMED`, because JLine loads its native terminal library and
-JEP 472 prints four warning lines for that. Measured with the dist jar and the echo
-model (JDK 25, September 2026):
-a 100-turn session of reads, writes and commands keeps 130 to 230 MB live and runs down to
-`-Xmx192m`, so 2 GB is headroom, and it bounds a runaway sandbox computation (one line
-building a large vector reached 5 GB under the JVM's own quarter-of-RAM default; under 2 GB
-it fails in five seconds with an out-of-memory error the session survives). With the 1 MB
-Linux default thread stack a 3000-term expression overflowed the compiler's stack before its
-own recursion guard could report it; `-Xss4m` costs nothing since stacks are only reserved.
+and `start.ps1`). `VERSIONED_JVM_OPTS` adds `--sun-misc-unsafe-memory-access=allow` on Java
+23+, because Scala's `LazyVals` use `sun.misc.Unsafe` and JEP 471 otherwise prints four
+warning lines on every run, and `--enable-native-access=ALL-UNNAMED` on Java 24+, because
+JLine loads a native terminal library (JEP 472). The dist `atc` script does not detect the
+Java version and adds neither. With the dist jar and the echo model on JDK 25, a 100-turn
+session of reads, writes and commands keeps 130 to 230 MB live and runs down to `-Xmx192m`,
+so 2 GB is headroom. The cap also bounds a runaway sandbox computation: one line building a
+large vector reaches 5 GB under the JVM's quarter-of-RAM default, and under 2 GB it fails
+in five seconds with an out-of-memory error the session survives. `-Xss4m` lets the
+compiler's recursion guard report a 3000-term expression that overflows the 1 MB Linux
+default stack; stacks are only reserved, so it costs nothing.
 
-The **startup cache** halves the cold start (2.6 s to 1.3 s on that machine, and 30% less
-CPU over a session, since the JDK 25 cache carries method profiles): on Java 25+ an AOT
-cache (`-XX:AOTCacheOutput=` to build, `-XX:AOTCache=` to use), on Java 19 to 24 a dynamic
-CDS archive (`-XX:ArchiveClassesAtExit=` / `-XX:SharedArchiveFile=`). Both are bound to
-the exact jars, JDK and JVM options, and a stale one makes the JVM print error lines and (for CDS) is
-*not* regenerated, so the launchers never point the JVM at one that might be stale:
+The **startup cache** halves the cold start (2.6 s to 1.3 s, and 30% less CPU over a session,
+since the JDK 25 cache carries method profiles): an AOT cache on Java 25+
+(`-XX:AOTCacheOutput=` to build, `-XX:AOTCache=` to use), a dynamic CDS archive on Java 19 to
+24 (`-XX:ArchiveClassesAtExit=` / `-XX:SharedArchiveFile=`). Both are bound to the exact jars,
+JDK and JVM options, and a stale one makes the JVM print errors (a CDS archive is not
+regenerated), so the launchers use one only when it is known to be current.
 `~/.atc/jars/startup/key.txt` (`out/dist.dest/startup/` for `start.sh`) records the JDK's
-`-version` output (read once per run by `ensure_java`, kept in `JAVA_VERSION`), the release
-marker, the version-gated JVM options (the JVM refuses a cache built under other module
-options, such as `--enable-native-access`), `ATC_JAVA_OPTS` and the command line's
-`-Xmx`/`-Xms` (another GC or heap size makes it print `[error][aot]` lines); its timestamp is compared with the jars
-(`find -newer`; it is dated like a newer jar so a future-dated jar cannot force a rebuild
-on every run), and a mismatch triggers one silent echo-model `-p 'run: 1 + 1'` run with the
-building flag and the same JVM options. A build that leaves no file writes the key anyway, so
-it is not retried until the JDK, release or options change. The cache is an optimisation: when
-its directory cannot be created or written the launchers run without it, a key that cannot be
-written does not stop the start, and an interrupted training run removes its temporary
-directory. The Java version comes from the ` version "` line of `java -version`, because
-`JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` add a `Picked up` line before it.
-`atc self uninstall` removes the cache with the jars.
-`-XX:TieredStopAtLevel=1` (60% less CPU, 50% slower steady-state compiles) and
-`-XX:+UseSerialGC` (200 MB less resident memory, five times the GC time, pauses still under
-10 ms) were measured and left to `ATC_JAVA_OPTS`.
+`-version` output, the release marker, the version-gated JVM options, `ATC_JAVA_OPTS` and the
+command line's `-Xmx`/`-Xms`, and the cache is current when the key matches and no jar is
+newer than it. Otherwise one echo-model `-p 'run: 1 + 1'` run, whose output is discarded,
+builds the cache with the same options. A build that leaves no file writes the key anyway, so
+it is not retried until the JDK, release or options change. The cache is an optimization: an
+unwritable directory or key runs without it, and an interrupted training run removes its
+temporary directory. The Java version comes from the ` version "` line of `java -version`,
+because `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` print a `Picked up` line
+before it. `atc self uninstall` removes the cache with the jars. `-XX:TieredStopAtLevel=1`
+(60% less CPU, 50% slower steady-state compiles) and `-XX:+UseSerialGC` (200 MB less
+resident memory, five times the GC time) were measured and left to `ATC_JAVA_OPTS`.
 
 For development without packaging, use `./mill -i app.run`. For manual REPL checks,
 `./mill app.test.runMain atc.Scratch file.scala` evaluates snippets separated by `// ---`.
@@ -108,9 +101,9 @@ requests are echoed. It needs no API key or network connection.
 | `lib` | Agent-facing capability types, data types and `Interface`; compiled with capture checking |
 | `app` | Configuration, models, permissions, host operations, REPL and terminal |
 | `app` root package | `Main` and `Cli` parse the command line; `App` wires the parts together and runs the loop; `Setup` and `FirstRun` run the first start; `Models` holds the catalog and clients; `SandboxRepl` owns the REPL session |
-| `commands/` | `SlashCommand` is the table of commands; `Commands` parses, dispatches and completes them; `ModelCommands`, `ProvidersMenu`, `SessionCommands` and `StatusCommands` implement them |
+| `commands/` | `SlashCommand` is the table of commands; `Commands` parses, dispatches and completes them; `ModelCommands`, `ConfigCommands`, `ProvidersMenu`, `SessionCommands` and `StatusCommands` implement them |
 | `agent/` | Turn loop, completion decisions, history, context estimates, prompts and input prediction |
-| `config/` | Configuration layers, validation, key bindings and model catalog |
+| `config/` | Configuration layers, validation, project trust, key bindings, provider edits and the model catalog |
 | `host/` | File, process, network and user operations implementing `Interface` |
 | `llm/` | Provider-neutral messages and provider adapters |
 | `perms/` | Policy, permission scopes, path patterns, modes and gitignore visibility |
@@ -130,22 +123,23 @@ App → Agent → ChatModel.complete → CompletionPolicy
 `Agent` controls turn state. `Conversation` owns history and protocol repair;
 `ContextManager` owns token estimates and history fitting. `ScalaToolRunner` decodes
 `run_scala`, invokes the REPL, records execution time and renders results through
-`ToolOutput`. `AgentMessages` contains notices exchanged with the model and UI.
-`ToolOutput` appends one hint per result: most are keyed on the output of a failed run (a safe-mode
-rejection, a missing capability, a command that could not start), one on the snippet
-itself (`ToolOutput.codeHint`): a `\"` inside a plain triple-quoted literal, which stays a
-backslash and a quote, so a Python docstring written as `\"\"\"` lands in the file with
-backslashes; live runs of several models did this and spent rounds repairing it. The system
-prompt says the same in its editing rule, and its Environment block tells the model whether
-a user is present (`AgentEnvironment.userPresent`, false for a `-p` run, where `ask`
-returns `None` and permission prompts fail unless `--approve-all` was given), so the model
-decides for itself instead of asking nobody. The REPL echo of a `ProcessResult` shows the
-exit code and the size of each stream only (`toString` in `Interface.scala`), because a
-snippet that prints the streams and ends with the value used to send them twice.
+`ToolOutput`. `AgentMessages` holds the notices exchanged with the model and the UI.
+
+`ToolOutput.renderForModel` appends at most one hint keyed on a failed run's output (a
+safe-mode rejection, a missing capability, a command that could not start) and, after the
+length cut, one keyed on the snippet itself (`codeHint`): a `\"` inside a plain
+triple-quoted literal stays a backslash and a quote, so a Python docstring written as
+`\"\"\"` reaches the file with backslashes. The system prompt's editing rule says the same.
+Its Environment block says whether a user is present (`AgentEnvironment.userPresent`, false
+for a `-p` run, where `ask` returns `None`), so the model does not wait for an answer nobody
+gives. The REPL echo of a `ProcessResult` shows the exit code and the length of each stream
+only (its `toString`), so a snippet that prints the streams and ends with the value does not
+send them twice.
 
 `Host` implements `Interface` directly through file, process, network and interaction
-traits; `HostPaths` holds the path resolution and permission checks they share. `HostOutput`, `HostLlm` and `HostUi` are dependencies supplied by `App` or tests.
-The REPL shares library classes with the application, so calls need no serialization layer.
+traits; `HostPaths` holds the path resolution and permission checks they share. `App` or a
+test supplies the `HostOutput`, `HostLlm` and `HostUi` ports. The REPL shares library
+classes with the application, so calls need no serialization layer.
 
 ## Type-system background
 
