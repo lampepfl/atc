@@ -190,7 +190,8 @@ object Configuration:
 
   /** A project config may add models to the providers a granting layer defines, or turn them
     * off, and nothing else: with a provider's `url`, `key` or `headers`, or a provider of its
-    * own, a cloned repository could send the user's keys and prompts wherever it names. */
+    * own, a cloned repository could send the user's keys and prompts wherever it names, and
+    * by turning a provider on it could use one the user turned off. */
   private def requireOwnProviders(layer: ConfigLayer, granted: ujson.Obj): Unit =
     def refuse(what: String, why: String) = throw IllegalArgumentException(
       s"Invalid config ${layer.path.getOrElse("")}: $what: $why; endpoints and keys belong in ~/.atc/config.json"
@@ -204,6 +205,8 @@ object Configuration:
         refuse(s"providers.$name", "a project config may not define a provider, only add models to one")
       for fields <- provider.objOpt; key <- fields.keys.find(!NarrowingProviderKeys.contains(_)) do
         refuse(s"providers.$name.$key", "a project config may set only a provider's models and enabled")
+      for fields <- provider.objOpt; on <- fields.get("enabled") if on != ujson.False do
+        refuse(s"providers.$name.enabled", "a project config may turn a provider off, not on")
 
   /** Apply one narrowing layer to the settings it defines. Every field moves
     * towards "stricter" or stays put, so this can never widen the policy. */

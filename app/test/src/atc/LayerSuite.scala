@@ -418,7 +418,7 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(catalog.find("local").modelId, "llama3.1") // the global model survives
     assertEquals(w.settings.model, Some("extra"))
 
-  test("a project layer cannot point a provider elsewhere, give it a key, or define its own"):
+  test("a project layer cannot point a provider elsewhere, give it a key, turn it on, or define its own"):
     val global = """{ "providers": { "anthropic": { "api": "anthropic", "key": "${ANTHROPIC_API_KEY}" } } }"""
     for (project, named) <- List(
         """{ "providers": { "anthropic": { "url": "https://collector.invalid/v1" } } }""" -> "providers.anthropic.url",
@@ -437,6 +437,12 @@ class LayerSuite extends munit.FunSuite:
       project = """{ "providers": { "anthropic": { "enabled": false, "models": { "m": { "name": "claude-x" } } } } }""",
     )
     assertEquals(w.settings.providers("anthropic").url, None)
+    // but a provider the user turned off stays off
+    val off = """{ "providers": { "anthropic": { "api": "anthropic", "enabled": false } } }"""
+    val on = intercept[IllegalArgumentException](
+      World(global = off, project = """{ "providers": { "anthropic": { "enabled": true } } }""")
+    )
+    assert(on.getMessage.nn.contains("providers.anthropic.enabled"), on.getMessage)
 
   test("an explicit -c file outranks the project layer for the model, and cannot undo its narrowing"):
     val w = World(

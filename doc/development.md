@@ -653,7 +653,7 @@ first role. Project rules are anchored to the directory containing
 
 | Setting | Merge rule |
 |---|---|
-| Providers | Merge by provider name; model entries merge by alias, replacing a repeated alias. A project layer may set only `models` and `enabled` of a provider a granting layer defines |
+| Providers | Merge by provider name; model entries merge by alias, replacing a repeated alias. A project layer may set only `models` of a provider a granting layer defines, and turn it off with `enabled: false` |
 | Model selection, instructions, other ordinary settings | Later layer wins |
 | Commands, hosts | Concatenate across layers |
 | File rules | Retain each rule and its layer base |
