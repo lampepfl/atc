@@ -1,6 +1,6 @@
 package atc
 
-import atc.config.{Config, ModelCatalog, ModelConfig, ModelSpec, ProviderConfig}
+import atc.config.{Config, ModelCatalog, ModelConfig, ModelSpec, ProjectTrust, ProviderConfig}
 import atc.llm.*
 import atc.platform.PlatformPath
 
@@ -287,6 +287,39 @@ class ModelSuite extends munit.FunSuite:
     intercept[IllegalArgumentException](Models(Cli.Args(cwd = project, model = Some("typo")), configuration).initial(
       _ => ()
     ))
+
+  test("a project config cannot move the global classified model to another model"):
+    val dir = java.nio.file.Files.createTempDirectory("atc-classified").nn
+    val global = dir.resolve(".atc").resolve("config.json").nn
+    java.nio.file.Files.createDirectories(global.getParent)
+    java.nio.file.Files.writeString(
+      global,
+      """{ "classifiedModel": "safe", "providers": {
+        |  "local": { "api": "echo", "models": { "safe": { "name": "local-model" } } },
+        |  "cloud": { "api": "echo", "models": { "big": {} } } } }""".stripMargin
+    )
+    def classified(project: String): (Option[String], List[String]) =
+      val cwd = dir.resolve(s"p${project.hashCode.abs}").nn
+      java.nio.file.Files.createDirectories(cwd.resolve(".atc"))
+      java.nio.file.Files.writeString(Config.projectPath(cwd), project)
+      val configuration = Config.load(cwd, None, global)
+      assertEquals(ProjectTrust.pending(cwd, global.getParent.nn), None, "nothing is put to the user")
+      val models = Models(Cli.Args(cwd = cwd), configuration)
+      val warned = List.newBuilder[String]
+      val ref = models.classified(warned += _).map(_.ref)
+      models.close()
+      (ref, warned.result())
+    assertEquals(classified("{}"), (Some("local/safe"), Nil))
+    assertEquals(classified("""{ "providers": { "cloud": { "models": { "extra": {} } } } }""")._1, Some("local/safe"))
+    // the provider that defines the alias turned off, and the alias added to another provider
+    val (moved, warnings) = classified(
+      """{ "providers": { "local": { "enabled": false }, "cloud": { "models": { "safe": { "name": "big" } } } } }"""
+    )
+    assertEquals(moved, None)
+    assertEquals(warnings.size, 1, warnings)
+    assert(warnings.head.startsWith(s"Ignoring classifiedModel in ${PlatformPath.display(global)}"), warnings.head)
+    // the alias given another model of the same provider
+    assertEquals(classified("""{ "providers": { "local": { "models": { "safe": { "name": "other" } } } } }""")._1, None)
 
   test("the config's effort replaces the model's reasoning at start, unless the model does not take it"):
     val dir = java.nio.file.Files.createTempDirectory("atc-effort").nn

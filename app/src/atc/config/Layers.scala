@@ -130,6 +130,9 @@ final case class Configuration(
   def catalog(discover: ModelSpec => List[ModelSpec], store: ModelListStore): ModelCatalog =
     ModelCatalog.from(settings, keys, Some(discover), Some(store))
 
+  /** The granting layers alone, without what a project layer adds or turns off. */
+  def granting: Configuration = Configuration.combine(layers.filter(_.origin.grants), keys)
+
 object Configuration:
   /** Settings that are policy: a narrowing layer may only make these stricter,
     * so they are taken from the granting layers and then tightened. Everything

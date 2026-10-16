@@ -858,7 +858,11 @@ taken as given keeps its unknown context window until a later session finds it i
 stored list. Configuration validation does not check `model` or `classifiedModel`. At the start,
 `Models.configured` resolves them, and one that names no model is ignored with a warning
 that names its file: the session falls back to the last model chosen or the first one, and
-sends classified data to no model. A `-m` that names no model stops the start. A failed fetch is not reported (only logged with `ATC_DEBUG`) and leaves the stored list in use. Listed models are
+sends classified data to no model. A project layer may add models to the user's providers and
+turn providers off, so when it changes providers, `Models.classified` also resolves a
+`classifiedModel` set by a granting layer in the granting layers alone
+(`Configuration.granting`) and ignores it, with the same warning, unless both name the same
+`provider/alias` and model id. A `-m` that names no model stops the start. A failed fetch is not reported (only logged with `ATC_DEBUG`) and leaves the stored list in use. Listed models are
 always labelled by their full reference, so fetching a list never changes the labels of
 configured models. `ChatModel.effort` is mutable per client and read at request time;
 `Models` caches one client per reference, so `/model` sets the chosen client's effort back

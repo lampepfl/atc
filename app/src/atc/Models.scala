@@ -65,12 +65,38 @@ final class Models(args: Cli.Args, start: Configuration):
     * (`model`, `classifiedModel`). `None` when it is unset, or names no model:
     * then `warn` says so. */
   def configured(setting: String, reference: Option[String], warn: String => Unit): Option[ChatModel] =
+    configured(setting, reference, warn, catalog.find)
+
+  private def configured(
+    setting: String,
+    reference: Option[String],
+    warn: String => Unit,
+    lookup: String => ModelSpec,
+  ): Option[ChatModel] =
     reference.flatMap: ref =>
-      try Some(client(ref))
+      try Some(client(lookup(ref)))
       catch
         case e: IllegalArgumentException =>
           warn(s"Ignoring $setting in ${settingFile(setting)}: ${Debug.message(e)}")
           None
+
+  /** The client for the config's `classifiedModel`, as [[configured]] gives it. A project config
+    * may add models to the user's providers and turn providers off, but must not move classified
+    * data to another model that way: a reference that a granting layer set must name the same
+    * model in the granting layers alone, and is otherwise ignored. */
+  def classified(warn: String => Unit): Option[ChatModel] =
+    val setting = "classifiedModel"
+    val pinned = start.layers.findLast(_.defines(setting)).exists(_.origin.grants) &&
+      start.layers.exists(l => !l.origin.grants && l.defines("providers"))
+    def granted(ref: String): ModelSpec =
+      val spec = catalog.find(ref)
+      val own = start.granting.catalog(ChatModel.listModels, ModelListStore.global).find(ref)
+      if own.ref != spec.ref || own.modelId != spec.modelId then
+        throw IllegalArgumentException(
+          s"the project config changes it from ${own.ref} (${own.modelId}) to ${spec.ref} (${spec.modelId})"
+        )
+      spec
+    configured(setting, start.settings.classifiedModel, warn, if pinned then granted else catalog.find)
 
   /** The file whose value of `setting` is in force, for warnings. */
   private def settingFile(setting: String): String =
