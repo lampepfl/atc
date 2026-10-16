@@ -35,7 +35,7 @@ private[ui] final class KeyReader(
   def start(): Unit = if !plain && thread.isEmpty then
     saved = Some(terminal.enterRawMode())
     alerts.reportFocus(true)
-    out.print(Ansi.Esc + "[?2004h")
+    out.print(Ansi.PasteOn)
     out.flush()
     pasting = false
     running = true
@@ -56,7 +56,7 @@ private[ui] final class KeyReader(
     saved.foreach(terminal.setAttributes)
     saved = None
     if !plain then
-      out.print(Ansi.Esc + "[?2004l")
+      out.print(Ansi.PasteOff)
       out.flush()
 
   /** Run `body` with the key thread idle (a pop-up is about to read the terminal). */
@@ -73,7 +73,7 @@ private[ui] final class KeyReader(
         pasting = false
         if pauseDepth == 0 && running then
           alerts.reportFocus(true) // an answer read by the line reader turned it off
-          out.print(Ansi.Esc + "[?2004h")
+          out.print(Ansi.PasteOn)
           out.flush()
         pauseLock.notifyAll()
 

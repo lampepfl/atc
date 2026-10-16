@@ -94,7 +94,7 @@ private[ui] final class StatusLine(
       else if busy() then ("working", "", operation)
       else resting
     if title != lastTitle || status != lastStatus then
-      if title != lastTitle then screen.writeStyle(s"${Ansi.Esc}]0;$title\u0007")
+      if title != lastTitle then screen.writeStyle(s"${Ansi.Esc}]0;$title${Ansi.Bel}")
       if status != lastStatus then
         screen.writeStyle(StatusLine.programStatus(status.state, status.kind, status.message))
       lastTitle = title
@@ -149,7 +149,7 @@ private[ui] final class StatusLine(
     * later updates draw nothing. */
   def close(): Unit =
     closed = true
-    if !plain then screen.synchronized(screen.writeStyle(s"${Ansi.Esc}[23;0t${Ansi.Esc}]7501;state=clear\u0007"))
+    if !plain then screen.synchronized(screen.writeStyle(s"${Ansi.Esc}[23;0t${Ansi.Esc}]7501;state=clear${Ansi.Bel}"))
     screen.synchronized(screen.flush())
     footer.foreach(_.close())
 
@@ -163,7 +163,7 @@ private[atc] object StatusLine:
     val text = Base64.getEncoder.nn.encodeToString(Notifier.clean(message).getBytes(UTF_8)).nn
     List("state" -> state, "kind" -> kind, "app" -> "atc", "msg" -> text)
       .collect { case (key, value) if value.nonEmpty => s"$key=$value" }
-      .mkString(s"${Ansi.Esc}]7501;", ":", "\u0007")
+      .mkString(s"${Ansi.Esc}]7501;", ":", Ansi.Bel)
 
   /** Draw the one-line footer and flush it. JLine's `Status.update` flushes the text itself
     * but leaves the closing synchronized-update sequence (`ESC[?2026l`) in the buffered

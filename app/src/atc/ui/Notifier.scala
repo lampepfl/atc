@@ -6,6 +6,8 @@ import atc.platform.Platform
 import java.nio.charset.StandardCharsets
 import java.util.{Base64, Locale}
 
+import Ansi.{Bel, Esc}
+
 /** Desktop notifications for moments when atc waits for the user. `terminal`
   * writes an escape sequence (or a bell) to the terminal; system notifications
   * run a platform command on a background thread and ring the bell if it cannot start. */
@@ -23,7 +25,7 @@ enum Notifier:
     val b = Notifier.clean(body)
     this match
       case Off => ()
-      case Bell => emit(Notifier.BellChar)
+      case Bell => emit(Bel)
       case Terminal(osc) => emit(Notifier.passThrough(osc.format(t, b)))
       case System =>
         val command = Notifier.systemCommand(t, b)
@@ -38,7 +40,7 @@ enum Notifier:
           catch
             case e: Exception =>
               Debug.log(s"notification command ${command.head} failed: $e")
-              emit(Notifier.BellChar)
+              emit(Bel)
         val thread = Thread(show, "atc-notify")
         thread.setDaemon(true)
         thread.start()
@@ -54,12 +56,11 @@ object Notifier:
     case Notify
 
     def format(title: String, body: String): String = this match
-      case Nine => s"\u001b]9;$title: $body\u0007"
-      case Kitty => s"\u001b]99;i=atc:d=0;$title\u001b\\\u001b]99;i=atc:d=1:p=body;$body\u001b\\"
+      case Nine => s"$Esc]9;$title: $body$Bel"
+      case Kitty => s"$Esc]99;i=atc:d=0;$title$Esc\\$Esc]99;i=atc:d=1:p=body;$body$Esc\\"
       // `;` separates the fields.
-      case Notify => s"\u001b]777;notify;${title.replace(';', ',')};${body.replace(';', ',')}\u0007"
+      case Notify => s"$Esc]777;notify;${title.replace(';', ',')};${body.replace(';', ',')}$Bel"
 
-  private val BellChar = "\u0007"
   private val MaxChars = 200
 
   /** The notifier a `notifications` setting (validated by the config) selects. `auto` prefers the
@@ -112,7 +113,7 @@ object Notifier:
     * (which also needs `set -g allow-passthrough on`). */
   private def passThrough(sequence: String): String =
     if ProcessEnvironment.get("TMUX").isEmpty then sequence
-    else "\u001bPtmux;" + sequence.replace("\u001b", "\u001b\u001b") + "\u001b\\"
+    else s"${Esc}Ptmux;" + sequence.replace(Esc, Esc + Esc) + s"$Esc\\"
 
   /** The command that shows a system notification. The text travels as
     * arguments (macOS, Linux) or inside a Base64-encoded script (Windows), so

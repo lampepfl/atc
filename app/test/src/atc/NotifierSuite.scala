@@ -31,6 +31,13 @@ class NotifierSuite extends munit.FunSuite:
     Notifier.Bell.send("atc", "done", s => emitted :+= s)
     assertEquals(emitted, List("\u0007"))
 
+  test("each OSC notification has its terminal's framing"):
+    assertEquals(Osc.Nine.format("atc", "done"), "\u001b]9;atc: done\u0007")
+    assertEquals(
+      Osc.Kitty.format("atc", "done"),
+      "\u001b]99;i=atc:d=0;atc\u001b\\\u001b]99;i=atc:d=1:p=body;done\u001b\\",
+    )
+
   test("long text is cut to one short line"):
     val cleaned = Notifier.clean("a" * 500)
     assertEquals(cleaned.length, 200)
