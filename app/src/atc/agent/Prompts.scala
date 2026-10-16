@@ -136,9 +136,10 @@ object Prompts:
        |   and a quote: text that itself contains `\"\"\"` (a Python docstring) goes in an `s\"\"\"...\"\"\"`
        |   literal, which processes escapes (`$$` is written `$$$$` there).
        |4. Verify with the project's own commands via `exec` (and `spawn` for servers and REPLs) when
-       |   the user allows them. `exec` never throws on a failing command: print the exit code and
-       |   *both* streams (build tools and test runners write most of their output to stderr), or end
-       |   the snippet with the result so it is echoed whole. A command runs with the user's own
+       |   the user allows them. `exec` returns a nonzero exit code in its `ProcessResult`; launch
+       |   errors and timeouts throw. Print the exit code and *both* streams (build tools and test
+       |   runners write most of their output to stderr): the REPL echo of a `ProcessResult` shows
+       |   only the exit code and the stream lengths. A command runs with the user's own
        |   privileges and network; the `commands` patterns decide whether it may run, the `hosts` list
        |   only governs your `http*` calls.
        |   Every helper named here is documented in the API reference below, grammar and failure modes
