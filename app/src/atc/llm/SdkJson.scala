@@ -2,9 +2,10 @@ package atc.llm
 
 import scala.jdk.CollectionConverters.*
 
-/** ujson ↔ plain Java values, for the SDKs' `JsonValue.from(...)` builders
-  * (tool schemas, tool-call inputs) and back (tool-use arguments). */
-object Json:
+/** JSON exchanged with the provider SDKs: ujson ↔ plain Java values, for the SDKs'
+  * `JsonValue.from(...)` builders (tool schemas, tool-call inputs) and back (tool-use
+  * arguments), and the lenient reading of tool-call arguments. */
+object SdkJson:
   def toJava(v: ujson.Value): AnyRef | Null = v match
     case ujson.Str(s) => s
     case ujson.Num(n) => if n == n.toLong then java.lang.Long.valueOf(n.toLong) else java.lang.Double.valueOf(n)

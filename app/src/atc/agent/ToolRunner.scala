@@ -1,6 +1,6 @@
 package atc.agent
 
-import atc.llm.{Json, ToolCall, ToolResult, ToolSpec}
+import atc.llm.{SdkJson, ToolCall, ToolResult, ToolSpec}
 import atc.perms.{Decision, Policy}
 import atc.sandbox.{ExecutionResult, ReplSession}
 
@@ -30,7 +30,7 @@ private[atc] final class ScalaToolRunner(
       )
 
   private def runScala(call: ToolCall): ToolResult =
-    val code = Json.parseObject(call.arguments).value.get("code").flatMap(_.strOpt).getOrElse("")
+    val code = SdkJson.parseObject(call.arguments).value.get("code").flatMap(_.strOpt).getOrElse("")
     if code.trim.isEmpty then ToolResult(call.id, AgentMessages.missingCodeArgument, isError = true)
     else
       ui.toolStart(code)

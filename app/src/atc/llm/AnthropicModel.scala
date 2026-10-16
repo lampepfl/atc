@@ -70,12 +70,12 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
     val schema = ujson.read(t.parametersJson)
     val props = Tool.InputSchema.Properties.builder()
     for properties <- schema.obj.get("properties"); (k, v) <- properties.obj do
-      props.putAdditionalProperty(k, JsonValue.from(Json.toJava(v)))
+      props.putAdditionalProperty(k, JsonValue.from(SdkJson.toJava(v)))
     val input = Tool.InputSchema.builder().properties(props.build())
     schema.obj.get("required").foreach(r => input.required(r.arr.map(_.str).toList.asJava))
     // The rest of the schema (`additionalProperties: false`, ...) as the OpenAI adapters send it.
     for (k, v) <- schema.obj if k != "type" && k != "properties" && k != "required" do
-      input.putAdditionalProperty(k, JsonValue.from(Json.toJava(v)))
+      input.putAdditionalProperty(k, JsonValue.from(SdkJson.toJava(v)))
     Tool.builder().name(t.name).description(t.description).inputSchema(input.build()).build()
 
   private def params(system: SystemPrompt, history: List[Msg], tools: List[ToolSpec]): MessageCreateParams =
@@ -115,8 +115,8 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
               if text.nonEmpty then blocks += ContentBlockParam.ofText(text)
               calls.foreach: c =>
                 val input = ToolUseBlockParam.Input.builder()
-                Json.parseObject(c.arguments).value
-                  .foreach((k, v) => input.putAdditionalProperty(k, JsonValue.from(Json.toJava(v))))
+                SdkJson.parseObject(c.arguments).value
+                  .foreach((k, v) => input.putAdditionalProperty(k, JsonValue.from(SdkJson.toJava(v))))
                 blocks += ContentBlockParam.ofToolUse(
                   ToolUseBlockParam.builder().id(c.id).name(c.name).input(input.build()).build()
                 )
@@ -140,7 +140,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
       block.text().toScala.foreach(t => text.append(t.text()))
       block.toolUse().toScala.foreach: tu =>
         val json =
-          try ujson.write(Json.fromJava(tu._input().convert(classOf[java.util.Map[String, AnyRef]])))
+          try ujson.write(SdkJson.fromJava(tu._input().convert(classOf[java.util.Map[String, AnyRef]])))
           catch case _: Exception => "{}"
         calls += ToolCall(tu.id(), tu.name(), json)
     val stop = m.stopReason().toScala.map(_.toString).getOrElse("end_turn").toLowerCase(Locale.ROOT)

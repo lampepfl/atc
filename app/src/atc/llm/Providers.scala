@@ -94,7 +94,7 @@ private[llm] abstract class OpenAIShapedModel(spec: ModelSpec) extends SpecModel
 
   /** A tool's parameter schema as the members of the SDK's parameters object. */
   protected def schema(t: ToolSpec): java.util.Map[String, JsonValue] =
-    ujson.read(t.parametersJson).obj.map((k, v) => k -> JsonValue.from(Json.toJava(v))).asJava
+    ujson.read(t.parametersJson).obj.map((k, v) => k -> JsonValue.from(SdkJson.toJava(v))).asJava
   protected def streamingClient: OpenAIClient =
     val current = connection
     val transport = com.openai.client.okhttp.OkHttpClient(ModelRequest.scopedHttpClient(current.http))

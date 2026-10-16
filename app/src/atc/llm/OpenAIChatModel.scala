@@ -36,7 +36,7 @@ final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     settings.maxTokens.foreach(n => b.maxCompletionTokens(n.toLong))
     settings.temperature.foreach(b.temperature)
     for fragment <- styleFragment(thinking); (key, value) <- fragment.obj do
-      b.putAdditionalBodyProperty(key, JsonValue.from(Json.toJava(value)))
+      b.putAdditionalBodyProperty(key, JsonValue.from(SdkJson.toJava(value)))
     effort.foreach(b.reasoningEffort)
     thinkingSwitch(thinking).foreach(b.putAdditionalBodyProperty("thinking", _))
 

@@ -84,7 +84,7 @@ class ModelSuite extends munit.FunSuite:
     val noted = "[sandbox notice] The Scala REPL was restarted (x).\n\nrun: 1 + 1"
     val (c, _) = collect(m, List(Msg.User(noted)))
     assertEquals(c.toolCalls.size, 1)
-    val code = Json.parseObject(c.toolCalls.head.arguments).value("code").str
+    val code = SdkJson.parseObject(c.toolCalls.head.arguments).value("code").str
     assertEquals(code, "1 + 1")
     // The trigger also works without a note, while a regular message is echoed.
     assertEquals(collect(m, List(Msg.User("run: 2 + 2")))._1.toolCalls.size, 1)
