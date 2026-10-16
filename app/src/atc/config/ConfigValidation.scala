@@ -54,6 +54,31 @@ object ConfigValidation:
           val where = layer.path.map(_.toString).getOrElse(s"(${layer.origin.label} layer)")
           throw IllegalArgumentException(s"Invalid config $where: ${e.getMessage}")
 
+  /** Reject what the JSON reader takes without complaint and turns into a different value:
+    * `null` where the setting is not optional, which it reads as `null`, `0` or `false`, and
+    * a number that an integer setting would truncate or clamp. `value` is what `json` was
+    * read as, and `path` names it in the error. A `null` for an optional setting unsets it,
+    * and JSON fragments such as a `reasoningStyle.request` are taken as they are. */
+  private[config] def requireExact(json: ujson.Value, value: Any, path: String = ""): Unit =
+    def at(key: String) = if path.isEmpty then key else s"$path.$key"
+    def wholeNumber(n: Double, read: Double) =
+      if n != read then
+        throw IllegalArgumentException(s"$path must be a whole number in range (was ${ujson.write(json)})")
+    (json, value) match
+      case (_, _: ujson.Value) => ()
+      case (_, option: Option[?]) => option.foreach(requireExact(json, _, path))
+      case (ujson.Null, _) => throw IllegalArgumentException(s"$path must not be null")
+      case (ujson.Num(n), i: Int) => wholeNumber(n, i.toDouble)
+      case (ujson.Num(n), l: Long) => wholeNumber(n, l.toDouble)
+      case (ujson.Obj(members), map: Map[?, ?]) =>
+        for (k, v) <- map; item <- members.get(k.toString) do requireExact(item, v, at(k.toString))
+      case (ujson.Arr(items), seq: Seq[?]) =>
+        for ((item, v), i) <- items.zip(seq).zipWithIndex do requireExact(item, v, s"$path[$i]")
+      case (ujson.Obj(members), product: Product) =>
+        for (k, v) <- product.productElementNames.zip(product.productIterator); item <- members.get(k) do
+          requireExact(item, v, at(k))
+      case _ => ()
+
   /** A `files` entry of any layer (the project layer's included, which
     * `settings.files` leaves out): the path must be a usable pattern and the
     * access level one the policy knows, so a typo is reported as a config

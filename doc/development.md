@@ -649,7 +649,10 @@ the offered starter config) are trusted as they are written, and a `/model`, `/e
 `model`, do not change the fingerprint.
 
 Only explicitly defined project settings narrow a value. `executionTimeoutMs` defaults to
-300000; a JSON `null` clears it and means no limit.
+300000; a JSON `null` clears it and means no limit. Reading a layer
+(`ConfigValidation.requireExact`) refuses a `null` for a setting that is not optional, which
+the JSON reader would take as `null`, `0` or `false`, and a number that an integer setting
+would truncate or clamp, such as `1.5` or `1e10`.
 `Configuration.rules` is the complete rule list; do not build policy from `settings.files`,
 which contains only granting-layer entries. Configuration validation checks modes, limits,
 patterns, model references and provider settings before execution.

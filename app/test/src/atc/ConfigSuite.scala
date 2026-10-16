@@ -213,6 +213,43 @@ class ConfigSuite extends munit.FunSuite:
     val e = intercept[IllegalArgumentException](load(dir, Some(bad)))
     assert(e.getMessage.nn.contains("maxToolOutputChars"), e.getMessage)
 
+  test("a null for a setting that is not optional, or a fraction for a whole number, is rejected with its file"):
+    val dir = Files.createTempDirectory("atc-cfg-exact").nn
+    def rejected(json: String): String =
+      val cfg = writeCfg(dir, "config.json", json)
+      val e = intercept[IllegalArgumentException](load(dir, Some(cfg)))
+      assert(e.getMessage.nn.startsWith(s"Invalid config $cfg: "), e.getMessage)
+      e.getMessage.nn
+    for key <- List("files", "denyCommands", "commands", "providers", "notifications", "safeMode", "maxToolCalls") do
+      val message = rejected(s"""{ "$key": null }""")
+      assert(message.endsWith(s": $key must not be null"), message)
+    def model(settings: String) = s"""{ "providers": { "p": { "api": "echo", "models": { "m": $settings } } } }"""
+    assert(rejected("""{ "providers": { "p": null } }""").endsWith("providers.p must not be null"))
+    assert(
+      rejected("""{ "providers": { "p": { "api": "echo", "models": null } } }""").endsWith("models must not be null")
+    )
+    assert(rejected(model("null")).endsWith("providers.p.models.m must not be null"))
+    assert(rejected(model("""{ "efforts": ["low", null] }""")).endsWith("m.efforts[1] must not be null"))
+    assert(
+      rejected("""{ "files": [ { "path": ".", "locked": null } ] }""").endsWith("files[0].locked must not be null")
+    )
+    assert(rejected("""{ "maxToolCalls": 1e10 }""").endsWith("in range (was 10000000000)"))
+    assert(rejected("""{ "maxToolOutputChars": 1.5 }""").endsWith("must be a whole number in range (was 1.5)"))
+    assert(rejected("""{ "executionTimeoutMs": 1e30 }""").contains("executionTimeoutMs must be a whole number"))
+    assert(rejected(model("""{ "maxTokens": 2.5 }""")).contains("providers.p.models.m.maxTokens must be a whole"))
+    // A null unsets an optional setting, and a reasoning style's request is JSON taken as written.
+    val ok = writeCfg(
+      dir,
+      "ok.json",
+      """{ "executionTimeoutMs": null, "classifiedModel": null, "maxToolCalls": 1e3,
+        |  "providers": { "p": { "api": "openai", "reasoningStyle": { "request": { "x": null } },
+        |                         "models": { "m": { "maxTokens": 4096.0 } } } } }""".stripMargin
+    )
+    val settings = load(dir, Some(ok)).settings
+    assertEquals(settings.executionTimeoutMs, None)
+    assertEquals(settings.maxToolCalls, 1000)
+    assertEquals(settings.providers("p").models("m").maxTokens, Some(4096))
+
   test("a files entry with an unknown access level or an unusable pattern is rejected while loading"):
     val dir = Files.createTempDirectory("atc-cfg-rules").nn
     val badAccess = writeCfg(dir, "access.json", """{ "files": [ { "path": ".", "access": "rw2" } ] }""")

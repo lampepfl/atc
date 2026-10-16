@@ -72,7 +72,10 @@ object ConfigLayer:
     ConfigLayer(Origin.Session, None, json, settings(json, "the settings of this session"), None)
 
   private[config] def settings(json: ujson.Obj, where: String): Config =
-    try upickle.default.read[Config](json)
+    try
+      val config = upickle.default.read[Config](json)
+      ConfigValidation.requireExact(json, config)
+      config
     catch case e: Exception => throw IllegalArgumentException(s"Invalid config $where: ${Debug.message(e)}")
 
 /** A file rule with the folder its layer is anchored at: the folder holding
