@@ -41,7 +41,7 @@ final class FileEntryImpl(fs: FileSystemImpl, p: Path) extends FileEntry:
     val result = Try:
       host.requireRead(scope, p, operation)
       op
-    ClassifiedImpl.fromTry(result)
+    ClassifiedImpl(result)
 
   def path: String = PlatformPath.portable(p)
 

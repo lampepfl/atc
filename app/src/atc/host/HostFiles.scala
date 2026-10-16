@@ -159,7 +159,7 @@ private[host] trait HostFiles:
     val entry = fs.access(path)
     val before = entry.read()
     val javaReplacement = sedReplacement(replacement)
-    val rewritten = StringBuffer()
+    val rewritten = java.lang.StringBuilder()
     val matcher = regex.matcher(before)
     var count = 0
     while matcher.find() do

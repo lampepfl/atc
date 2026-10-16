@@ -874,18 +874,18 @@ class HostSuite extends munit.FunSuite:
   test("TextSink incrementally decodes UTF-8, UTF-16 BOMs, and malformed bytes"):
     val sb = StringBuilder()
     val sink = TextSink(s => sb.append(s))
-    for b <- "héllo 🙂 x".getBytes("UTF-8") do sink.write(Array(b)) // one byte at a time
+    for b <- "héllo 🙂 x".getBytes("UTF-8") do sink.write(Array(b), 0, 1) // one byte at a time
     sink.finish()
     assertEquals(sb.toString, "héllo 🙂 x")
     val sb2 = StringBuilder()
     val sink2 = TextSink(s => sb2.append(s))
-    sink2.write(Array(0xc3.toByte, 0x28.toByte)) // malformed UTF-8, not an encoding marker
+    sink2.write(Array(0xc3.toByte, 0x28.toByte), 0, 2) // malformed UTF-8, not an encoding marker
     sink2.finish()
     assertEquals(sb2.toString, "\uFFFD(")
     def bomText(bom: Array[Byte], encoded: Array[Byte]): String =
       val out = StringBuilder()
       val sink = TextSink(s => out.append(s))
-      for byte <- bom ++ encoded do sink.write(Array(byte))
+      for byte <- bom ++ encoded do sink.write(Array(byte), 0, 1)
       sink.finish()
       out.toString
     val sample = "bom 🙂"

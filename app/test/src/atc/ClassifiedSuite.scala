@@ -94,8 +94,8 @@ class ClassifiedSuite extends munit.FunSuite:
     assert(!executed)
     assert(ClassifiedImpl.unwrap(r).isFailure)
 
-  test("fromTry classifies a failed effect"):
-    val c = ClassifiedImpl.fromTry(Try(throw IllegalArgumentException("nope")))
+  test("a failed effect stays classified"):
+    val c = ClassifiedImpl(Try(throw IllegalArgumentException("nope")))
     assert(ClassifiedImpl.unwrap(c).isFailure)
     assertEquals(c.toString, "Classified(***)")
 

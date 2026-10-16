@@ -160,7 +160,7 @@ private[host] trait HostNetwork:
         resolvedHeaders <- resolveSecretHeaders(secretHeaders)
         response <- Try(send(prepared, url, resolvedBody, contentType, headers, resolvedHeaders))
       yield response
-    ClassifiedImpl.fromTry(result)
+    ClassifiedImpl(result)
 
   private val noHeaders = Map.empty[String, String]
   private val noSecrets = Map.empty[String, Classified[String]]
@@ -176,7 +176,7 @@ private[host] trait HostNetwork:
     response.body
 
   private def checkedClassified(method: String, url: String, response: Classified[HttpResponse]): Classified[String] =
-    ClassifiedImpl.fromTry(ClassifiedImpl.unwrap(response).flatMap(value => Try(checked(method, url, value))))
+    ClassifiedImpl(ClassifiedImpl.unwrap(response).flatMap(value => Try(checked(method, url, value))))
 
   def httpGet(url: String)(using net: Network): String =
     checked("GET", url, request(net, "GET", url, None, JsonContentType, noHeaders))
@@ -259,4 +259,4 @@ private[host] trait HostNetwork:
       headers,
       secretHeaders,
     )
-    ClassifiedImpl.fromTry(ClassifiedImpl.unwrap(classifiedResponse).map(_.body))
+    ClassifiedImpl(ClassifiedImpl.unwrap(classifiedResponse).map(_.body))

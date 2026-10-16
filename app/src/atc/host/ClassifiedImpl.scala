@@ -19,9 +19,6 @@ final class ClassifiedImpl[+T](val value: Try[T]) extends Classified[T]:
 object ClassifiedImpl:
   def wrap[T](value: T): Classified[T] = ClassifiedImpl(Success(value))
 
-  /** Classify the outcome of an already-run effect (value or failure). */
-  def fromTry[T](value: Try[T]): Classified[T] = ClassifiedImpl(value)
-
   /** Run agent code on classified data, keeping everything it throws in the result
     * except the stop signals: the sandbox's `ThreadDeath` and `InterruptedException`.
     * Agent code cannot name either type; they come from a stop request, not from the
