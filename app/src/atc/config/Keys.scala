@@ -57,15 +57,24 @@ object KeyBindings:
     case _ => None
 
   /** The environment variables a provider's credentials may come from: the `${VAR}`s of
-    * its key and headers, its `keyEnv`, and the SDK's own variables when it names no key. */
+    * its key and headers, its `keyEnv`, and, for the default endpoint, the secrets its SDK
+    * reads from the environment. The adapters let the SDK read them whenever no key resolves,
+    * which includes a configured `key` or `keyEnv` whose variable is unset. */
   def variables(p: ProviderConfig): Set[String] =
     val named = (p.key.toList ++ p.headers.values).flatMap(envRefName) ++ p.keyEnv
     val sdkDefaults =
-      if p.key.nonEmpty || p.keyEnv.nonEmpty then Nil
+      if p.url.nonEmpty then Nil
       else
-        p.api match
-          case Some("anthropic") if p.url.isEmpty => List("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-          case Some("openai" | "openai-responses") if p.url.isEmpty => List("OPENAI_API_KEY")
+        p.api.flatMap(ProviderConfig.canonicalApi) match
+          case Some("anthropic") => List("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+          case Some("openai" | "openai-responses") =>
+            List(
+              "OPENAI_API_KEY",
+              "AZURE_OPENAI_KEY",
+              "OPENAI_ADMIN_KEY",
+              "OPENAI_WEBHOOK_SECRET",
+              "OPENAI_CUSTOM_HEADERS"
+            )
           case _ => Nil
     (named ++ sdkDefaults).toSet
 

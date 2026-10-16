@@ -9,6 +9,7 @@ import java.nio.file.{
   AtomicMoveNotSupportedException, FileAlreadyExistsException, Files, Path, StandardCopyOption, StandardOpenOption
 }
 import java.nio.file.attribute.PosixFilePermissions
+import java.util.Locale
 
 /** One model of a provider: the id the provider knows it by, plus the
   * settings that apply to this model only. Everything about *where* to send
@@ -127,6 +128,23 @@ object ProviderConfig:
   /** The placeholder in a provider header for the conversation id, filled in
     * per request by `Providers.headers`. */
   val SessionRef = "${ATC_SESSION}"
+
+  /** Every name an `api` may be written as, in lower case, with the api it names. */
+  val Apis: Map[String, String] = Map(
+    "anthropic" -> "anthropic",
+    "claude" -> "anthropic",
+    "openai-responses" -> "openai-responses",
+    "responses" -> "openai-responses",
+    "openai" -> "openai",
+    "openai-chat" -> "openai",
+    "chat" -> "openai",
+    "chatgpt" -> "chatgpt",
+    "claude-code" -> "claude-code",
+    "echo" -> "echo",
+  )
+
+  /** The api `name` stands for, ignoring case and surrounding whitespace; `None` for an unknown name. */
+  def canonicalApi(name: String): Option[String] = Apis.get(name.trim.toLowerCase(Locale.ROOT))
 
 /** A provider the first run can set up, from `atc/providers.json`; the starting
   * global config lists all of them. */

@@ -10,20 +10,6 @@ import java.util.Locale
 object ConfigValidation:
   private val ReasoningSummaries = Set("auto", "concise", "detailed")
   private val NotificationChoices = Set("auto", "system", "terminal", "bell", "off")
-  private val ProviderApis = Set(
-    "anthropic",
-    "claude",
-    "openai-responses",
-    "responses",
-    "openai",
-    "openai-chat",
-    "chat",
-    "chatgpt",
-    "claude-code",
-    "echo",
-  )
-  /** The names of the Chat Completions api, the only one a `reasoningStyle` applies to. */
-  private val ChatApis = Set("openai", "openai-chat", "chat")
   private val AnthropicWebSearchVersions = Set("20250305", "20260209")
 
   /** Reject settings that would otherwise fail much later, in output slicing,
@@ -91,11 +77,11 @@ object ConfigValidation:
       provider.api.exists(_.trim.nonEmpty),
       s"provider '$name' has no api (expected anthropic | openai | openai-responses | chatgpt | claude-code | echo)"
     )
-    provider.api.foreach(api => validateChoice(s"providers.$name.api", api, ProviderApis))
+    provider.api.foreach(api => validateChoice(s"providers.$name.api", api, ProviderConfig.Apis.keys))
     provider.reasoningStyle.foreach: style =>
       val where = s"providers.$name.reasoningStyle"
       requireValid(
-        provider.api.exists(api => ChatApis.contains(api.trim.toLowerCase(Locale.ROOT))),
+        provider.api.flatMap(ProviderConfig.canonicalApi).contains("openai"),
         s"$where applies to Chat Completions (api openai) only"
       )
       for (field, fragment) <- List("request" -> style.request, "requestOff" -> style.requestOff); f <- fragment do

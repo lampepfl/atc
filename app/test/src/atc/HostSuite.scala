@@ -619,20 +619,30 @@ class HostSuite extends munit.FunSuite:
     assertEquals(keyed.exec(printPath).stdout.trim, "<unset>")
 
   test("provider key variables: named references, keyEnv, headers and the SDK defaults"):
-    import atc.config.{KeyBindings, ProviderConfig}
+    import atc.config.{ConfigLayer, Configuration, KeyBindings, ProviderConfig}
+    val anthropic = Set("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+    val openai =
+      Set("OPENAI_API_KEY", "AZURE_OPENAI_KEY", "OPENAI_ADMIN_KEY", "OPENAI_WEBHOOK_SECRET", "OPENAI_CUSTOM_HEADERS")
     val named = ProviderConfig(
       api = Some("anthropic"),
+      url = Some("https://gateway.example"),
       key = Some("${MY_KEY}"),
       headers = Map("x-token" -> "${GATEWAY_TOKEN}", "x-plain" -> "literal"),
     )
     assertEquals(KeyBindings.variables(named), Set("MY_KEY", "GATEWAY_TOKEN"))
-    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("openai"), keyEnv = Some("K"))), Set("K"))
-    assertEquals(
-      KeyBindings.variables(ProviderConfig(api = Some("anthropic"))),
-      Set("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-    )
-    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("openai-responses"))), Set("OPENAI_API_KEY"))
+    // At the default endpoint a key whose variable is unset leaves the SDK to read its own.
+    assertEquals(KeyBindings.variables(named.copy(url = None)), Set("MY_KEY", "GATEWAY_TOKEN") ++ anthropic)
+    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("openai"), keyEnv = Some("K"))), openai + "K")
+    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("anthropic"))), anthropic)
+    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("openai-responses"))), openai)
     assertEquals(KeyBindings.variables(ProviderConfig(api = Some("openai"), url = Some("http://localhost"))), Set())
+    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("chatgpt"))), Set())
+    // Every spelling of an api that `ChatModel.create` accepts.
+    for api <- List("Claude", "ANTHROPIC") do assertEquals(KeyBindings.variables(ProviderConfig(Some(api))), anthropic)
+    for api <- List("responses", "openai-chat", "chat", "OpenAI") do
+      assertEquals(KeyBindings.variables(ProviderConfig(Some(api))), openai)
+    val config = ujson.read("""{ "providers": { "c": { "api": "Claude", "models": { "m": {} } } } }""").obj
+    assertEquals(Configuration.combine(List(ConfigLayer.session(config))).keyVariables, anthropic)
 
   test("a denied executable path gets a copyable requestExec hint"):
     val executable = if Platform.isWindows then "C:\\Program Files\\Example\\tool.exe" else "/opt/Example Tools/tool"

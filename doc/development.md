@@ -582,9 +582,11 @@ must be written on the stage it applies to (`<` on the first command, `>`/`>>` o
 anything else is refused like the other shell forms rather than silently moved.
 `WindowsExecutable` resolves bare commands from absolute PATH entries and validates batch
 arguments before launch. Commands do not inherit the variables that hold provider keys
-(`Configuration.keyVariables`: the `${VAR}`s of `key` and `headers`, `keyEnv`, and the SDK's
-default variables for a provider that names no key), since a command that prints its
-environment would hand them to the model.
+(`Configuration.keyVariables`: the `${VAR}`s of `key` and `headers`, `keyEnv`, and the
+secrets the SDK reads from the environment for a provider without a `url`, whatever spelling
+of its `api` it uses), since a command that prints its environment would hand them to the
+model. Commands lose the SDK variables even when a key is configured, because a key whose
+variable is unset lets the SDK read them.
 
 `Processes` drains stdout and stderr concurrently into bounded buffers. Foreground commands
 retain prefixes; spawned processes retain recent output. Results use the rightmost non-zero
@@ -692,9 +694,10 @@ models of a ChatGPT plan, signed in through the browser; see
 [Models and providers](#models-and-providers)), `claude-code` (the models of a Claude plan,
 through the user's signed-in Claude Code CLI; same section) or `echo` (keyless, for smoke tests). `key` is a literal or `${VAR}`, and `keyEnv` names a variable;
 variables resolve from the project's `.atc/keys.properties` (once the project is trusted),
-then `~/.atc/keys.properties`, then the environment. Without `key` or `keyEnv`, the SDK's own
-variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) applies only when `url` is unset; a gateway
-at a `url` that needs that key names it, as in `"key": "${ANTHROPIC_API_KEY}"`. `headers` are extra HTTP headers for every request; a value may be a
+then `~/.atc/keys.properties`, then the environment. When neither `key` nor `keyEnv`
+resolves, the SDK's own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) applies only when
+`url` is unset; a gateway at a `url` that needs that key names it, as in
+`"key": "${ANTHROPIC_API_KEY}"`. `headers` are extra HTTP headers for every request; a value may be a
 `${VAR}` or `${ATC_SESSION}`, a random id of the conversation (renewed by `/new`) for
 gateways that route by session, such as OpenCode
 (`"x-opencode-session": "${ATC_SESSION}"`). Requests identify ATC as `atc/<version>` unless

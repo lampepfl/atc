@@ -154,6 +154,10 @@ class ModelSuite extends munit.FunSuite:
     assert(m.isInstanceOf[EchoModel], m.getClass.getName)
     assertEquals(m.alias, "e")
     assertEquals(m.ref, "p/e")
+    // The other names of an api, as `KeyBindings.variables` reads them too.
+    assert(ChatModel.create(spec(" Claude ")).isInstanceOf[AnthropicModel])
+    assert(ChatModel.create(spec("chat")).isInstanceOf[OpenAIChatModel])
+    assert(ChatModel.create(spec("RESPONSES")).isInstanceOf[OpenAIResponsesModel])
 
   test("create rejects an unknown api with a helpful message"):
     val e = intercept[IllegalArgumentException](ChatModel.create(spec("myllm")))

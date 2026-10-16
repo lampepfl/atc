@@ -1,6 +1,6 @@
 package atc.llm
 
-import atc.config.ModelSpec
+import atc.config.{ModelSpec, ProviderConfig}
 
 import java.util.Locale
 
@@ -166,15 +166,15 @@ trait ChatModel:
 object ChatModel:
   /** The client for one configured model, chosen by its provider's `api`. */
   def create(spec: ModelSpec): ChatModel =
-    spec.api.trim.toLowerCase(Locale.ROOT) match
-      case "anthropic" | "claude" => AnthropicModel(spec)
-      case "openai-responses" | "responses" => OpenAIResponsesModel(spec)
-      case "openai" | "openai-chat" | "chat" => OpenAIChatModel(spec)
-      case "chatgpt" => ChatGPTModel(spec, ChatGPTAuth.default)
-      case "claude-code" => ClaudeCodeModel(spec)
-      case "echo" => EchoModel(spec.alias, spec.ref, spec.settings.contextWindow.map(_.toInt))
-      case other => throw IllegalArgumentException(
-          s"Unknown api '$other' for provider '${spec.provider}' (expected anthropic | openai | openai-responses | chatgpt | claude-code | echo)"
+    ProviderConfig.canonicalApi(spec.api) match
+      case Some("anthropic") => AnthropicModel(spec)
+      case Some("openai-responses") => OpenAIResponsesModel(spec)
+      case Some("openai") => OpenAIChatModel(spec)
+      case Some("chatgpt") => ChatGPTModel(spec, ChatGPTAuth.default)
+      case Some("claude-code") => ClaudeCodeModel(spec)
+      case Some("echo") => EchoModel(spec.alias, spec.ref, spec.settings.contextWindow.map(_.toInt))
+      case _ => throw IllegalArgumentException(
+          s"Unknown api '${spec.api.trim}' for provider '${spec.provider}' (expected anthropic | openai | openai-responses | chatgpt | claude-code | echo)"
         )
 
   /** The models a provider's endpoint lists (`provider` has an empty alias and
