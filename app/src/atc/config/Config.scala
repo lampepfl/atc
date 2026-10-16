@@ -349,9 +349,14 @@ object Config:
   /** Create the starter project configuration for `dir` and ensure that its
     * `.gitignore` excludes `keys.properties`. The configuration belongs in the
     * repository; `.atc/keys.properties` does not. Returns the paths created or
-    * modified, or an empty list if the configuration already exists. */
-  def initProject(dir: Path): List[Path] =
+    * modified, or an empty list if the configuration already exists.
+    *
+    * Throws `IllegalArgumentException` when the file would be the global config `global`, as it
+    * is in the home directory. */
+  def initProject(dir: Path, global: Path): List[Path] =
     val config = projectPath(dir)
+    if samePath(config, global) then
+      throw IllegalArgumentException(s"$config is the global config; atc --init-global writes that one")
     if Files.exists(config) then Nil
     else
       Files.createDirectories(config.getParent)

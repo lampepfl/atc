@@ -188,10 +188,10 @@ class LayerSuite extends munit.FunSuite:
     val w = World(global = "")
     val config = Config.projectPath(w.cwd)
     val ignore = config.getParent.nn.resolve(".gitignore").nn
-    assertEquals(Config.initProject(w.cwd), List(config, ignore))
+    assertEquals(Config.initProject(w.cwd, w.globalPath), List(config, ignore))
     assertEquals(Files.readString(config), Config.projectTemplate)
     assertEquals(Files.readString(ignore), Config.KeysFile + "\n")
-    assertEquals(Config.initProject(w.cwd), Nil) // refuses to overwrite
+    assertEquals(Config.initProject(w.cwd, w.globalPath), Nil) // refuses to overwrite
     assertEquals(Config.projectRoot(w.cwd), Some(w.cwd)) // and the directory is a project now
 
   test("ensureGlobal writes the starting config and key bindings once, and never again"):
@@ -579,6 +579,18 @@ class LayerSuite extends munit.FunSuite:
     val again = Config.load(w.cwd, Some(Config.projectPath(linkedProject)), w.globalPath)
     assertEquals(again.layers.map(_.origin), List(Origin.Global, Origin.Project))
     assertEquals(again.settings.commands, Nil, "the untrusted project grants no commands")
+
+  test("the starter project config is never written as the global config"):
+    val home = Files.createTempDirectory("atc-init-home").nn.toRealPath().nn
+    val global = home.resolve(".atc/config.json").nn
+    val e = intercept[IllegalArgumentException](Config.initProject(home, global))
+    assert(e.getMessage.nn.contains("global config"), e.getMessage)
+    assert(!Files.exists(global))
+    val linkParent = Files.createTempDirectory("atc-init-link").nn.toRealPath().nn
+    val linkedHome = linkParent.resolve("home").nn
+    assume(TestEnv.trySymbolicLink(linkedHome, home), "symbolic links are unavailable for this account")
+    intercept[IllegalArgumentException](Config.initProject(home, linkedHome.resolve(".atc/config.json").nn))
+    assert(!Files.exists(global))
 
   // ── keys ────────────────────────────────────────────────────────
 

@@ -594,7 +594,7 @@ class ConfigSuite extends munit.FunSuite:
     val dir = Files.createTempDirectory("atc-initproj").nn
     Files.createDirectories(dir.resolve(".atc"))
     Files.writeString(dir.resolve(".atc/.gitignore"), "target\n")
-    val created = Config.initProject(dir)
+    val created = Config.initProject(dir, dir.resolve("no-such-global.json").nn)
     assert(created.contains(Config.projectPath(dir)), created.toString)
     val gi = Files.readString(dir.resolve(".atc/.gitignore")).nn
     assert(gi.startsWith("target\n") && gi.linesIterator.exists(_.trim == Config.KeysFile), gi)
@@ -602,12 +602,12 @@ class ConfigSuite extends munit.FunSuite:
     val dir2 = Files.createTempDirectory("atc-initproj2").nn
     Files.createDirectories(dir2.resolve(".atc"))
     Files.writeString(dir2.resolve(".atc/.gitignore"), "keys.properties\n")
-    Config.initProject(dir2)
+    Config.initProject(dir2, dir2.resolve("no-such-global.json").nn)
     assertEquals(Files.readString(dir2.resolve(".atc/.gitignore")).nn, "keys.properties\n")
     val dir3 = Files.createTempDirectory("atc-initproj3").nn
     Files.createDirectories(dir3.resolve(".atc"))
     Files.writeString(dir3.resolve(".atc/.gitignore"), "keys.properties\n!keys.properties\n")
-    Config.initProject(dir3)
+    Config.initProject(dir3, dir3.resolve("no-such-global.json").nn)
     assertEquals(
       Files.readString(dir3.resolve(".atc/.gitignore")).nn,
       "keys.properties\n!keys.properties\nkeys.properties\n"
@@ -615,17 +615,17 @@ class ConfigSuite extends munit.FunSuite:
     val dir4 = Files.createTempDirectory("atc-initproj4").nn
     Files.createDirectories(dir4.resolve(".atc"))
     Files.writeString(dir4.resolve(".atc/.gitignore"), "target\r\n")
-    Config.initProject(dir4)
+    Config.initProject(dir4, dir4.resolve("no-such-global.json").nn)
     assertEquals(Files.readString(dir4.resolve(".atc/.gitignore")).nn, "target\r\nkeys.properties\r\n")
     val dir5 = Files.createTempDirectory("atc-initproj5").nn
     Files.createDirectories(dir5.resolve(".atc"))
     Files.writeString(dir5.resolve(".atc/.gitignore"), "")
-    Config.initProject(dir5)
+    Config.initProject(dir5, dir5.resolve("no-such-global.json").nn)
     assertEquals(Files.readString(dir5.resolve(".atc/.gitignore")).nn, "keys.properties\n")
     val dir6 = Files.createTempDirectory("atc-initproj6").nn
     Files.createDirectories(dir6.resolve(".atc"))
     Files.writeString(dir6.resolve(".atc/.gitignore"), "\uFEFFtarget\r")
-    Config.initProject(dir6)
+    Config.initProject(dir6, dir6.resolve("no-such-global.json").nn)
     assertEquals(Files.readString(dir6.resolve(".atc/.gitignore")).nn, "\uFEFFtarget\rkeys.properties\r")
 
   test("an invalid reasoning effort or summary is a config error, not a per-turn crash"):

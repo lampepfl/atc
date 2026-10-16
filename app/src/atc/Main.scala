@@ -48,9 +48,14 @@ object Main:
       else if args.initGlobal then
         report(Config.globalPath, Config.ensureGlobal(), "fill in the API keys and edit the permissions")
       else if args.init then
-        val created = Config.initProject(args.cwd)
-        if created.nonEmpty then ProjectTrust.trust(args.cwd, Config.globalDir) // it grants what the user asked for
-        report(Config.projectPath(args.cwd), created, "edit the project's permissions")
+        try
+          val created = Config.initProject(args.cwd, Config.globalPath)
+          if created.nonEmpty then ProjectTrust.trust(args.cwd, Config.globalDir) // it grants what the user asked for
+          report(Config.projectPath(args.cwd), created, "edit the project's permissions")
+        catch
+          case e: IllegalArgumentException =>
+            System.err.println(Ansi.sanitize(Debug.message(e)))
+            1
       else run(args)
     sys.exit(exitCode)
 
