@@ -43,13 +43,13 @@ final class ConfigCommands(app: App):
     val keys = current.keys
     if keys.sources.nonEmpty then
       tui.println(s"key bindings: ${keys.names.mkString(", ")} (from ${keys.sources.mkString(", ")})")
-    // The sandbox keeps the policy it started with; /config changes only the rest.
-    val policy = app.config
+    // The sandbox keeps the settings it started with; /config changes only the rest.
+    val started = app.config
     val settings = List(
-      "safeMode" -> policy.safeMode.toString,
-      "executionTimeoutMs" -> policy.executionTimeoutMs.fold("none")(_.toString),
-      "maxToolCalls" -> policy.maxToolCalls.toString,
-      "respectGitignore" -> policy.respectGitignore.toString,
+      "safeMode" -> started.safeMode.toString,
+      "executionTimeoutMs" -> started.executionTimeoutMs.fold("none")(_.toString),
+      "maxToolCalls" -> started.maxToolCalls.toString,
+      "respectGitignore" -> started.respectGitignore.toString,
     ) ++ Setting.values.map(s => s.key -> s.current(current.settings))
     tui.println(settings.map((key, value) => s"$key=$value").mkString(" "))
     tui.println(s"open permission scopes: ${app.policy.openScopeCount}")
