@@ -1,6 +1,6 @@
 package atc
 
-import atc.config.{Config, KeyBindings, ModelCatalog, ModelSpec, ProviderPreset}
+import atc.config.{KeyBindings, ModelCatalog, ModelSpec, ProviderConfig, ProviderPreset}
 import atc.llm.ChatGPTAuth
 import atc.ui.Menus
 
@@ -76,7 +76,7 @@ object FirstRun:
       val bindings = (preset.keyVariable, typed) match
         case (Some(name), Some(key)) => KeyBindings((Path.of("(typed)"), Map(name -> key)) :: keys.files)
         case _ => keys
-      endpoint(preset, bindings) match
+      ModelCatalog.endpoint(preset.name, preset.config, bindings) match
         case None =>
           ask() match
             case None => None
@@ -101,7 +101,7 @@ object FirstRun:
                   case None => None
                   case Some(key) => attempt(Some(key))
 
-    if preset.api == "chatgpt" && !signIn(ui) then None else attempt(None)
+    if ProviderConfig.canonicalApi(preset.api).contains("chatgpt") && !signIn(ui) then None else attempt(None)
 
   /** Sign in with a ChatGPT plan in the browser, unless already signed in and not `again`. */
   def signIn(ui: Ui, auth: ChatGPTAuth, openBrowser: String => Boolean, again: Boolean): Boolean =
@@ -149,10 +149,6 @@ object FirstRun:
     val labels = models.map(m => m.displayName.fold(m.modelId)(name => s"$name  (${m.modelId})"))
     ui.choose("Choose a model", labels :+ Menus.BackLabel).flatMap: label =>
       models.zip(labels).collectFirst { case (m, l) if l == label => m }
-
-  /** The provider as the catalog resolves it; `None` when its key is not bound. */
-  private def endpoint(preset: ProviderPreset, keys: KeyBindings): Option[ModelSpec] =
-    ModelCatalog.from(Config(providers = Map(preset.name -> preset.config)), keys).discoverable.headOption
 
   /** The messages of `e` and its causes: an SDK's "Request failed" alone does not say why. */
   private def reasons(e: Throwable): String =

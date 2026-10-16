@@ -232,6 +232,14 @@ object ModelCatalog:
     }
     ModelCatalog(configured, discoverable, discover, store, providerNames = config.providers.keySet.toSet)
 
+  /** The provider `name` as an endpoint whose models can be listed, whatever models it
+    * configures and whether it is on; `None` when its key is not bound. */
+  def endpoint(name: String, provider: ProviderConfig, keys: KeyBindings): Option[ModelSpec] =
+    from(
+      Config(providers = Map(name -> provider.copy(models = Map.empty, enabled = true))),
+      keys
+    ).discoverable.headOption
+
 /** The model lists providers returned, kept in one JSON file (`~/.atc/model-lists.json`)
   * so that a session can name and describe listed models before fetching them
   * again. A list is used again only for a provider of the same name, api and url;
