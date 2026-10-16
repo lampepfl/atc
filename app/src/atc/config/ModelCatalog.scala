@@ -55,10 +55,11 @@ final case class ModelSpec(
   * id when no configured alias and no other listed model has it.
   *
   * A provider's list is fetched by `discover` at most once per catalog: by
-  * [[refresh]] in the background, or when [[models]] needs it. Until then a
-  * lookup uses the list `store` kept from an earlier session, and takes a
-  * `provider/model-id` it does not know as given; so do lookups after a failed
-  * fetch, which is otherwise ignored: the provider keeps its stored list, if any.
+  * [[refresh]] in the background, or when [[models]] needs it. A lookup never
+  * fetches: until a list arrives it uses the list `store` kept from an earlier
+  * session, and takes a `provider/model-id` it does not know as given; so do
+  * lookups after a failed fetch, which is otherwise ignored: the provider keeps
+  * its stored list, if any.
   */
 final class ModelCatalog(
   val configured: List[ModelSpec],
@@ -69,8 +70,13 @@ final class ModelCatalog(
   store: Option[ModelListStore] = None,
   /** How long [[models]] waits for the lists being fetched. */
   listWait: Duration = ModelCatalog.ListWait,
+  /** Every configured provider's name, turned off or not: [[find]] reads a reference that
+    * starts with one and `/` as naming that provider's model. */
+  providerNames: Set[String] = Set.empty,
 ):
   private def lower(s: String) = s.toLowerCase(Locale.ROOT)
+
+  private val providers: Set[String] = providerNames ++ configured.map(_.provider) ++ discoverable.map(_.provider)
 
   private lazy val aliasCount: Map[String, Int] =
     configured.groupBy(m => lower(m.alias)).map((a, ms) => a -> ms.size)
@@ -127,9 +133,10 @@ final class ModelCatalog(
   /** All models' labels, for messages and menus. */
   def labels: List[String] = models.map(label)
 
-  /** The model a reference names. Throws `IllegalArgumentException` naming the
-    * configured models when it matches none, or both candidates when a name is
-    * ambiguous. */
+  /** The model a reference names, without waiting for a list. Throws `IllegalArgumentException`
+    * naming the configured models when it matches none, or both candidates when a name is
+    * ambiguous. A reference that starts with a provider's name and `/` names a model of that
+    * provider only, never a listed id of another one. */
   def find(reference: String): ModelSpec =
     val wanted = lower(reference.trim)
     if wanted.isEmpty then throw IllegalArgumentException("No model given")
@@ -140,9 +147,9 @@ final class ModelCatalog(
             if fetched(provider).exists(_.isDefined) then throw unknown(reference)
             provider.listed(reference.trim.drop(provider.provider.length + 1), provider.settings)
           }
+        case None if providers.exists(p => wanted.startsWith(lower(p) + "/")) => throw unknown(reference)
         case None =>
-          def matching = discoverable.flatMap(known(_).getOrElse(Nil)).filter(m => lower(m.alias) == wanted)
-          (if matching.nonEmpty then matching else models.filter(m => lower(m.alias) == wanted)) match
+          discoverable.flatMap(known(_).getOrElse(Nil)).filter(m => lower(m.alias) == wanted) match
             case one :: Nil => one
             case Nil => throw unknown(reference)
             case many => throw ambiguous(reference, many)
@@ -217,7 +224,7 @@ object ModelCatalog:
           if p.models.isEmpty && !endpoint.api.trim.equalsIgnoreCase("echo") &&
             (endpoint.apiKey.isDefined || (p.key.isEmpty && p.keyEnv.isEmpty)) => endpoint
     }
-    ModelCatalog(configured, discoverable, discover, store)
+    ModelCatalog(configured, discoverable, discover, store, providerNames = config.providers.keySet.toSet)
 
 /** The model lists providers returned, kept in one JSON file (`~/.atc/model-lists.json`)
   * so that a session can name and describe listed models before fetching them

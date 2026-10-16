@@ -858,6 +858,27 @@ class ConfigSuite extends munit.FunSuite:
     assert(missing.getMessage.contains("open list their own"), missing.getMessage)
     assertEquals(asked(), List("open"))
 
+  test("a lookup never waits for a list, and a provider named in a reference keeps it to that provider"):
+    val withOff =
+      listing.copy(providers = listing.providers + ("off" -> ProviderConfig(Some("openai"), enabled = false)))
+    val asked = java.util.concurrent.ConcurrentLinkedQueue[String]()
+    val catalog = ModelCatalog.from(
+      withOff,
+      discover = Some: p =>
+        asked.add(p.provider)
+        listed(p, "small", "fixed/b", "off/c", "keyed/d")
+    )
+    // a bare id that no list has named yet is unknown, without fetching a list for it
+    intercept[IllegalArgumentException](catalog.find("small"))
+    assert(asked.isEmpty, asked.toString)
+    catalog.labels // the lists arrive
+    assertEquals(catalog.find("small").ref, "open/small")
+    assertEquals(catalog.find("open/fixed/b").ref, "open/fixed/b")
+    // these name models of the providers `fixed`, `off` and `keyed`, which have none of that name
+    for reference <- List("fixed/b", "off/c", "keyed/d") do
+      val e = intercept[IllegalArgumentException](catalog.find(reference))
+      assert(e.getMessage.contains("Unknown model"), e.getMessage)
+
   test("a failed listing is ignored and a provider/model-id reference is taken as given"):
     val (catalog, _) = listingCatalog(_ => throw RuntimeException("connection refused"))
     assertEquals(catalog.find("open/anything").modelId, "anything")

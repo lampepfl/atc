@@ -850,7 +850,10 @@ banner, and `models` waits for it at most 30 seconds (`ModelCatalog.ListWait`), 
 Code listing can take minutes; a provider whose fetch has not finished keeps its stored list
 until it does. Lookups never wait: they use this session's list when
 it has arrived, else the one `ModelListStore` kept (`~/.atc/model-lists.json`, reused only
-for the same provider name, api and url), else take `provider/model-id` as given. A model
+for the same provider name, api and url), else take `provider/model-id` as given. A bare id
+that no list has named yet is unknown. A reference that starts with the name of a configured
+provider, turned off or not, and `/` names a model of that provider only, never a listed id
+of another provider such as OpenRouter's `anthropic/...`. A model
 taken as given keeps its unknown context window until a later session finds it in the
 stored list. Configuration validation does not check `model` or `classifiedModel`. At the start,
 `Models.configured` resolves them, and one that names no model is ignored with a warning
