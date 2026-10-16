@@ -1265,6 +1265,12 @@ its details, and question alerts show the question.
 the status refreshes, on one line, writing only changes. The previous title is pushed on xterm's title
 stack (`CSI 22;0t`) at start and popped (`CSI 23;0t`) by `close`; terminals without the
 stack keep ATC's title until the shell sets its own.
+The same refresh sends the program status (OSC 7501, the Program Status Protocol) when it
+changes: `idle` at start, `working` with the footer's operation during a turn, `blocked` with
+`permission`, `question` or `auth` while a pop-up waits during one, then `done` or `error` with
+the turn's alert text, or `idle` after an interruption, until the next turn. `close` clears it.
+ATC sends it without querying for support, since terminals ignore an OSC they do not know, and
+does not wrap it for tmux, where the status would belong to the pane rather than the window.
 Terminal alerts are OSC 9, 99 (kitty) or 777 sequences, chosen from `TERM` and
 `TERM_PROGRAM` and wrapped for tmux passthrough; they are written as style text so they
 leave the line tracking alone. System alerts start `osascript`, a Base64-encoded PowerShell

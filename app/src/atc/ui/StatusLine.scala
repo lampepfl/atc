@@ -1,15 +1,21 @@
 package atc.ui
 
+import atc.agent.TurnOutcome
+
 import org.jline.terminal.{Size, Terminal}
 import org.jline.utils.{AttributedString, Status}
 
+import java.nio.charset.StandardCharsets.UTF_8
+import java.util.Base64
 import scala.jdk.CollectionConverters.*
 
-/** The footer (JLine `Status`) and the window title. The footer shows what the turn is
-  * doing, an unsent correction, or the keys a pop-up takes; between turns it shows the
-  * mode, model and directory. The title is `atc · <directory>`, marked while a turn runs
-  * (`●`) or a pop-up waits during one (`?`), so a tab that needs the user stands out. The
-  * terminal's own title is saved first (xterm's title stack) and restored by `close`.
+/** The footer (JLine `Status`), the window title and the program status. The footer shows
+  * what the turn is doing, an unsent correction, or the keys a pop-up takes; between turns
+  * it shows the mode, model and directory. The title is `atc · <directory>`, marked while a
+  * turn runs (`●`) or a pop-up waits during one (`?`), so a tab that needs the user stands
+  * out. The terminal's own title is saved first (xterm's title stack) and restored by
+  * `close`. The program status (OSC 7501) says the same to terminals that track it:
+  * `working`, `blocked` on a pop-up, then `done`, `error` or `idle` when the turn ends.
   *
   * Updates run with the screen's lock held and redraw only what changed. */
 private[ui] final class StatusLine(
@@ -26,6 +32,9 @@ private[ui] final class StatusLine(
   private var context = ""
   private var titleBase = "atc"
   private var lastTitle = ""
+  /** The program status between turns as state, kind and message: `idle` until a turn ends. */
+  private var resting = ("idle", "", "")
+  private var lastStatus = ("", "", "")
   @volatile private var closed = false
   @volatile private var turnStarted = 0L
   /** What the turn is doing ("reasoning", "running Scala"). */
@@ -34,6 +43,8 @@ private[ui] final class StatusLine(
   @volatile var draft = ""
   /** The keys the open menu or answer field takes; shown instead of everything else. */
   @volatile private var hint = ""
+  /** What the open pop-up waits for, as the program status `kind` and message. */
+  @volatile var waitingFor = ("question", "")
 
   footer.foreach: status =>
     status.setBorder(false)
@@ -78,13 +89,30 @@ private[ui] final class StatusLine(
     try body
     finally show(previous)
 
+  /** Redraw the window title and send the program status where they changed. */
   def refreshTitle(): Unit = if !plain && !closed then
-    val marker = if busy() && popupOpen() then "? " else if busy() then s"${g.bullet} " else ""
+    val waiting = busy() && popupOpen()
+    val marker = if waiting then "? " else if busy() then s"${g.bullet} " else ""
     val title = Ansi.sanitize(marker + titleBase).replace('\n', ' ').replace('\t', ' ')
-    if title != lastTitle then
+    val status =
+      if waiting then ("blocked", waitingFor._1, waitingFor._2)
+      else if busy() then ("working", "", operation)
+      else resting
+    if title != lastTitle || status != lastStatus then
+      if title != lastTitle then screen.writeStyle(s"${Ansi.Esc}]0;$title\u0007")
+      if status != lastStatus then screen.writeStyle(StatusLine.programStatus(status._1, status._2, status._3))
       lastTitle = title
-      screen.writeStyle(s"${Ansi.Esc}]0;$title\u0007")
+      lastStatus = status
       screen.flush()
+
+  /** Report how a turn ended until the next one starts: `done` with `summary` when it
+    * finished, `error` when it stopped otherwise, `idle` after an interruption or for
+    * work that is not a turn (`None`). */
+  def turnEnded(result: Option[(TurnOutcome, String)]): Unit =
+    resting = result match
+      case Some((TurnOutcome.Finished, summary)) => ("done", "", summary)
+      case Some((TurnOutcome.Interrupted, _)) | None => ("idle", "", "")
+      case Some((_, summary)) => ("error", "", summary)
 
   /** Redraw the title and the footer where they changed; the footer also after a resize,
     * at the size the screen measured when the terminal said it changed. */
@@ -121,14 +149,23 @@ private[ui] final class StatusLine(
       s"$frame ${operation.take((width / 2).max(20))}$elapsed$waiting ${g.dot} $context"
     else context
 
-  /** Restore the terminal's title and take the footer down; later updates draw nothing. */
+  /** Restore the terminal's title, clear the program status and take the footer down;
+    * later updates draw nothing. */
   def close(): Unit =
     closed = true
-    if !plain then screen.synchronized(screen.writeStyle(s"${Ansi.Esc}[23;0t"))
+    if !plain then screen.synchronized(screen.writeStyle(s"${Ansi.Esc}[23;0t${Ansi.Esc}]7501;state=clear\u0007"))
     screen.synchronized(screen.flush())
     footer.foreach(_.close())
 
 private[atc] object StatusLine:
+  /** A Program Status Protocol report (OSC 7501): `key=value` pairs, the message on one
+    * line and Base64-encoded. Terminals without the protocol ignore it. */
+  private[atc] def programStatus(state: String, kind: String, message: String): String =
+    val text = Base64.getEncoder.nn.encodeToString(Notifier.clean(message).getBytes(UTF_8)).nn
+    List("state" -> state, "kind" -> kind, "app" -> "atc", "msg" -> text)
+      .collect { case (key, value) if value.nonEmpty => s"$key=$value" }
+      .mkString(s"${Ansi.Esc}]7501;", ":", "\u0007")
+
   /** Draw the one-line footer and flush it. JLine's `Status.update` flushes the text itself
     * but leaves the closing synchronized-update sequence (`ESC[?2026l`) in the buffered
     * writer: a terminal honouring mode 2026 (xterm.js/VS Code, iTerm2, kitty, Ghostty, WezTerm)

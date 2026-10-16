@@ -103,8 +103,10 @@ private[ui] final class Alerts(
 
   def turnError(message: String): Unit = synchronized { error = message }
 
-  def turnEnded(stats: Tui.TurnStats): Unit =
-    schedule(synchronized(Alerts.turnText(stats, prose.toString, error)), turnDelayMillis)
+  /** What the ended turn said or why it stopped ([[Alerts.turnText]]). */
+  def turnText(stats: Tui.TurnStats): String = synchronized(Alerts.turnText(stats, prose.toString, error))
+
+  def turnEnded(stats: Tui.TurnStats): Unit = schedule(turnText(stats), turnDelayMillis)
 
   def close(): Unit =
     take()

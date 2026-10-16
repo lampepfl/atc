@@ -210,6 +210,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
         lines.zipWithIndex.foreach: (line, index) =>
           write((if index == 0 then "" else Indent) + styled(line, Dim) + "\n")
       blankLine()
+      statusLine.turnEnded(stats.map(s => s.outcome -> alerts.turnText(s)))
       statusLine.refresh()
     keys.stop() // outside the lock: the key thread may be waiting for it
     stats.foreach(alerts.turnEnded)
@@ -402,13 +403,17 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   private val popupLock = ReentrantLock()
 
   /** A pop-up is a block of its own: a pending TODO panel is drawn first, then
-    * `body` (which reads the terminal), then the blank line that ends the block. */
-  private def popupBlock[T](body: => T): T =
+    * `body` (which reads the terminal), then the blank line that ends the block.
+    * During a turn the program status is `blocked` on `kind` (`permission`,
+    * `question` or `auth`), with `message` saying what the pop-up asks. */
+  private def popupBlock[T](kind: String, message: String)(body: => T): T =
     popupLock.lockInterruptibly()
     try
       keys.withPaused:
+        val outer = statusLine.waitingFor
         frame:
           popupDepth += 1
+          statusLine.waitingFor = (kind, message)
           statusLine.refreshTitle()
           tool.endOutput()
           tool.hold()
@@ -420,6 +425,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
             alerts.touch()
             blankLine()
             popupDepth -= 1
+            statusLine.waitingFor = outer
             statusLine.refreshTitle()
             if popupDepth == 0 then
               tool.release()
@@ -462,28 +468,33 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   private def chooseIndex(title: String, options: List[String], initial: Int = 0): Option[Int] =
     if plain || options.isEmpty then None
-    else popupBlock(dialogs.menuIndex(Ansi.sanitize(title), options.map(Ansi.sanitize), escape = "back", initial))
+    else
+      popupBlock("question", title):
+        dialogs.menuIndex(Ansi.sanitize(title), options.map(Ansi.sanitize), escape = "back", initial)
 
   /** A multi-choice pop-up with the `checked` options ticked at first: the
     * indices ticked when confirmed, `None` when left with Esc or without menus. */
   def chooseMany(title: String, options: List[String], checked: Set[Int]): Option[Set[Int]] =
     if plain || options.isEmpty then None
     else
-      popupBlock(dialogs.checkboxIndices(Ansi.sanitize(title), options.map(Ansi.sanitize), checked, escape = "back"))
-        .map(_.toSet)
+      val ticked = popupBlock("question", title):
+        dialogs.checkboxIndices(Ansi.sanitize(title), options.map(Ansi.sanitize), checked, escape = "back")
+      ticked.map(_.toSet)
 
   def askPermission(req: PermissionRequest): Decision =
-    statusLine.withOperation("waiting for permission")(popupBlock(dialogs.permission(req)))
+    statusLine.withOperation("waiting for permission"):
+      popupBlock("permission", s"${req.title} (${req.details.mkString(", ")})")(dialogs.permission(req))
 
   /** A yes/no question from the app itself (see [[Dialogs.confirm]]). */
-  def confirm(question: String): Boolean = popupBlock(dialogs.confirm(question))
+  def confirm(question: String): Boolean = popupBlock("question", question)(dialogs.confirm(question))
 
   /** Ask for a secret such as an API key (see [[Dialogs.secret]]). */
-  def askSecret(question: String): Option[String] = popupBlock(dialogs.secret(question))
+  def askSecret(question: String): Option[String] = popupBlock("auth", question)(dialogs.secret(question))
 
   /** Ask the user a question on behalf of the agent (see [[Dialogs.answer]]). */
   def askUser(question: String, options: List[String], multiple: Boolean): Option[String] =
-    statusLine.withOperation("waiting for your answer")(popupBlock(dialogs.answer(question, options, multiple)))
+    statusLine.withOperation("waiting for your answer"):
+      popupBlock("question", question)(dialogs.answer(question, options, multiple))
 
   // ── TODO panel ────────────────────────────────────────────────────
 

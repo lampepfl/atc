@@ -506,7 +506,8 @@ to a summary (`/output <n>` shows one in full), and Ctrl-O switches to writing c
 and reasoning out in full, Shift-Tab cycles the mode, and Shift+Enter adds a line. While the
 agent is working, type a correction and press Enter: it reaches the agent before its next
 tool call. Sessions are saved when you leave, and the next start in the same directory
-offers to resume. ATC notifies you when a turn ends or the agent waits for you.
+offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
+reports whether it is working, waiting or done to terminals that track program status.
 
 Without a terminal (`-p` in a pipe) nothing asks: a permission the configuration does not
 grant fails instead of waiting, so use `--approve-all` only in a trusted setup.
