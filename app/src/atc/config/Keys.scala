@@ -1,6 +1,7 @@
 package atc.config
 
 import atc.{Debug, ProcessEnvironment, TextFiles}
+import atc.ui.Ansi
 
 import java.io.StringReader
 import java.nio.file.{Files, Path}
@@ -99,7 +100,9 @@ object KeyBindings:
     val present = paths.filter(Files.isRegularFile(_)).distinctBy(_.toAbsolutePath.normalize)
     present.foreach: p =>
       if sharedReadable(p) then
-        System.err.println(s"atc: warning: $p can be read by other users and holds API keys; chmod 600 it")
+        System.err.println(
+          Ansi.sanitize(s"atc: warning: $p can be read by other users and holds API keys; chmod 600 it")
+        )
     KeyBindings(present.map(p => p -> read(p)))
 
   /** Whether `p` is readable by its group or by other users. Returns `false`

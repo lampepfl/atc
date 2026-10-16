@@ -325,6 +325,23 @@ class ConfigSuite extends munit.FunSuite:
     // the blank one is not listed
     assertEquals(keys.names, List("COLON_KEY", "DEEPSEEK_API_KEY", "ESCAPED_KEY", "SPACED_KEY"))
 
+  test("the warning about a keys file other users can read shows its path without terminal controls"):
+    assume(!atc.platform.Platform.isWindows, "POSIX permissions")
+    val dir = Files.createDirectories(Files.createTempDirectory("atc-keys-shared").nn.resolve("a\u001b]0;x\u0007b")).nn
+    val file = dir.resolve(Config.KeysFile).nn
+    Files.writeString(file, "SHARED_KEY=value\n")
+    Files.setPosixFilePermissions(file, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"))
+    val captured = java.io.ByteArrayOutputStream()
+    val stderr = System.err
+    System.setErr(java.io.PrintStream(captured, true, "UTF-8"))
+    val keys =
+      try KeyBindings.load(List(file))
+      finally System.setErr(stderr)
+    assertEquals(keys.get("SHARED_KEY"), Some("value"))
+    val warning = captured.toString("UTF-8")
+    assert(warning.contains("a]0;xb") && warning.contains("can be read by other users"), warning)
+    assert(!warning.exists(c => c == '\u001b' || c == '\u0007'), warning)
+
   test("a ${VAR} in a provider's key is resolved through the bindings, then the environment"):
     val dir = Files.createTempDirectory("atc-keys-provider").nn
     val file = dir.resolve(Config.KeysFile).nn
