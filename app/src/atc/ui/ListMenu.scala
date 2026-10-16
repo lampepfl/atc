@@ -164,13 +164,15 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
       val outcome = status.withHint(keys):
         alerts.withFocusReports:
           val saved = screen.terminal.enterRawMode()
-          screen.frame(screen.writeStyle(Ansi.Esc + "[?25l"))
+          // Bracketed paste on, so `read` can tell a pasted newline from Enter. Between turns
+          // nothing else has it on, and an answer read inside a pop-up turns it off.
+          screen.frame(screen.writeStyle(Ansi.Esc + "[?25l" + Ansi.Esc + "[?2004h"))
           try
             draw()
             read(state, () => page, draw)
           finally
             screen.terminal.setAttributes(saved)
-            screen.frame(screen.writeStyle(Ansi.Esc + "[?25h"))
+            screen.frame(screen.writeStyle(Ansi.Esc + "[?2004l" + Ansi.Esc + "[?25h"))
       screen.frame:
         outcome match
           case MenuState.Outcome.Chosen(items) =>

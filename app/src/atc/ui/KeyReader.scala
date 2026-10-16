@@ -29,12 +29,15 @@ private[ui] final class KeyReader(
   private var pauseDepth = 0
   private var reading = false
   private val typeAhead = StringBuilder()
+  /** Inside a bracketed paste. The key thread reads it; a pause clears it under pauseLock. */
+  private var pasting = false
 
   def start(): Unit = if !plain && thread.isEmpty then
     saved = Some(terminal.enterRawMode())
     alerts.reportFocus(true)
     out.print(Ansi.Esc + "[?2004h")
     out.flush()
+    pasting = false
     running = true
     val t = Thread(() => loop(), "atc-keys")
     t.setDaemon(true)
@@ -66,6 +69,8 @@ private[ui] final class KeyReader(
     finally
       pauseLock.synchronized:
         pauseDepth -= 1
+        // The pop-up read what followed, including the end of a paste the key thread was in.
+        pasting = false
         if pauseDepth == 0 && running then
           alerts.reportFocus(true) // an answer read by the line reader turned it off
           out.print(Ansi.Esc + "[?2004h")
@@ -81,7 +86,6 @@ private[ui] final class KeyReader(
   private def loop(): Unit =
     val in: NonBlockingReader = terminal.reader()
     var skipLf = false // a CR already added the newline of a CRLF
-    var pasting = false
     def submit(): Unit =
       val text = typeAhead.toString.trim
       if text.nonEmpty then

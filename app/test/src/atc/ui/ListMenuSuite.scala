@@ -101,15 +101,20 @@ class ListMenuSuite extends munit.FunSuite:
     assertEquals(under.head, "    · 1 of 26 ticked")
     assert(under.drop(1).filter(_.nonEmpty).forall(_.startsWith("    ")), under)
 
-  /** Run a two-row menu on a terminal that sends `input` after `delayMillis`, then ends. */
-  private def choose(input: String, delayMillis: Long = 0): Option[List[Int]] =
+  /** Run a two-row menu on a terminal that sends `input` after `delayMillis`, then ends;
+    * what the menu writes goes to `out`. */
+  private def choose(
+    input: String,
+    delayMillis: Long = 0,
+    out: ByteArrayOutputStream = ByteArrayOutputStream(),
+  ): Option[List[Int]] =
     val bytes = ByteArrayInputStream(input.getBytes(UTF_8))
     val source = new java.io.InputStream:
       private var waited = false
       override def read(): Int =
         if !waited then { Thread.sleep(delayMillis); waited = true }
         bytes.read()
-    val terminal = DumbTerminal("test", "xterm-256color", source, ByteArrayOutputStream(), UTF_8)
+    val terminal = DumbTerminal("test", "xterm-256color", source, out, UTF_8)
     terminal.setSize(Size.of(80, 24): Sized)
     val screen = Screen(terminal, plain = false, Glyphs.unicode)
     val alerts = Alerts(terminal, plain = false, _ => ())
@@ -126,3 +131,11 @@ class ListMenuSuite extends munit.FunSuite:
       "keys after a paste count"
     )
     assertEquals(choose("\r", delayMillis = 500), Some(List(0)))
+
+  test("a menu turns bracketed paste on while it reads, and off when it ends"):
+    val out = ByteArrayOutputStream()
+    assertEquals(choose("\r", delayMillis = 500, out = out), Some(List(0)))
+    val text = out.toString(UTF_8)
+    val on = text.indexOf("\u001b[?2004h")
+    assert(on >= 0 && on < text.indexOf("Allow once"), text.replace("\u001b", "ESC"))
+    assert(text.indexOf("\u001b[?2004l", on) > on, text.replace("\u001b", "ESC"))

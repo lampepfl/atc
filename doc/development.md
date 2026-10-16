@@ -1211,7 +1211,9 @@ move by a page or to the ends. A menu opens on the value in use (`/model`, `/eff
 `/classifiedmodel`) or, in a `menuLoop`, on the row last chosen. When it ends, one line says
 what was chosen; leaving it leaves nothing. The footer shows its keys, or the menu's last row
 when there is no footer. Menus read focus reports, and a resize redraws them at the new size.
-Nothing inside a bracketed paste is taken as a key, and Enter counts only 300 ms after a menu
+A menu turns bracketed paste on while it reads and takes nothing inside a paste as a key; the
+turn's key reader leaves paste mode after a pop-up, which may have read the paste's end.
+Enter counts only 300 ms after a menu
 opens (`ListMenu.EnterDelayNanos`): a newline typed or pasted just before a permission request
 must not choose its first row, Allow once.
 
