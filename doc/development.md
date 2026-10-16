@@ -567,76 +567,82 @@ Text helpers use UTF-8. `TextFiles` accepts LF, CRLF and CR and preserves the fi
 style and final-newline convention during line edits. Listings return paths relative to the
 working directory when possible; API paths use `/` separators on every platform.
 
-`cat` streams bounded line prefixes and prints line numbers. `sed` counts and rewrites in
-one pass and rejects zero matches. `replaceLines` returns the replaced text; callers must
-account for line-number changes between edits. `copy` and `move` stream data, check both
-paths and avoid truncating a file copied onto itself or a hard-link alias. `move` checks
-source write permission before copying but is not atomic.
+`sed` counts and rewrites in one pass and rejects zero matches. `replaceLines` returns the
+replaced text; callers must account for line-number changes between edits. `copy` and `move`
+stream data, check both paths and avoid truncating a file copied onto itself or a hard-link
+alias. `move` checks source write permission before copying but is not atomic.
+`replaceExact` requires one non-empty literal occurrence and validates it before any write;
+it does not interpret regex or replacement escapes.
 
-`replaceExact` requires one non-empty literal occurrence and validates it before any write.
-It does not interpret regex or replacement escapes. `readRange` stops at the requested
-line boundary, with caps of 1000 returned lines, 2000 characters per line and two million
-scanned characters. Both `cat` forms show at most 400 lines and suggest a continuation
-when more remain. The range form also stops at `to` or two million scanned characters;
-it reports a read limit separately from end of file.
+`readRange` returns at most 1000 lines and `cat` prints at most 400 numbered lines; both
+stream the file, keep at most 2000 characters of a line and mark a cut line with
+` ... [+N chars]`. `readRange` and the range form of `cat` stop after scanning two million
+characters and then report a read limit, distinct from the end of the file. Plain `cat`
+scans up to 64 million characters to count the lines after the window, and both `cat` forms
+name the call that shows the next lines.
 
 `search` uses lazy descendant traversal and `FileEntryImpl.scanLines`, which closes its
 stream when the callback stops or a character budget is reached. `SearchOptions` bounds
 matched rows, scanned files, lines per file, line prefixes and characters read per file.
-`limited` means a cap was reached, not that another match is known to exist. Regex matching
-examines retained prefixes only. Directory listings still use the existing visibility and
-sorting rules; traversal does not follow directory symlinks or enter classified trees.
+Regex matching examines retained prefixes only. `limited` says the search was not
+exhaustive: a cap left a line, file or match unexamined or unreported. A budget that runs
+out exactly at the end of the input leaves it `false`. Listings apply the gitignore
+visibility rules and sort their entries; traversal does not follow directory symlinks or
+enter classified trees.
 
 Successful unclassified file operations report `FileChange` through `HostOutput`. Snapshots
 cover files of at most 64000 bytes; binary and larger files get a summary without a text
 preview. The preview uses common line prefixes and suffixes and one replacement block,
-capped at 40 lines. It is a compact explanation, not a general diff or undo engine.
-Classified writes and deletions never enter this preview path. External-command changes are
-not captured by file API callbacks.
+capped at 40 lines. Classified writes and deletions never enter this preview path, and
+changes made by external commands are not captured.
 
 `CommandLine` parses quoted arguments, pipelines, `<`, `>`, `>>` and `2>&1`. It rejects shell
 control operators and does not expand variables or globs. Explicit argument sequences are
 passed verbatim. Each pipeline stage and redirected file is checked separately; a redirection
 must be written on the stage it applies to (`<` on the first command, `>`/`>>` on the last),
-anything else is refused like the other shell forms rather than silently moved.
-`WindowsExecutable` resolves bare commands from absolute PATH entries and validates batch
-arguments before launch. Commands do not inherit the variables that hold provider keys
-(`Configuration.keyVariables`: the `${VAR}`s of `key` and `headers`, `keyEnv`, and the
-secrets the SDK reads from the environment for a provider without a `url`, whatever spelling
-of its `api` it uses), since a command that prints its environment would hand them to the
-model. Commands lose the SDK variables even when a key is configured, because a key whose
-variable is unset lets the SDK read them.
+and anything else is refused like the other shell forms rather than moved. A command needs
+read access to the directory it runs in and to an input file, and write access to an output
+file, and none of them may be classified. `WindowsExecutable` resolves bare commands from
+absolute PATH entries and validates batch arguments before launch.
 
-`Processes` drains stdout and stderr concurrently into bounded buffers. Foreground commands
-retain prefixes; spawned processes retain recent output. Results use the rightmost non-zero
-pipeline exit code. `readUntil` consumes through a regex match; on timeout it throws and
-keeps output unread. `waitFor` returns `None` on timeout. Process termination includes
+Commands do not inherit the variables that hold provider keys (`Configuration.keyVariables`:
+the `${VAR}`s of `key` and `headers`, `keyEnv`, and the secrets the SDK reads from the
+environment for a provider without a `url`, whatever spelling of its `api` it uses), since a
+command that prints its environment would hand them to the model. They lose the SDK
+variables even when a key is configured, because a key whose variable is unset lets the SDK
+read them. They also lose the `ATC_INTERNAL_*` variables in which the Windows launchers pass
+the original command line.
+
+`Processes` drains stdout and stderr concurrently into buffers of at most 8 Mi characters
+each; `TextSink` decodes UTF-8 and BOM-marked UTF-16 output incrementally. Foreground
+commands retain prefixes; spawned processes retain recent output. Results use the rightmost
+non-zero pipeline exit code. `readUntil` consumes through a regex match; on timeout it throws
+and keeps output unread. `waitFor` returns `None` on timeout. Process termination includes
 pipeline stages and descendants. Shutdown kills registered processes.
 
-`parallel(tasks)` runs the tasks (a `Seq[() => A]`) on a pool of at most eight daemon
-threads created for that call. A nested call, made from one of those threads, runs its tasks
-one after another on that thread: a pool per level would multiply the threads of a
-recursion, and a pool shared by the levels could starve them. The results come back in
-task order once every task has ended; a failed task does not cut the others short, since
-their effects must not outlive the snippet, and the first failure in task order is rethrown, with a fatal throwable winning over ordinary exceptions so that the
-REPL's stop signal reaches the evaluation thread. The stop flag is checked by every
-instrumented REPL class on every thread, so an interrupt or timeout stops busy tasks too;
-for tasks blocked in a host call, `parallel` interrupts its workers when the calling thread
-is interrupted and reports the interruption. The signature matters: the tasks are declared
-`Seq[() ->{C} A]` with a capture-set parameter `C^`, because a function inside a
-`Seq[() => A]` is *boxed*, and a boxed closure's captures are charged only when it is
-unboxed, which happens inside the trusted host. With the plain signature,
-`classify(s).map(s => parallel(List(() => exec("echo", List(s)))))` compiled and ran the
-command on the secret (`CapabilitySuite` keeps that snippet as a regression test); the
-capture-set parameter makes the checker charge the caller with `C`, so `Classified.map`
-keeps its rules and pure tasks still compile inside it. The TUI's output methods are
-already synchronized, `Policy`, the process registry and the TODO list lock their mutable
-state, and `Tui.popupBlock` takes a lock so that questions and permission prompts from
-several tasks reach the terminal one at a time (a waiter interrupted meanwhile never shows
-its pop-up).
+`parallel(tasks)` runs the tasks on a pool of at most eight daemon threads created for that
+call. A nested call, made from one of those threads, runs its tasks one after another on
+that thread, because a pool per level would multiply the threads of a recursion and a pool
+shared by the levels could starve them. The results come back in task order once every task
+has ended. A failed task does not cut the others short, since their effects must not outlive
+the snippet; the first failure in task order is rethrown, and a fatal throwable wins over
+ordinary exceptions so that the REPL's stop signal reaches the evaluation thread. Every
+instrumented REPL class checks the stop flag on every thread, so an interrupt or timeout
+stops busy tasks too, and interrupting the calling thread interrupts workers blocked in a
+host call. Shared host state is thread-safe: the TUI's output methods are synchronized,
+`Policy`, the process registry and the TODO list lock their mutable state, and
+`Tui.popupBlock` shows questions and permission prompts from several tasks one at a time.
 
-HTTP operations validate the scheme, host and headers (secret header names too; only their values stay inside the classified boundary), do not follow redirects, and cap
-response bodies at 8 MiB. `httpGet` and `httpPost` throw for status codes of 400 or higher;
+The tasks are declared `Seq[() ->{C} A]` with a capture-set parameter `C^`. A function inside
+a `Seq` is boxed, and the checker charges a boxed closure's captures only where it is
+unboxed, which is inside the trusted host; with `Seq[() => A]`, a task could run `exec` on a
+secret inside `Classified.map`. The parameter charges the caller with `C`, so
+`Classified.map` keeps its rules and pure tasks still compile inside it. `CapabilitySuite`
+covers both cases.
+
+HTTP operations validate the scheme, host and headers (secret header names too; only their
+values stay inside the classified boundary), do not follow redirects, and cap response
+bodies at 8 MiB. `httpGet` and `httpPost` throw for status codes of 400 or higher;
 `httpRequest` returns raw status and body. Classified request handling retains subsequent
 transport and response failures within `Classified`.
 
