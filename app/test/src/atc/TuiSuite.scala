@@ -200,25 +200,6 @@ class TuiSuite extends munit.FunSuite:
     val body = "hel...[truncated]"
     assertEquals(ToolBlock.withoutPrinted(body, "hello world\n"), body)
 
-  // ── row arithmetic behind the output fold ───────────────────────
-
-  test("place: a short line is one row, whatever the gutter"):
-    assertEquals(Screen.place(0, "hello\n", 80, 4), (rows = 1, column = 0))
-    assertEquals(Screen.place(0, "\n", 80, 4), (rows = 1, column = 0))
-
-  test("place: a long line costs the rows it wraps over"):
-    // 4 columns of gutter + 4000 characters = 4004 / 80, rounded up
-    assertEquals(Screen.place(0, "x" * 4000 + "\n", 80, 4).rows, 51)
-    assertEquals(Screen.place(0, "y" * 300 + "\n", 80, 4).rows, 4)
-
-  test("place: text without a newline keeps the column, so later chunks add rows"):
-    val first = Screen.place(0, "chunk ", 80, 4)
-    assertEquals(first, (rows = 1, column = 10))
-    // continuing the same row adds nothing until it wraps
-    assertEquals(Screen.place(first.column, "more ", 80, 4), (rows = 0, column = 15))
-    assertEquals(Screen.place(70, "z" * 90, 80, 4), (rows = 1, column = 80))
-    assertEquals(Screen.place(76, "abcd", 80, 4), (rows = 0, column = 80)) // exactly fills the row
-
   test("count: short forms, without a pointless .0"):
     assertEquals(Format.count(999), "999")
     assertEquals(Format.count(1234), "1.2k")
@@ -276,11 +257,10 @@ class TuiSuite extends munit.FunSuite:
     assertEquals(Format.duration(65.4), "1 min 5 s")
     assertEquals(Format.duration(60.0), "1 min 0 s")
 
-  test("place counts wide (CJK) characters as two columns"):
+  test("displayWidth counts wide (CJK) characters as two columns"):
     assertEquals(Screen.displayWidth("abc"), 3)
     assertEquals(Screen.displayWidth("中文"), 4)
     assertEquals(Screen.displayWidth("\u001b[36m$ git status\u001b[0m"), 12) // styles take no cells
-    assertEquals(Screen.place(0, "中" * 40 + "\n", 80, 4).rows, 2) // 4 + 80 columns: wraps
 
   test("TailBuffer: the tail is the last n lines; a trailing newline is not a line"):
     val b = TailBuffer(1000)

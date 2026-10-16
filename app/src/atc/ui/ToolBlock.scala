@@ -64,6 +64,9 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
     liveTruncated = false
     fileChanges.clear()
     output.clear()
+    // While the block is open, `compact == !plain && !expanded()`: Ctrl-O flips `expanded` and
+    // calls `reattach` in one frame. So `end` writes the result out only on a plain terminal
+    // or in the expanded view.
     compact = !plain && !expanded()
     if compact then
       headed = true
@@ -219,9 +222,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
 
   /** Close the block. The compact view replaces it with its summary; otherwise what
     * the REPL produced besides the agent's own prints (those were shown live), meaning
-    * diagnostics, echoed values and exceptions, follows, then the verdict. Long bodies
-    * are cut in the middle (unless expanded) so both the first diagnostics and the tail
-    * stay visible. */
+    * diagnostics, echoed values and exceptions, follows, then the verdict. */
   def end(r: ExecutionResult, millis: Long): Unit =
     val liveText = liveCaptured.toString + (if liveTruncated then "\n[retained live output limit reached]" else "")
     val record = history.add(currentCode, r, millis, liveText, fileChanges.toList)
@@ -245,19 +246,12 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       // before display. The subtraction above runs on the raw text, before this.
       val cleaned = lines.map(Ansi.sanitize).flatMap: line =>
         if plain then List(line) else TextLayout.wrap(line, width - GutterWidth - 1, GutterWidth)
-      val max = ToolBlock.MaxPanelLines
-      val kept =
-        if cleaned.length <= max || plain || expanded() then cleaned
-        else
-          cleaned.take(max * 2 / 3) ++
-            List(s"${g.ellipsis} ${cleaned.length - max} lines omitted ${g.dot} /output $id") ++
-            cleaned.takeRight(max / 3)
       if r.success then
         write(section("result", Dim))
-        kept.foreach(l => write(gutter(Dim) + styled(l, Dim) + "\n"))
+        cleaned.foreach(l => write(gutter(Dim) + styled(l, Dim) + "\n"))
       else
         write(section("error", Red))
-        kept.foreach(l => write(gutter(Red) + l + "\n"))
+        cleaned.foreach(l => write(gutter(Red) + l + "\n"))
     changeRows.foreach(row => write(row + "\n"))
     val verdict =
       if r.success then styled(s"${g.end} ok ${millis} ms", Green) else styled(s"${g.end} failed ${millis} ms", Red)
@@ -304,8 +298,6 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       shownFrom = output.lineCount
 
 private[atc] object ToolBlock:
-  /** Lines of a tool-result section before it is cut in the middle. */
-  private val MaxPanelLines = 30
   /** Rows of code and of output tail a running block shows in the compact view. */
   private val CodePreviewRows = 8
   private val OutputTailRows = 10

@@ -1357,8 +1357,7 @@ breaks. Rows written after a gutter or indent pass its width as `origin` to `Tex
 and `Screen.breakLines`, since the terminal counts tab stops from column 0, not from the
 gutter. Help and banner fields retain aligned continuation lines; when their value column
 would be too narrow, values move below labels. Tool code, diagnostics, permission details
-and TODOs use the same wrapping rules. Diagnostic folding counts the resulting display
-rows, so a long first error remains readable and `/output` exposes the complete result.
+and TODOs use the same wrapping rules.
 
 Markdown tables retain their natural columns when they fit. Wider tables cap column widths
 and wrap individual cells. A table with three or more columns switches to labeled records

@@ -210,20 +210,6 @@ object Screen:
     if removed > 1 then update.append(s"${Ansi.Esc}[${removed - 1}A")
     update.toString
 
-  /** Where a chunk of text lands on screen: the number of terminal rows it
-    * adds to a section whose last row already holds `column` characters, and
-    * the column it ends at (0 when it ended the line). A fresh row starts with
-    * a gutter, hence `indent`; a line always takes at least one row. */
-  def place(column: Int, text: String, width: Int, indent: Int): (rows: Int, column: Int) =
-    val body = text.stripSuffix("\n")
-    val start = if column == 0 then indent else column
-    val end = start + displayWidth(body)
-    val rows = math.max(1, (end + width - 1) / width)
-    (
-      rows = if column == 0 then rows else rows - 1, // the row we started on was already counted
-      column = if text.endsWith("\n") then 0 else { val c = end % width; if c == 0 then width else c },
-    )
-
   /** Width in terminal cells of one code point placed at column `col`: a tab
     * advances to the next multiple of 8, wide (CJK) code points count 2, other
     * controls 0. `String.length` counts UTF-16 units and undercounts all of these,
