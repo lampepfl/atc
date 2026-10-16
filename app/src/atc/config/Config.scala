@@ -263,6 +263,9 @@ object Config:
   /** The name of the key bindings file, in `.atc` beside a `config.json`. */
   val KeysFile = "keys.properties"
 
+  /** Whether `a` and `b` name the same file, through links or not. Neither needs to exist. */
+  def samePath(a: Path, b: Path): Boolean = PlatformPath.canonical(a) == PlatformPath.canonical(b)
+
   /** The project a directory belongs to: the nearest ancestor of `from`
     * (itself included) whose `.atc` holds a `config.json` or a `keys.properties`. A
     * project config governs the folder its `.atc` sits in, so running atc in a
@@ -300,12 +303,12 @@ object Config:
     val untrusted = !trustProject && ProjectTrust.pending(cwd, global.getParent.nn).isDefined
     val candidates =
       List(Origin.Global -> global) ++ root.map(Origin.Project -> projectPath(_)) ++ explicit.map(Origin.Explicit -> _)
-    // A path named twice is read once, in the first role it appears in. That
-    // keeps `~/.atc/config.json` a granting layer when atc runs in the home
+    // A file named twice, through links or not, is read once, in the first role it appears in.
+    // That keeps `~/.atc/config.json` a granting layer when atc runs in the home
     // directory, and keeps `-c ./.atc/config.json` a narrowing one.
     val layers = candidates
       .filter((_, p) => Files.isRegularFile(p))
-      .distinctBy((_, p) => p.toAbsolutePath.normalize)
+      .distinctBy((_, p) => PlatformPath.canonical(p))
       .map((origin, path) => ConfigLayer.read(origin, path))
       .map(layer => if untrusted && layer.origin == Origin.Project then ProjectTrust.withoutGrants(layer) else layer)
     val bundled = Option.when(bundledGlobal && !layers.exists(_.origin == Origin.Global))(ConfigLayer.bundled)

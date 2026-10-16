@@ -627,8 +627,9 @@ transport and response failures within `Classified`.
 ## Configuration semantics
 
 Layers load in this order: global, nearest project, explicit `-c` file. A project is the
-nearest ancestor containing `.atc/config.json` or `.atc/keys.properties`. Duplicate file
-paths retain their first role. Project rules are anchored to the directory containing
+nearest ancestor containing `.atc/config.json` or `.atc/keys.properties`. A file named
+twice, compared by canonical path so that a link to it counts as the same file, retains its
+first role. Project rules are anchored to the directory containing
 `.atc` and grant access only within it; their restrictions apply wherever they match.
 
 | Setting | Merge rule |

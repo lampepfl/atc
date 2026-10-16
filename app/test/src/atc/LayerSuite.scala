@@ -534,6 +534,31 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(ProjectTrust.pending(home, globalPath.getParent.nn), None, "the user's own config needs no trust")
     assertEquals(loaded.rules.map(_.base), List(None)) // granting, not anchored to a project
 
+  test("a file named twice through a symbolic link is still read once, in its first role"):
+    val home = Files.createTempDirectory("atc-home-real").nn.toRealPath().nn
+    val linkParent = Files.createTempDirectory("atc-home-link").nn.toRealPath().nn
+    val linkedHome = linkParent.resolve("home").nn
+    assume(TestEnv.trySymbolicLink(linkedHome, home), "symbolic links are unavailable for this account")
+    Files.createDirectories(home.resolve(".atc"))
+    Files.writeString(
+      home.resolve(".atc/config.json"),
+      """{ "files": [ { "path": ".", "access": "write" } ], "commands": ["make"],
+           "providers": { "p": { "api": "echo", "models": { "m": {} } } } }"""
+    )
+    // the home directory reached through a link, while the working directory is the real one
+    val global = linkedHome.resolve(".atc/config.json").nn
+    val loaded = Config.load(home, None, global)
+    assertEquals(loaded.layers.map(_.origin), List(Origin.Global))
+    assertEquals(loaded.settings.commands, List("make"))
+    assertEquals(ProjectTrust.pending(home, global.getParent.nn), None)
+    // a `-c` naming the project config through a link keeps it narrowing
+    val w = World(project = """{ "commands": ["rm *"] }""")
+    val linkedProject = linkParent.resolve("project").nn
+    assume(TestEnv.trySymbolicLink(linkedProject, w.cwd), "symbolic links are unavailable for this account")
+    val again = Config.load(w.cwd, Some(Config.projectPath(linkedProject)), w.globalPath)
+    assertEquals(again.layers.map(_.origin), List(Origin.Global, Origin.Project))
+    assertEquals(again.settings.commands, Nil, "the untrusted project grants no commands")
+
   // ── keys ────────────────────────────────────────────────────────
 
   /** A world with the two `keys` files, and a provider whose key is a

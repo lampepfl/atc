@@ -46,8 +46,7 @@ object ProjectTrust:
     * when it has none or they are trusted. In the home directory the "project" is the global
     * config itself, which is the user's own. */
   def pending(cwd: Path, atcDir: Path): Option[Pending] =
-    val global = atcDir.toAbsolutePath.nn.normalize
-    Config.projectRoot(cwd).filterNot(_.resolve(".atc").toAbsolutePath.nn.normalize == global).flatMap: root =>
+    Config.projectRoot(cwd).filterNot(root => Config.samePath(root.resolve(".atc").nn, atcDir)).flatMap: root =>
       val grants = of(root)
       val recorded = read(atcDir).get(key(root))
       Option.when(!grants.isEmpty && !recorded.contains(grants.fingerprint))(
