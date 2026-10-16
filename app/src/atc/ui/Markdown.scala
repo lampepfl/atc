@@ -277,21 +277,21 @@ class MarkdownStream(
     table.clear()
     val aligns = rows(1).map(alignmentOf)
     val (header, body) = (rows.head, rows.drop(2))
-    val columns = (header :: body).map(_.length).max
-    val natural = (0 until columns).map(c => (header :: body).map(r => visibleLength(r.lift(c).getOrElse(""))).max)
-    val available = this.columns().max(10) - (columns - 1) * 3
+    val count = (header :: body).map(_.length).max
+    val natural = (0 until count).map(c => (header :: body).map(r => visibleLength(r.lift(c).getOrElse(""))).max)
+    val available = columns().max(10) - (count - 1) * 3
     val minimum = natural.map(_.min(12))
     def renderCell(text: String, isHeader: Boolean): String =
       lineStyle = if isHeader then List(Bold) else Nil
       val rendered = current() + spans(text) + Reset
       bold = false; code = false; lineStyle = Nil
       rendered
-    val cramped = natural.sum > available && columns >= 3 && available / columns < 24
+    val cramped = natural.sum > available && count >= 3 && available / count < 24
     if minimum.sum > available || cramped then
       // Too narrow for a grid: each row becomes a record of labeled fields.
       val records = body.map: row =>
         val fields = header.zipAll(row, "", "").map((label, text) => renderCell(label, true) -> renderCell(text, false))
-        TextLayout.fields(fields, this.columns()).mkString("\n") + "\n"
+        TextLayout.fields(fields, columns()).mkString("\n") + "\n"
       records.mkString("\n")
     else
       // Find a common column cap, allowing short columns to leave room for longer text.
@@ -302,13 +302,13 @@ class MarkdownStream(
         if natural.indices.map(c => natural(c).min(mid).max(minimum(c))).sum <= available then low = mid
         else high = mid - 1
       val widths = natural.indices.map(c => natural(c).min(low).max(minimum(c)))
-      def edge(c: Int): (String, String) = (if c == 0 then "" else " ", if c == columns - 1 then "" else " ")
+      def edge(c: Int): (String, String) = (if c == 0 then "" else " ", if c == count - 1 then "" else " ")
       val bar = Reset + sgr(Dim) + glyphs.bar + Reset
       def draw(row: List[String], isHeader: Boolean): String =
-        val cells = (0 until columns).map: c =>
+        val cells = (0 until count).map: c =>
           TextLayout.wrap(renderCell(row.lift(c).getOrElse(""), isHeader), widths(c))
         (0 until cells.map(_.size).max).map { line =>
-          (0 until columns).map { c =>
+          (0 until count).map { c =>
             val text = cells(c).lift(line).getOrElse("")
             val padding = (widths(c) - Screen.displayWidth(text)).max(0)
             val (left, right) = aligns.lift(c).getOrElse(Align.Left) match
@@ -316,10 +316,10 @@ class MarkdownStream(
               case Align.Right => (padding, 0)
               case Align.Center => (padding / 2, padding - padding / 2)
             val (before, after) = edge(c)
-            before + " " * left + text + " " * (if c == columns - 1 then 0 else right) + after
+            before + " " * left + text + " " * (if c == count - 1 then 0 else right) + after
           }.mkString(bar) + "\n"
         }.mkString
-      val rule = sgr(Dim) + (0 until columns).map { c =>
+      val rule = sgr(Dim) + (0 until count).map { c =>
         val (before, after) = edge(c)
         glyphs.rule * (widths(c) + before.length + after.length)
       }.mkString(glyphs.junction) + Reset + "\n"
