@@ -72,7 +72,7 @@ private[atc] object OutputBuffer:
       retained.delete(0, end)
       taken
 
-    def marker: String = synchronized(if truncated then "\n...[truncated: output exceeded 8 MiB cap]..." else "")
+    def marker: String = synchronized(if truncated then s"\n...[truncated: output exceeded $cap characters]..." else "")
 
   /** Keeps the last `cap` characters in bounded-size chunks, so dropping the
     * front is a constant-time list removal rather than a full-buffer shift.
@@ -147,7 +147,8 @@ private[atc] object OutputBuffer:
           remaining = 0
       out.toString
 
-    def marker: String = synchronized(if truncated then "\n...[older output dropped: exceeded 8 MiB cap]...\n" else "")
+    def marker: String =
+      synchronized(if truncated then s"\n...[older output dropped: exceeded $cap characters]...\n" else "")
 
     /** Exposed only for a focused invariant test: retained storage must be
       * bounded by chunks, not by the number of append calls. */

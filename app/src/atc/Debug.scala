@@ -2,21 +2,16 @@ package atc
 
 import atc.ui.Ansi
 
-import java.util.IdentityHashMap
-
 /** `ATC_DEBUG=1`: stack traces and terminal/stream diagnostics on stderr. */
 object Debug:
   /** Include nested transport failures without requiring a full stack trace. */
   def describe(error: Throwable): String =
-    val seen = IdentityHashMap[Throwable, java.lang.Boolean]()
-    val parts = List.newBuilder[String]
-    var current: Throwable | Null = error
-    while current != null && seen.size() < 8 && !seen.containsKey(current) do
-      val cause = current
-      seen.put(cause, true)
-      parts += cause.getClass.getSimpleName + Option(cause.getMessage).filter(_.nonEmpty).fold("")(": " + _)
-      current = cause.getCause
-    parts.result().mkString("\nCaused by: ")
+    causes(error).map(c => c.getClass.getSimpleName + Option(c.getMessage).filter(_.nonEmpty).fold("")(": " + _))
+      .mkString("\nCaused by: ")
+
+  /** `error` and its causes, at most eight and each once, so a cyclic chain ends. */
+  def causes(error: Throwable): Iterator[Throwable] =
+    Iterator.iterate[Throwable | Null](error)(_.nn.getCause).takeWhile(_ != null).map(_.nn).take(8).distinct
 
   /** The message of `error`, or its class name when it has none: for one-line reports. */
   def message(error: Throwable): String =

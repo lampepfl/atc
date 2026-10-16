@@ -1,6 +1,5 @@
-package atc
+package atc.ui
 
-import atc.ui.Notifier
 import atc.ui.Notifier.Osc
 
 class NotifierSuite extends munit.FunSuite:
@@ -31,6 +30,13 @@ class NotifierSuite extends munit.FunSuite:
     Notifier.Bell.send("atc", "done", s => emitted :+= s)
     assertEquals(emitted, List("\u0007"))
 
+  test("each OSC notification has its terminal's framing"):
+    assertEquals(Osc.Nine.format("atc", "done"), "\u001b]9;atc: done\u0007")
+    assertEquals(
+      Osc.Kitty.format("atc", "done"),
+      "\u001b]99;i=atc:d=0;atc\u001b\\\u001b]99;i=atc:d=1:p=body;done\u001b\\",
+    )
+
   test("long text is cut to one short line"):
     val cleaned = Notifier.clean("a" * 500)
     assertEquals(cleaned.length, 200)
@@ -52,7 +58,6 @@ class NotifierSuite extends munit.FunSuite:
 
   test("turn alerts lead with the reply, or say why the turn stopped"):
     import atc.agent.TurnOutcome
-    import atc.ui.{Alerts, Tui}
     def stats(outcome: TurnOutcome) = Tui.TurnStats(42, 3, 100, 1000, None, outcome)
     assertEquals(Alerts.turnText(stats(TurnOutcome.Finished), "All **tests** pass.", ""), "All tests pass.")
     assertEquals(Alerts.turnText(stats(TurnOutcome.Finished), "", ""), "Finished in 42 s")

@@ -1,6 +1,6 @@
 package atc
 
-import atc.config.{Config, ModelCatalog, ModelConfig, ModelSpec, ProviderConfig}
+import atc.config.{Config, ModelCatalog, ModelConfig, ModelSpec, ProjectTrust, ProviderConfig}
 import atc.llm.*
 import atc.platform.PlatformPath
 
@@ -84,7 +84,7 @@ class ModelSuite extends munit.FunSuite:
     val noted = "[sandbox notice] The Scala REPL was restarted (x).\n\nrun: 1 + 1"
     val (c, _) = collect(m, List(Msg.User(noted)))
     assertEquals(c.toolCalls.size, 1)
-    val code = Json.parseObject(c.toolCalls.head.arguments).value("code").str
+    val code = SdkJson.parseObject(c.toolCalls.head.arguments).value("code").str
     assertEquals(code, "1 + 1")
     // The trigger also works without a note, while a regular message is echoed.
     assertEquals(collect(m, List(Msg.User("run: 2 + 2")))._1.toolCalls.size, 1)
@@ -116,14 +116,14 @@ class ModelSuite extends munit.FunSuite:
     finally m.close()
 
   test("provider web search follows the sandbox mode: only full mode reaches the network"):
-    val dir = java.nio.file.Files.createTempDirectory("atc-search-mode").nn
+    val dir = TestEnv.tempDir("atc-search-mode")
     val global = dir.resolve("global.json").nn
     java.nio.file.Files.writeString(
       global,
       """{ "providers": { "p": { "api": "openai", "url": "http://127.0.0.1:9", "key": "k", "models": {
         |  "a": { "webSearch": true }, "b": { "webSearch": true } } } } }""".stripMargin
     )
-    val models = Models(Cli.Args(cwd = dir), Config.load(dir, None, global))
+    val models = Models(Cli.Args(cwd = dir), Config.load(dir, None, global), dir)
     try
       val a = models.client("a")
       assertEquals(a.webSearch, true)
@@ -154,6 +154,10 @@ class ModelSuite extends munit.FunSuite:
     assert(m.isInstanceOf[EchoModel], m.getClass.getName)
     assertEquals(m.alias, "e")
     assertEquals(m.ref, "p/e")
+    // The other names of an api, as `KeyBindings.variables` reads them too.
+    assert(ChatModel.create(spec(" Claude ")).isInstanceOf[AnthropicModel])
+    assert(ChatModel.create(spec("chat")).isInstanceOf[OpenAIChatModel])
+    assert(ChatModel.create(spec("RESPONSES")).isInstanceOf[OpenAIResponsesModel])
 
   test("create rejects an unknown api with a helpful message"):
     val e = intercept[IllegalArgumentException](ChatModel.create(spec("myllm")))
@@ -233,7 +237,7 @@ class ModelSuite extends munit.FunSuite:
 
   test("listing every model waits a bounded time for a slow provider, which keeps its stored list until it answers"):
     val store = atc.config.ModelListStore(
-      java.nio.file.Files.createTempDirectory("atc-lists").nn.resolve("model-lists.json").nn
+      TestEnv.tempDir("atc-lists").resolve("model-lists.json").nn
     )
     val slow = ModelSpec("slow", "", "openai", "", Some("http://localhost:1"), None, ModelConfig())
     store.save(slow, List(slow.listed("old", ModelConfig())))
@@ -253,7 +257,7 @@ class ModelSuite extends munit.FunSuite:
     assertEquals(c.models.map(_.ref), List("slow/new"))
 
   test("a config model that names no model is ignored with a warning naming its file; -m is not"):
-    val dir = java.nio.file.Files.createTempDirectory("atc-models").nn
+    val dir = TestEnv.tempDir("atc-models")
     val global = dir.resolve("global.json").nn
     java.nio.file.Files.writeString(global, """{ "providers": { "p": { "api": "echo", "models": { "a": {} } } } }""")
     val project = dir.resolve("project").nn
@@ -263,7 +267,7 @@ class ModelSuite extends munit.FunSuite:
       """{ "model": "typo", "classifiedModel": "p/a" }"""
     )
     val configuration = Config.load(project, None, global, trustProject = true)
-    val models = Models(Cli.Args(cwd = project), configuration)
+    val models = Models(Cli.Args(cwd = project), configuration, dir)
     val warned = List.newBuilder[String]
     assertEquals(models.configured("model", configuration.settings.model, warned += _), None)
     assertEquals(
@@ -280,12 +284,62 @@ class ModelSuite extends munit.FunSuite:
       warnings.head
     )
     assertEquals(models.initial(_ => ()).ref, "p/a", "the only model stands in")
-    intercept[IllegalArgumentException](Models(Cli.Args(cwd = project, model = Some("typo")), configuration).initial(
-      _ => ()
-    ))
+    intercept[IllegalArgumentException](Models(
+      Cli.Args(cwd = project, model = Some("typo")),
+      configuration,
+      dir
+    ).initial(_ => ()))
+
+  test("the model last chosen is kept in the atc directory the session started with"):
+    val dir = TestEnv.tempDir("atc-last")
+    val global = dir.resolve("config.json").nn
+    java.nio.file.Files.writeString(
+      global,
+      """{ "providers": { "p": { "api": "echo", "models": { "a": {}, "b": {} } } } }"""
+    )
+    val models = Models(Cli.Args(cwd = dir), Config.load(dir, None, global), dir)
+    try
+      assertEquals(models.initial(_ => ()).ref, "p/a", "the first model while none is remembered")
+      models.rememberLast("p/b")
+      assertEquals(java.nio.file.Files.readString(dir.resolve("last-model")).nn.trim, "p/b")
+      assertEquals(models.initial(_ => ()).ref, "p/b")
+    finally models.close()
+
+  test("a project config cannot move the global classified model to another model"):
+    val dir = TestEnv.tempDir("atc-classified")
+    val global = dir.resolve(".atc").resolve("config.json").nn
+    java.nio.file.Files.createDirectories(global.getParent)
+    java.nio.file.Files.writeString(
+      global,
+      """{ "classifiedModel": "safe", "providers": {
+        |  "local": { "api": "echo", "models": { "safe": { "name": "local-model" } } },
+        |  "cloud": { "api": "echo", "models": { "big": {} } } } }""".stripMargin
+    )
+    def classified(project: String): (Option[String], List[String]) =
+      val cwd = dir.resolve(s"p${project.hashCode.abs}").nn
+      java.nio.file.Files.createDirectories(cwd.resolve(".atc"))
+      java.nio.file.Files.writeString(Config.projectPath(cwd), project)
+      val configuration = Config.load(cwd, None, global)
+      assertEquals(ProjectTrust.pending(cwd, global.getParent.nn), None, "nothing is put to the user")
+      val models = Models(Cli.Args(cwd = cwd), configuration, global.getParent.nn)
+      val warned = List.newBuilder[String]
+      val ref = models.classified(warned += _).map(_.ref)
+      models.close()
+      (ref, warned.result())
+    assertEquals(classified("{}"), (Some("local/safe"), Nil))
+    assertEquals(classified("""{ "providers": { "cloud": { "models": { "extra": {} } } } }""")._1, Some("local/safe"))
+    // the provider that defines the alias turned off, and the alias added to another provider
+    val (moved, warnings) = classified(
+      """{ "providers": { "local": { "enabled": false }, "cloud": { "models": { "safe": { "name": "big" } } } } }"""
+    )
+    assertEquals(moved, None)
+    assertEquals(warnings.size, 1, warnings)
+    assert(warnings.head.startsWith(s"Ignoring classifiedModel in ${PlatformPath.display(global)}"), warnings.head)
+    // the alias given another model of the same provider
+    assertEquals(classified("""{ "providers": { "local": { "models": { "safe": { "name": "other" } } } } }""")._1, None)
 
   test("the config's effort replaces the model's reasoning at start, unless the model does not take it"):
-    val dir = java.nio.file.Files.createTempDirectory("atc-effort").nn
+    val dir = TestEnv.tempDir("atc-effort")
     val global = dir.resolve("global.json").nn
     java.nio.file.Files.writeString(
       global,
@@ -296,7 +350,7 @@ class ModelSuite extends munit.FunSuite:
       val cwd = dir.resolve(s"p${project.hashCode.abs}").nn
       java.nio.file.Files.createDirectories(cwd.resolve(".atc"))
       java.nio.file.Files.writeString(Config.projectPath(cwd), project)
-      val models = Models(Cli.Args(cwd = cwd), Config.load(cwd, None, global))
+      val models = Models(Cli.Args(cwd = cwd), Config.load(cwd, None, global), dir)
       val warned = List.newBuilder[String]
       val model = models.initial(warned += _)
       models.close()

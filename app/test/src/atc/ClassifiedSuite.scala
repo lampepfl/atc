@@ -1,15 +1,14 @@
 package atc
 
 import atc.host.*
-import atc.lib.{Classified, FileEntry, FileSystem}
+import atc.lib.{Classified, FileEntry}
 import atc.perms.*
 
 import java.nio.file.{Files, Path}
 import scala.util.Try
 
 /** `Classified` semantics: the host implementation as a value, and the file
-  * system / output / LLM sinks that enforce the classified boundary
-  * (migrated from TACIT's ClassifiedSuite, adapted to ATC's policy model). */
+  * system / output / LLM sinks that enforce the classified boundary. */
 class ClassifiedSuite extends munit.FunSuite:
 
   private val nl = System.lineSeparator
@@ -17,7 +16,6 @@ class ClassifiedSuite extends munit.FunSuite:
   val env = TestEnv(mkRules = TestEnv.withSecrets, prefix = "atc-classified")
   import env.given
   import env.host.*
-  given fs: FileSystem = env.host.fileSystem
 
   env.file("public.txt", "public data")
   env.file("secrets/data.txt", "TOP SECRET DATA")
@@ -64,22 +62,27 @@ class ClassifiedSuite extends munit.FunSuite:
     assertEquals(failed.toString, "Classified(***)")
     assert(ClassifiedImpl.unwrap(failed).isFailure)
 
-  test("a fatal throwable inside map propagates, it is not masked as a classified failure"):
-    // `Try` traps only `NonFatal`, so a fatal throwable escapes `map` and aborts the
-    // evaluation (rather than becoming a masked failure). It cannot be turned into a
-    // per-bit oracle because agent code may not *catch* it; see CodeValidator. This
-    // is host code, not agent code, so it can catch it to observe that it propagated.
-    // Caught by hand rather than with `intercept`, so no fatal error reaches the runner.
-    var propagated = false
-    try ClassifiedImpl.wrap("x").map[Int](_ => throw OutOfMemoryError("boom"))
-    catch case _: OutOfMemoryError => propagated = true
-    assert(propagated)
+  test("fatal errors and control throwables inside map and flatMap stay classified failures"):
+    // A secret-dependent stack overflow or non-local return that left `map` could be
+    // observed by a catch or `finally` in agent code.
+    val thrown = List[Throwable](
+      StackOverflowError(),
+      OutOfMemoryError("boom"),
+      scala.runtime.NonLocalReturnControl(Object(), true),
+      new scala.util.control.ControlThrowable {},
+    )
+    for t <- thrown do
+      assert(ClassifiedImpl.unwrap(ClassifiedImpl.wrap("x").map[Int](_ => throw t)).isFailure, t.toString)
+      assert(ClassifiedImpl.unwrap(ClassifiedImpl.wrap("x").flatMap[Int](_ => throw t)).isFailure, t.toString)
 
-  test("ThreadDeath (the sandbox stop signal) propagates through map, never swallowed"):
-    var propagated = false
-    try ClassifiedImpl.wrap("x").map[Int](_ => throw ThreadDeath())
-    catch case _: ThreadDeath => propagated = true
-    assert(propagated)
+  test("the stop signals propagate through map and flatMap, never kept as a failure"):
+    // Caught by hand rather than with `intercept`, so no fatal error reaches the runner.
+    for stop <- List[Throwable](ThreadDeath(), InterruptedException()) do
+      def propagates(op: => Unit): Boolean =
+        try { op; false }
+        catch case t: Throwable => t eq stop
+      assert(propagates(ClassifiedImpl.wrap("x").map[Int](_ => throw stop)), stop.toString)
+      assert(propagates(ClassifiedImpl.wrap("x").flatMap[Int](_ => throw stop)), stop.toString)
 
   test("map on a failed value short-circuits without running the function"):
     val failed = ClassifiedImpl.wrap("secret").map(_ => throw RuntimeException("boom"))
@@ -89,8 +92,8 @@ class ClassifiedSuite extends munit.FunSuite:
     assert(!executed)
     assert(ClassifiedImpl.unwrap(r).isFailure)
 
-  test("fromTry classifies a failed effect"):
-    val c = ClassifiedImpl.fromTry(Try(throw IllegalArgumentException("nope")))
+  test("a failed effect stays classified"):
+    val c = ClassifiedImpl(Try(throw IllegalArgumentException("nope")))
     assert(ClassifiedImpl.unwrap(c).isFailure)
     assertEquals(c.toString, "Classified(***)")
 
@@ -247,6 +250,20 @@ class ClassifiedSuite extends munit.FunSuite:
     assertEquals(env.agentOut.toString, "")
     assertEquals(env.userOut.toString.linesIterator.count(_.contains("writing")), 2)
 
+  test("writeClassified creates a new target even when the content cannot be encoded"):
+    // A lone surrogate fails UTF-8 encoding before the file is opened. Were the
+    // target created only on success, `exists` would reveal the secret predicate.
+    env.clearOutput()
+    def written(rel: String, prefix: String): Boolean =
+      val content =
+        readClassified("secrets/data.txt").map(s => if s.startsWith(prefix) then 0xd800.toChar.toString else "ok")
+      writeClassified(rel, content)
+      exists(rel)
+    assert(written("secrets/unencodable.txt", "TOP"))
+    assert(written("secrets/encodable.txt", "NOT"))
+    assertEquals(env.contents("secrets/encodable.txt"), "ok")
+    assertEquals(env.agentOut.toString, "")
+
   test("readClassified of an unreadable path fails inside the Classified"):
     val outside = TestEnv.outsideDir("nope")
     val c = readClassified(s"$outside/o.txt")
@@ -322,6 +339,22 @@ class ClassifiedSuite extends munit.FunSuite:
     printf("%s%n", failed)
     assertEquals(env.agentOut.toString, s"Classified(***)\nClassified(***)$nl")
     assert(!env.agentOut.toString.contains("MESSAGE-SECRET"), env.agentOut.toString)
+    assert(env.userOut.toString.contains("error details could not be rendered"), env.userOut.toString)
+
+  test("a fatal error or control throwable from a classified rendering stays behind the output boundary"):
+    env.clearOutput()
+    val overflowing = classify("x").map(_ =>
+      new Object:
+        override def toString: String = throw StackOverflowError()
+    )
+    val controlling = classify("y").map(_ =>
+      throw new RuntimeException("outer"):
+        override def getMessage: String = throw scala.runtime.NonLocalReturnControl(Object(), "y")
+    )
+    println(overflowing)
+    println(controlling)
+    assertEquals(env.agentOut.toString, "Classified(***)\nClassified(***)\n")
+    assert(env.userOut.toString.contains("rendering failed: java.lang.StackOverflowError"), env.userOut.toString)
     assert(env.userOut.toString.contains("error details could not be rendered"), env.userOut.toString)
 
   test("printf with no classified arguments is identical for both"):

@@ -1,10 +1,12 @@
 package atc.ui
 
-import atc.{Debug, ProcessEnvironment}
+import atc.{Debug, ProcessEnvironment, Threads}
 import atc.platform.Platform
 
 import java.nio.charset.StandardCharsets
 import java.util.{Base64, Locale}
+
+import Ansi.{Bel, Esc}
 
 /** Desktop notifications for moments when atc waits for the user. `terminal`
   * writes an escape sequence (or a bell) to the terminal; system notifications
@@ -23,7 +25,7 @@ enum Notifier:
     val b = Notifier.clean(body)
     this match
       case Off => ()
-      case Bell => emit(Notifier.BellChar)
+      case Bell => emit(Bel)
       case Terminal(osc) => emit(Notifier.passThrough(osc.format(t, b)))
       case System =>
         val command = Notifier.systemCommand(t, b)
@@ -38,10 +40,8 @@ enum Notifier:
           catch
             case e: Exception =>
               Debug.log(s"notification command ${command.head} failed: $e")
-              emit(Notifier.BellChar)
-        val thread = Thread(show, "atc-notify")
-        thread.setDaemon(true)
-        thread.start()
+              emit(Bel)
+        Threads.daemon("atc-notify")(show).start()
 
 object Notifier:
   /** The notification escape sequences terminals understand. */
@@ -54,12 +54,11 @@ object Notifier:
     case Notify
 
     def format(title: String, body: String): String = this match
-      case Nine => s"\u001b]9;$title: $body\u0007"
-      case Kitty => s"\u001b]99;i=atc:d=0;$title\u001b\\\u001b]99;i=atc:d=1:p=body;$body\u001b\\"
+      case Nine => s"$Esc]9;$title: $body$Bel"
+      case Kitty => s"$Esc]99;i=atc:d=0;$title$Esc\\$Esc]99;i=atc:d=1:p=body;$body$Esc\\"
       // `;` separates the fields.
-      case Notify => s"\u001b]777;notify;${title.replace(';', ',')};${body.replace(';', ',')}\u0007"
+      case Notify => s"$Esc]777;notify;${title.replace(';', ',')};${body.replace(';', ',')}$Bel"
 
-  private val BellChar = "\u0007"
   private val MaxChars = 200
 
   /** The notifier a `notifications` setting (validated by the config) selects. `auto` prefers the
@@ -81,7 +80,7 @@ object Notifier:
   /** The OSC sequence the running terminal is known to display, from the
     * variables terminals set. Inside tmux these name the outer terminal only
     * when the session was started from it, which is the common case. */
-  private[atc] def terminalOsc(env: String => Option[String]): Option[Osc] =
+  private[ui] def terminalOsc(env: String => Option[String]): Option[Osc] =
     val program = env("TERM_PROGRAM").getOrElse("").toLowerCase(Locale.ROOT)
     val term = env("TERM").getOrElse("")
     if env("KITTY_WINDOW_ID").isDefined || term == "xterm-kitty" then Some(Osc.Kitty)
@@ -91,7 +90,7 @@ object Notifier:
 
   /** Markdown as plain prose for a notification: code blocks, heading and
     * list markers, emphasis and backticks removed, lines joined. */
-  private[atc] def plainText(markdown: String): String =
+  private[ui] def plainText(markdown: String): String =
     var inFence = false
     markdown.linesIterator
       .filter: line =>
@@ -104,7 +103,7 @@ object Notifier:
       .mkString(" ")
 
   /** The text as one line with single spaces, without control characters or anything past [[MaxChars]]. */
-  private[atc] def clean(text: String): String =
+  private[ui] def clean(text: String): String =
     val line = Ansi.sanitize(text).replaceAll("\\s+", " ").nn.trim
     if line.length <= MaxChars then line else line.take(MaxChars - 1) + "…"
 
@@ -112,12 +111,12 @@ object Notifier:
     * (which also needs `set -g allow-passthrough on`). */
   private def passThrough(sequence: String): String =
     if ProcessEnvironment.get("TMUX").isEmpty then sequence
-    else "\u001bPtmux;" + sequence.replace("\u001b", "\u001b\u001b") + "\u001b\\"
+    else s"${Esc}Ptmux;" + sequence.replace(Esc, Esc + Esc) + s"$Esc\\"
 
   /** The command that shows a system notification. The text travels as
     * arguments (macOS, Linux) or inside a Base64-encoded script (Windows), so
     * nothing is interpreted by a shell. */
-  private[atc] def systemCommand(title: String, body: String): List[String] =
+  private[ui] def systemCommand(title: String, body: String): List[String] =
     if Platform.isMac then
       List(
         "osascript",

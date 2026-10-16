@@ -1,14 +1,13 @@
 package atc.host
 
-import java.io.OutputStream
 import java.nio.{ByteBuffer, CharBuffer}
 import java.nio.charset.{Charset, CharsetDecoder, CodingErrorAction, StandardCharsets}
 
 /** Incrementally decodes output bytes, preserving characters split across writes.
   * Defaults to UTF-8 and detects a leading UTF-8 or UTF-16 BOM. Malformed input
   * becomes replacement text; `finish()` flushes an incomplete final sequence.
-  * Writes are synchronized. */
-final class TextSink(sink: String => Unit) extends OutputStream:
+  * Not thread-safe: one drain thread feeds each sink. */
+final class TextSink(sink: String => Unit):
   private val boms = List(
     Array(0xef.toByte, 0xbb.toByte, 0xbf.toByte) -> StandardCharsets.UTF_8,
     Array(0xff.toByte, 0xfe.toByte) -> StandardCharsets.UTF_16LE,
@@ -19,14 +18,11 @@ final class TextSink(sink: String => Unit) extends OutputStream:
   /** Bytes of an incomplete character, waiting for the next write. */
   private var leftover: Array[Byte] = Array.empty
 
-  override def write(b: Int): Unit = write(Array(b.toByte), 0, 1)
+  def write(b: Array[Byte], off: Int, len: Int): Unit =
+    if len > 0 then feed(java.util.Arrays.copyOfRange(b, off, off + len), endOfInput = false)
 
-  override def write(b: Array[Byte], off: Int, len: Int): Unit = synchronized:
-    if len > 0 then
-      feed(java.util.Arrays.copyOfRange(b, off, off + len), endOfInput = false)
-
-  /** Emit what an incomplete trailing sequence decodes to; the stream stays usable. */
-  def finish(): Unit = synchronized:
+  /** Emit what an incomplete trailing sequence decodes to; the sink stays usable. */
+  def finish(): Unit =
     feed(Array.emptyByteArray, endOfInput = true)
     leftover = Array.empty
     Option(decoder).foreach(_.reset())

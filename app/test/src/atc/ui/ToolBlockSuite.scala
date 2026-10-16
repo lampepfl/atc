@@ -2,10 +2,7 @@ package atc.ui
 
 import atc.sandbox.ExecutionResult
 
-import org.jline.terminal.{Size, Terminal}
-import org.jline.terminal.impl.DumbTerminal
-
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
+import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.charset.StandardCharsets.UTF_8
 import scala.collection.mutable
@@ -15,13 +12,9 @@ import scala.collection.mutable
 class ToolBlockSuite extends munit.FunSuite:
 
   /** A block on a 80x24 terminal whose output is kept in the returned stream. */
-  private def block(expanded: Boolean): (Screen, ToolBlock, ByteArrayOutputStream) =
+  private def block(expanded: => Boolean): (Screen, ToolBlock, ByteArrayOutputStream) =
     val out = ByteArrayOutputStream()
-    // A dumb terminal of an xterm type writes synchronously and sends no probes, whose
-    // pending answers would delay the output of a terminal built from streams.
-    val terminal = DumbTerminal("test", "xterm-256color", ByteArrayInputStream(Array.emptyByteArray), out, UTF_8)
-    (terminal: Terminal).setSize(Size(80, 24))
-    val screen = Screen(terminal, plain = false, Glyphs.unicode)
+    val screen = TestTerminal.screen(output = out)
     (screen, ToolBlock(screen, () => expanded), out)
 
   /** The rows the output leaves on screen, replaying the cursor moves and line
@@ -120,6 +113,12 @@ class ToolBlockSuite extends munit.FunSuite:
     )
     assertEquals(problem(""), None)
 
+  test("printed lines that look like stack frames are subtracted as printed"):
+    val printed = "running tests\n  at scala.Option.map(Option.scala:1)\n"
+    val output = printed + "java.lang.IllegalStateException: boom\n  at rs$line$3$.f(rs$line$3:1)"
+    val r = ExecutionResult(success = false, output = output)
+    assertEquals(ToolBlock.firstProblem(r, printed), Some("IllegalStateException: boom"))
+
   test("every line of a classified print is marked"):
     val (screen, tool, out) = block(expanded = true)
     screen.frame(tool.start("println(secret)", "run_scala"))
@@ -135,6 +134,23 @@ class ToolBlockSuite extends munit.FunSuite:
     assert(shown.take(3).forall(_.startsWith("  │ ")), shown)
     assertEquals(shown.map(_.stripPrefix("  │ ")).take(3).mkString, "x" * 60 + "y" * 60 + "short")
     assert(shown.forall(Screen.displayWidth(_) < 80), shown)
+
+  test("Ctrl-O writes the kept output inside the gutter, and later output starts its rows at the gutter"):
+    var expanded = true
+    val (screen, tool, out) = block(expanded)
+    def toggle(): Unit =
+      expanded = !expanded
+      screen.frame { tool.detach(); tool.reattach() }
+    screen.frame(tool.start("println(long)", "run_scala"))
+    screen.frame(tool.emit("abc")) // the expanded view's row now holds three cells
+    toggle()
+    screen.frame(tool.emit("\n" + "x" * 120 + "\n"))
+    toggle()
+    screen.frame(tool.emit("y" * 120 + "\n"))
+    val shown = rows(out).drop(rows(out).lastIndexWhere(_.contains("output")) + 1)
+    assert(shown.forall(row => row.startsWith("  │ ") && Screen.displayWidth(row) < 80), shown)
+    val room = 80 - screen.GutterWidth - 1
+    assertEquals(shown.map(_.stripPrefix("  │ ")), List("x" * room, "x" * (120 - room), "y" * room, "y" * (120 - room)))
 
   test("repeated identical file changes fold into one row with a count"):
     val (screen, tool, out) = block(expanded = false)
@@ -154,3 +170,18 @@ class ToolBlockSuite extends munit.FunSuite:
     assertEquals(out.size, shown, "nothing is written over the pop-up")
     screen.frame(tool.release())
     assert(rows(out).last.endsWith("during"), rows(out))
+
+  test("withoutPrinted removes the live-shown prints and keeps diagnostics and echoes"):
+    val printed = "  leading spaces\nstaged:\nA  file\n"
+    val body = "-- Warning: something\n  leading spaces\nstaged:\nA  file\nval r: Int = 1"
+    assertEquals(ToolBlock.withoutPrinted(body, printed), "-- Warning: something\nval r: Int = 1")
+
+  test("withoutPrinted handles prints at the start, at the end, and nothing else"):
+    assertEquals(ToolBlock.withoutPrinted("hello\nval x: Int = 1", "hello\n"), "val x: Int = 1")
+    assertEquals(ToolBlock.withoutPrinted("1 warning found\nhello", "hello\n"), "1 warning found")
+    assertEquals(ToolBlock.withoutPrinted("hello", "hello\n"), "")
+    assertEquals(ToolBlock.withoutPrinted("only echo", ""), "only echo")
+
+  test("withoutPrinted leaves the body alone when the prints are not found verbatim"):
+    val body = "hel...[truncated]"
+    assertEquals(ToolBlock.withoutPrinted(body, "hello world\n"), body)

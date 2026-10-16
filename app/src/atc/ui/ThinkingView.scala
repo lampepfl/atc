@@ -66,6 +66,6 @@ private[ui] final class ThinkingView(screen: Screen, expanded: () => Boolean, be
     styled(s"${g.bullet} thinking${g.ellipsis} (Ctrl-O to expand)", Dim) ::
       buf.tail(ThinkingView.Lines).map(l => Indent + styled(screen.fit(l, Indent.length), Dim))
 
-private[atc] object ThinkingView:
+private[ui] object ThinkingView:
   /** Lines of reasoning shown live in the thinking window. */
   val Lines = 5

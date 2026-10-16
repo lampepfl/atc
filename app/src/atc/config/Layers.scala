@@ -1,6 +1,6 @@
 package atc.config
 
-import atc.Debug
+import atc.{Debug, TextFiles}
 import atc.perms.{Access, FileRule, Mode, PathPattern}
 import atc.platform.PlatformPath
 
@@ -19,9 +19,10 @@ enum Origin(val label: String):
   /** What `/config` set for the running session, over every file. */
   case Session extends Origin("session")
 
-  /** Whether this layer may grant anything anywhere (the project layer may
-    * grant only within its own project, and its scalar settings only narrow). */
-  def grants: Boolean = this != Origin.Project
+  /** Whether this layer may grant anything anywhere: the global and explicit layers. The
+    * project layer grants only within its own project and its scalar settings only narrow;
+    * the session layer narrows like it, and its settings that are not policy still win. */
+  def grants: Boolean = this == Origin.Global || this == Origin.Explicit
 
 /** One configuration file, as read. `json` says which settings it actually
   * [[defines]], so a narrowing layer only narrows what it mentions (a setting
@@ -46,6 +47,15 @@ final case class ConfigLayer(
     f"  ${origin.label}%-9s $source%-52s $role"
 
 object ConfigLayer:
+  /** `text` parsed as a config, which must be a JSON object; `where` names it in errors. */
+  private[config] def parse(text: String, where: String): ujson.Obj =
+    val parsed =
+      try ujson.read(TextFiles.stripBom(text))
+      catch case e: Exception => throw IllegalArgumentException(s"Cannot parse config $where: ${Debug.message(e)}")
+    parsed match
+      case o: ujson.Obj => o
+      case _ => throw IllegalArgumentException(s"Config $where must be a JSON object")
+
   /** The config file at `path`, in the role `origin`. */
   def read(origin: Origin, path: Path): ConfigLayer =
     val text =
@@ -57,14 +67,14 @@ object ConfigLayer:
     // The policy evaluates canonical paths, so the base is canonical too;
     // otherwise a project reached through a symlink would never grant access.
     val base = Option.when(origin == Origin.Project)(PlatformPath.canonical(path.getParent.nn.getParent.nn))
-    val json = ObjectText.parse(text, path.toString)
+    val json = parse(text, path.toString)
     ConfigLayer(origin, Some(path), json, settings(json, path.toString), base)
 
   /** The starting global config as an in-memory layer, for a run without a
     * `~/.atc/config.json`. */
   def bundled: ConfigLayer =
     val where = "the bundled starting config"
-    val json = ObjectText.parse(Config.globalTemplate, where)
+    val json = parse(Config.globalTemplate, where)
     ConfigLayer(Origin.Global, None, json, settings(json, where), None)
 
   /** The settings `/config` changed for this session only, as a layer. */
@@ -72,7 +82,10 @@ object ConfigLayer:
     ConfigLayer(Origin.Session, None, json, settings(json, "the settings of this session"), None)
 
   private[config] def settings(json: ujson.Obj, where: String): Config =
-    try upickle.default.read[Config](json)
+    try
+      val config = upickle.default.read[Config](json)
+      ConfigValidation.requireExact(json, config)
+      config
     catch case e: Exception => throw IllegalArgumentException(s"Invalid config $where: ${Debug.message(e)}")
 
 /** A file rule with the folder its layer is anchored at: the folder holding
@@ -95,8 +108,6 @@ final case class Configuration(
   /** The `${VAR}` bindings from `.atc/keys.properties`; kept apart from the settings. */
   keys: KeyBindings = KeyBindings.empty
 ):
-  def sources: List[Path] = layers.flatMap(_.path)
-
   /** Whether the bundled starting config stands in for a missing global one. */
   def bundledGlobal: Boolean = layers.exists(l => l.origin == Origin.Global && l.path.isEmpty)
 
@@ -126,6 +137,9 @@ final case class Configuration(
     * and their lists kept in `store` between sessions. */
   def catalog(discover: ModelSpec => List[ModelSpec], store: ModelListStore): ModelCatalog =
     ModelCatalog.from(settings, keys, Some(discover), Some(store))
+
+  /** The granting layers alone, without what a project layer adds or turns off. */
+  def granting: Configuration = Configuration.combine(layers.filter(_.origin.grants), keys)
 
 object Configuration:
   /** Settings that are policy: a narrowing layer may only make these stricter,
@@ -184,7 +198,8 @@ object Configuration:
 
   /** A project config may add models to the providers a granting layer defines, or turn them
     * off, and nothing else: with a provider's `url`, `key` or `headers`, or a provider of its
-    * own, a cloned repository could send the user's keys and prompts wherever it names. */
+    * own, a cloned repository could send the user's keys and prompts wherever it names, and
+    * by turning a provider on it could use one the user turned off. */
   private def requireOwnProviders(layer: ConfigLayer, granted: ujson.Obj): Unit =
     def refuse(what: String, why: String) = throw IllegalArgumentException(
       s"Invalid config ${layer.path.getOrElse("")}: $what: $why; endpoints and keys belong in ~/.atc/config.json"
@@ -198,6 +213,8 @@ object Configuration:
         refuse(s"providers.$name", "a project config may not define a provider, only add models to one")
       for fields <- provider.objOpt; key <- fields.keys.find(!NarrowingProviderKeys.contains(_)) do
         refuse(s"providers.$name.$key", "a project config may set only a provider's models and enabled")
+      for fields <- provider.objOpt; on <- fields.get("enabled") if on != ujson.False do
+        refuse(s"providers.$name.enabled", "a project config may turn a provider off, not on")
 
   /** Apply one narrowing layer to the settings it defines. Every field moves
     * towards "stricter" or stays put, so this can never widen the policy. */
@@ -238,7 +255,7 @@ object Configuration:
     * replacing the whole model entry), everything else is overwritten. So a
     * project config can add a model to a provider the global config defined
     * without repeating its url and key. */
-  def mergeJson(base: ujson.Obj, over: ujson.Obj): ujson.Obj =
+  private[atc] def mergeJson(base: ujson.Obj, over: ujson.Obj): ujson.Obj =
     overlay(base, over): (k, a, b) =>
       (a, b) match
         case (x: ujson.Arr, y: ujson.Arr) if ListKeys.contains(k) => ujson.Arr(x.value ++ y.value)

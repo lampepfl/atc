@@ -26,13 +26,10 @@ final class App(args: Cli.Args, val tui: Tui):
   /** The effective settings. The *policy* lists live on `configuration`. */
   val config: Config = configuration.settings
 
-  val models: Models = Models(args, configuration)
+  val models: Models = Models(args, configuration, Config.globalDir)
   private val initialModel: ChatModel = models.initial(tui.warn)
-  private val initialClassified: Option[ChatModel] = models.configured(
-    "classifiedModel",
-    config.classifiedModel,
-    message =>
-      tui.warn(s"$message. Classified data is not sent to any model until /classifiedmodel chooses one.")
+  private val initialClassified: Option[ChatModel] = models.classified(message =>
+    tui.warn(s"$message. Classified data is not sent to any model until /classifiedmodel chooses one.")
   )
 
   val sandbox: SandboxRepl = SandboxRepl(config, policy, host, tui)
@@ -89,7 +86,7 @@ final class App(args: Cli.Args, val tui: Tui):
       if args.prompt.isDefined then None else withClockPaused(tui.askUser(question, options, multiple))
     def showTodos(items: List[Todo]): Unit = tui.showTodos(items)
   /** Listings hide what git ignores unless the config turns that off. */
-  private val gitIgnore: GitIgnore = if config.respectGitignore then GitIgnore(cwd) else GitIgnore.Disabled
+  private val gitIgnore: GitIgnore = if config.respectGitignore then GitIgnore(cwd, policy) else GitIgnore.Disabled
   val host: Host = Host(policy, cwd, output, llm, hostUi, gitIgnore, () => models.configuration.keyVariables)
 
   // ── agent ─────────────────────────────────────────────────────────
@@ -166,8 +163,8 @@ final class App(args: Cli.Args, val tui: Tui):
           models.catalog.refresh()
           if tui.menusAvailable then commands.sessionCommands.offerResume()
           sandbox.warm() // after the resume offer: restoring would only discard it
-          interactive()
-          if tui.menusAvailable then commands.sessionCommands.saveOnExit()
+          try interactive()
+          finally if tui.menusAvailable then commands.sessionCommands.saveOnExit()
           0
     finally
       predictor.invalidate()
@@ -184,8 +181,8 @@ final class App(args: Cli.Args, val tui: Tui):
         "directory" -> PlatformPath.display(cwd),
       ) ++ agent.classifiedModel.map(model => "classified model" -> models.describe(model))
         ++ Option.when(args.approveAll)("permissions" -> "every request approved without asking (--approve-all)"),
-      (List("/help commands", "Shift-Tab mode", "Ctrl-C interrupt", "Ctrl-O details", "Ctrl-D quit")
-        ++ Option.when(predictor.enabled)("Tab or → accept a suggestion")).mkString(" · "),
+      List("/help commands", "Shift-Tab mode", "Ctrl-C interrupt", "Ctrl-O details", "Ctrl-D quit")
+        ++ Option.when(predictor.enabled)("Tab or → accept a suggestion"),
     )
 
   /** Run one turn and retain its outcome for the terminal summary and scripted exit code. */
@@ -228,15 +225,18 @@ final class App(args: Cli.Args, val tui: Tui):
         case Some(line) if line.trim.isEmpty => ()
         // Typed out of habit; not listed in /help.
         case Some(line) if App.QuitWords.contains(line.trim.toLowerCase(Locale.ROOT)) => running = false
-        case Some(line) if line.trim.startsWith("/") => running = commands.run(line.trim)
+        case Some(line) if SlashCommand.isCommandLine(line) => running = commands.run(line.trim)
         case Some(line) => afterTurn(runTurn(line))
 
   /** After Ctrl-C, a correction typed during the turn goes back to the prompt: starting
-    * another turn with it would contact the model right after the user stopped it. */
+    * another turn with it would contact the model right after the user stopped it.
+    * The session is saved after every turn, so a closed terminal or a signal loses at
+    * most the turn in progress. */
   private def afterTurn(outcome: TurnOutcome): Unit =
     if outcome == TurnOutcome.Interrupted then
       val queued = agent.takeQueuedInput()
       if queued.nonEmpty then tui.draft(queued.mkString("\n"))
+    if tui.menusAvailable then commands.sessionCommands.checkpoint()
 
   /** The input prompt names the mode unless it is the full one. */
   def prompt: String = policy.mode match

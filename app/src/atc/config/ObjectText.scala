@@ -1,6 +1,6 @@
 package atc.config
 
-import atc.{Debug, TextFiles}
+import atc.TextFiles
 
 /** The top-level members of a JSON object's text, with their positions. */
 private[config] final case class ObjectText(text: String, open: Int, close: Int, members: List[ObjectText.Member]):
@@ -13,7 +13,7 @@ private[config] final case class ObjectText(text: String, open: Int, close: Int,
         TextFiles.lastLineEnding(before).fold(" ")(ending => before.substring(ending.index))
       case None =>
         val inside = text.substring(open + 1, close)
-        TextFiles.firstLineEnding(inside).fold(TextFiles.DefaultLineEnding)(_.text) + "  "
+        TextFiles.lineEnding(inside) + "  "
 
 /** Edits of a config's text that keep everything they do not change: a config is
   * hand-formatted (blank lines, several patterns per line), and serializing it
@@ -22,15 +22,6 @@ object ObjectText:
   /** A member: `keyStart` is its opening quote, `valueStart`/`valueEnd` bound
     * the value (no surrounding whitespace, no trailing comma). */
   private[config] final case class Member(key: String, keyStart: Int, valueStart: Int, valueEnd: Int)
-
-  /** `text` parsed as a config, which must be a JSON object; `where` names it in errors. */
-  private[config] def parse(text: String, where: String): ujson.Obj =
-    val parsed =
-      try ujson.read(TextFiles.stripBom(text))
-      catch case e: Exception => throw IllegalArgumentException(s"Cannot parse config $where: ${Debug.message(e)}")
-    parsed match
-      case o: ujson.Obj => o
-      case _ => throw IllegalArgumentException(s"Config $where must be a JSON object")
 
   /** `text` (a JSON object) with the top-level `key` set to `value`: an
     * existing key keeps its place and only its value changes; a new one is
@@ -43,7 +34,7 @@ object ObjectText:
     after: List[String] = Nil,
     where: String = "config"
   ): String =
-    parse(text, where) // fail clearly on anything that is not a JSON object
+    ConfigLayer.parse(text, where) // fail clearly on anything that is not a JSON object
     val obj = scan(text)
     val rendered = ujson.write(value)
     // ujson honors the final occurrence of a duplicate key. Rewrite that occurrence;
@@ -57,17 +48,18 @@ object ObjectText:
             text.substring(0, prev.valueEnd) + s",${obj.separator}$entry" + text.substring(prev.valueEnd)
           case None if obj.members.isEmpty =>
             val separator = obj.separator
-            val newline = TextFiles.firstLineEnding(separator).fold(TextFiles.DefaultLineEnding)(_.text)
+            val newline = TextFiles.lineEnding(separator)
             text.substring(0, obj.open + 1) + separator + entry + newline + text.substring(obj.close)
           case None =>
             text.substring(0, obj.open + 1) + s"${obj.separator}$entry," + text.substring(obj.open + 1)
 
   /** `text` (a JSON object) with the member at `path` set to `value`, or removed
-    * when `value` is `None`. Objects missing on the way are created, and a new
-    * member goes last in its object, written on one line. Everything else keeps
-    * its text, like [[withTopLevel]]. */
+    * when `value` is `None`. A removal drops every duplicate of the member, since
+    * an earlier one would otherwise take effect. Objects missing on the way are
+    * created, and a new member goes last in its object, written on one line.
+    * Everything else keeps its text, like [[withTopLevel]]. */
   def withMember(text: String, path: List[String], value: Option[ujson.Value], where: String = "config"): String =
-    parse(text, where)
+    ConfigLayer.parse(text, where)
     member(text, path, value)
 
   private def member(text: String, path: List[String], value: Option[ujson.Value]): String =
@@ -76,7 +68,8 @@ object ObjectText:
     def replace(m: Member, by: String) = text.substring(0, m.valueStart) + by + text.substring(m.valueEnd)
     def nested(v: ujson.Value) = path.tail.foldRight(v)((k, inner) => ujson.Obj(k -> inner))
     obj.members.findLast(_.key == key) match
-      case Some(m) if path.tail.isEmpty => value.fold(removeMember(obj, m))(v => replace(m, oneLine(v)))
+      case Some(m) if path.tail.isEmpty =>
+        value.fold(member(removeMember(obj, m), path, None))(v => replace(m, oneLine(v)))
       case Some(m) =>
         val inner = text.substring(m.valueStart, m.valueEnd)
         if inner.startsWith("{") then replace(m, member(inner, path.tail, value))

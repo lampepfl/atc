@@ -26,8 +26,7 @@ private[host] trait HostProcesses:
     requestExec(commands, "")(op)
 
   def requestExec[T](commands: Iterable[String], reason: String)(op: Exec ?=> T)(using user: UserIO, parent: Exec): T =
-    val patterns = commands.toList.map(_.trim).filter(_.nonEmpty).distinct.sorted
-    inScope(policy.requestExec(scopeOf(parent), patterns, reason))(id => op(using ExecImpl(id)))
+    inScope(policy.requestExec(scopeOf(parent), commands.toList, reason))(id => op(using ExecImpl(id)))
 
   def exec(command: String)(using Exec, FileSystem): ProcessResult = exec(command, Nil, ExecOptions())
 
@@ -87,6 +86,7 @@ private[host] trait HostProcesses:
     target
 
   private def processBuilders(pipeline: CommandLine.Pipeline, dir: Path): List[ProcessBuilder] =
+    val keys = keyVariables()
     pipeline.stages.map: stage =>
       val argv = WindowsExecutable.resolve(stage.argv, dir)
       val builder = ProcessBuilder(argv.asJava).directory(dir.toFile).nn
@@ -94,7 +94,6 @@ private[host] trait HostProcesses:
       // in these variables, and the key variables hold ATC's credentials. They belong
       // to ATC, not to commands the agent starts, which could print them. Windows names
       // ignore case, but this map's keys keep the system's spelling (`Path`, not `PATH`).
-      val keys = keyVariables()
       builder.environment().nn.keySet().nn.removeIf: name =>
         LauncherEnvironment.isInternal(name) ||
           keys.exists(key => if Platform.isWindows then key.equalsIgnoreCase(name) else key == name)
@@ -157,7 +156,6 @@ private[host] trait HostProcesses:
         )
       nextProcessId += 1
       val id = nextProcessId
-      val port = output
       val managed = Processes.ManagedProcess.start(
         prepared.pbs,
         prepared.stageLines,
@@ -166,7 +164,7 @@ private[host] trait HostProcesses:
         closeStdinAfter = false,
         live = None,
         keepHead = false,
-        onExit = code => port.processExited(id, code),
+        onExit = code => output.processExited(id, code),
       )
       val handle = ProcessImpl(id, managed, output, scopeOf(ex), policy)
       spawned(id) = handle
@@ -181,7 +179,7 @@ private[host] trait HostProcesses:
 
   private def reapProcesses(): Unit = spawned.filterInPlace((_, process) => process.managed.isAlive)
 
-  /** Kill processes owned by a closing one-time permission scope. */
+  /** Kill the processes owned by a closing `request*` scope. */
   private[host] def killProcessesInScope(id: ScopeId): Unit = spawned.synchronized:
     spawned.values.toList.filter(_.scope == id).foreach: process =>
       try process.managed.kill()
@@ -193,21 +191,23 @@ private[host] trait HostProcesses:
     spawned.values.foreach(_.managed.kill())
     spawned.clear()
 
-  /** `/kill`: `p3`, `3`, or `all`; returns a user-facing result. */
-  private[atc] def killProcess(ref: String): String = spawned.synchronized:
+  /** `/kill`: `p3`, `3`, or `all`. A user-facing report: `Right` when processes were killed,
+    * `Left` when there was none to kill. */
+  private[atc] def killProcess(ref: String): Either[String, String] = spawned.synchronized:
     reapProcesses()
     ref.trim.toLowerCase(Locale.ROOT) match
       case "" | "all" =>
         val count = spawned.size
         killProcesses()
-        if count == 0 then "no process is running" else s"killed $count process${if count == 1 then "" else "es"}"
+        if count == 0 then Left("no process is running")
+        else Right(s"killed $count process${if count == 1 then "" else "es"}")
       case value =>
         value.stripPrefix("p").toIntOption.flatMap(spawned.get) match
           case Some(process) =>
             process.managed.kill()
             spawned.remove(process.id)
-            s"killed p${process.id} (${process.commandLine})"
-          case None => s"no running process '$ref' (see /ps)"
+            Right(s"killed p${process.id} (${process.commandLine})")
+          case None => Left(s"no running process '$ref' (see /ps)")
 
   /** `/ps`: one line per live process. */
   private[atc] def processSummary: String = spawned.synchronized:

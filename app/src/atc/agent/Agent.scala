@@ -1,6 +1,6 @@
 package atc.agent
 
-import atc.Debug
+import atc.{Debug, TextFiles}
 import atc.config.Config
 import atc.lib.{TaskNotes, Todo}
 import atc.llm.*
@@ -169,20 +169,20 @@ final class Agent(
       "originalRequest" -> conversation.userRequests.headOption.getOrElse(""),
       "recentUserInstructions" ->
         ujson.Arr.from(
-          conversation.userRequests.drop(1).takeRight(Conversation.RecentRequests).map(AgentMessages.takeChars(_, 2000))
+          conversation.userRequests.drop(1).takeRight(Conversation.RecentRequests).map(TextFiles.takeChars(_, 2000))
         ),
       "goal" -> notes.goal,
       "constraints" -> ujson.Arr.from(notes.constraints),
       "completed" -> ujson.Arr.from(notes.completed),
       "remaining" -> ujson.Arr.from(notes.remaining),
       "todos" ->
-        ujson.Arr.from(todos.take(50).map(todo => s"${todo.status}: ${AgentMessages.takeChars(todo.text, 200)}")),
+        ujson.Arr.from(todos.take(50).map(todo => s"${todo.status}: ${TextFiles.takeChars(todo.text, 200)}")),
     ))
 
   /** Summarize the older exchanges with the current model (`/compact`). History
     * is replaced only after a complete summary smaller than what it replaces
     * has been received; a cancellation, an incomplete reply or a transcript
-    * that cannot fit the model leaves it unchanged (the last two throw). */
+    * that cannot fit the model throws and leaves it unchanged. */
   def compact(focus: String, cancelled: () => Boolean): Agent.CompactOutcome =
     compactHistory(focus, cancelled, inTurn = false)
 
@@ -198,7 +198,7 @@ final class Agent(
     // The transcript goes to the same model as one message. Refuse before paying for a
     // request the provider would reject, and name the way out in the message.
     current.contextWindow.foreach: window =>
-      val allowance = window.toLong - ContextManager.outputReserve(window, current.maxOutputTokens)
+      val allowance = ContextManager.inputAllowance(window, current.maxOutputTokens)
       val needed = ((ContextManager.estimateTokens(ContextCompaction.prompt) + size(input)) * context.calibration).round
       if needed > allowance then
         throw IllegalStateException(
@@ -207,9 +207,9 @@ final class Agent(
             "window, or start over with /new"
         )
     val retained = retainedContext
-    ui.status("Compacting context…")
+    ui.status(AgentMessages.compactingStatus)
     val result = request.run(cancelled) {
-      current.complete(ContextCompaction.prompt, input, Nil, StreamSink(_ => (), _ => (), _ => ()), cancelled)
+      current.complete(ContextCompaction.prompt, input, Nil, StreamSink(_ => ()), cancelled)
     }
     recordUsage(Agent.Compaction, result.usage)
     if cancelled() then throw CancelledException()
@@ -263,12 +263,12 @@ final class Agent(
         case Done(result) => result
       try loop()
       catch
-        case error: CancelledException =>
-          conversation.repairAfter(error)
+        case _: CancelledException =>
+          conversation.repairAfter(AgentMessages.interrupted)
           interrupted()
           TurnOutcome.Interrupted
         case NonFatal(e) =>
-          conversation.repairAfter(e)
+          conversation.repairAfter(AgentMessages.turnFailed(e))
           throw e
 
     /** Ask the model once, record its answer, then act on it. */
@@ -284,9 +284,8 @@ final class Agent(
         prepared.warnings.foreach(ui.warn)
         ui.status(AgentMessages.thinkingStatus)
         completeRound() match
-          case None if !cancelled() && !queuedInput.isEmpty =>
-            conversation.interrupt()
-            Continue
+          // Queued input cancelled the request; `steer` closes the open edge when it accepts it.
+          case None if !cancelled() && !queuedInput.isEmpty => Continue
           case None => interrupted()
           case Some(raw) =>
             recordUsage(Agent.Turns, raw.usage)
@@ -305,18 +304,17 @@ final class Agent(
                 else if budgetRejections > 0 then Done(TurnOutcome.LimitReached)
                 else if raw.text.trim.isEmpty then Done(TurnOutcome.Failed)
                 else Done(TurnOutcome.Finished)
-              case CompletionPolicy.Next.Resume(continuation) =>
-                val droppedCalls = raw.stop == CompletionStop.Truncated && raw.toolCalls.nonEmpty
+              case CompletionPolicy.Next.Resume(continuation, truncatedCall) =>
                 if cancelled() then interrupted()
                 else if raw.stop == CompletionStop.Incomplete && incompleteResumes >= Agent.MaxIncompleteResumes then
                   ui.warn(AgentMessages.incompleteStreamExhausted(model.alias, Agent.MaxIncompleteResumes))
                   Done(TurnOutcome.Failed)
-                else if droppedCalls && truncatedCalls >= Agent.MaxTruncatedCalls then
+                else if truncatedCall && truncatedCalls >= Agent.MaxTruncatedCalls then
                   ui.warn(AgentMessages.truncatedToolCallsExhausted(model.alias, Agent.MaxTruncatedCalls + 1))
                   Done(TurnOutcome.LimitReached)
                 else if resumes < Agent.MaxResumes then
                   if raw.stop == CompletionStop.Incomplete then incompleteResumes += 1
-                  if droppedCalls then truncatedCalls += 1
+                  if truncatedCall then truncatedCalls += 1
                   continuation.foreach(text => conversation.append(Msg.Continuation(text)))
                   resume()
                 else
@@ -335,22 +333,22 @@ final class Agent(
         // Trimming fits every request into the window less the output reserve; a threshold
         // above that allowance would never be reached, and history would be cut, not summarized.
         val due = usage.window.exists: window =>
-          val allowance = window - ContextManager.outputReserve(window, model.maxOutputTokens)
+          val allowance = ContextManager.inputAllowance(window, model.maxOutputTokens)
           usage.tokens.toDouble >= (window.toDouble * config.autoCompactThreshold).min(allowance.toDouble)
         if due && usage.tokens >= compactRetryAt then
           def retryLater(): Unit = compactRetryAt = usage.tokens + usage.window.getOrElse(0) / 10
           try
             compactHistory("", stop, inTurn = true) match
-              case Agent.CompactOutcome.Compacted => ui.warn("Conversation compacted into a summary.")
+              case Agent.CompactOutcome.Compacted => ui.warn(AgentMessages.compactedWarning)
               case Agent.CompactOutcome.NothingToCompact => ()
               case Agent.CompactOutcome.SummaryNotSmaller =>
                 retryLater()
-                ui.warn("Context compaction produced no smaller summary; history unchanged.")
+                ui.warn(AgentMessages.compactionNotSmallerWarning)
           catch
             case e: CancelledException => if cancelled() then throw e
             case NonFatal(e) =>
               retryLater()
-              ui.warn(s"Context compaction failed (${Debug.describe(e)}); history unchanged.")
+              ui.warn(AgentMessages.compactionFailedWarning(Debug.describe(e)))
 
     private def completeRound(): Option[Completion] =
       val active = AtomicBoolean(true)
@@ -369,12 +367,16 @@ final class Agent(
         active.set(false)
         ui.assistantEnd()
 
-    /** Run the requested tools in order, honouring cancellation and the per-turn budget. */
+    /** Run the requested tools in order, honouring cancellation and the per-turn budget.
+      * When a call throws, the batch still gets one result per call before the exception
+      * propagates: the completed results, a failure for that call and "not run" for the rest. */
     private def runTools(calls: List[ToolCall]): Outcome =
       var overBudget = false
       var needsReplan = false
+      var failure: Option[Throwable] = None
       val results = calls.map: call =>
-        if cancelled() then ToolResult(call.id, AgentMessages.cancelledBeforeExecution, isError = true)
+        if failure.isDefined then ToolResult(call.id, AgentMessages.notRunAfterFailure, isError = true)
+        else if cancelled() then ToolResult(call.id, AgentMessages.cancelledBeforeExecution, isError = true)
         else if needsReplan || !queuedInput.isEmpty then
           ToolResult(call.id, AgentMessages.skippedAfterFeedback, isError = true)
         else if used >= budget && !extendBudget() then
@@ -383,10 +385,16 @@ final class Agent(
         else
           used += 1
           toolCallCount += 1
-          val result = runner.run(call)
-          needsReplan = result.needsReplan
-          result
+          try
+            val result = runner.run(call)
+            needsReplan = result.needsReplan
+            result
+          catch
+            case NonFatal(e) =>
+              failure = Some(e)
+              ToolResult(call.id, AgentMessages.toolCallFailed(e), isError = true)
       conversation.append(Msg.ToolResults(results))
+      failure.foreach(throw _)
       if cancelled() then interrupted()
       else if !overBudget then Continue
       else
@@ -410,7 +418,8 @@ final class Agent(
         budgetDenied = true
         false
 
-    /** The provider cut the response after a server-side tool call: re-send the history. */
+    /** The response stopped before it was complete (a provider pause, the output limit or a
+      * broken stream): ask the model again with the history so far. */
     private def resume(): Outcome =
       resumes += 1
       ui.status(AgentMessages.resumingStatus)
@@ -439,7 +448,8 @@ object Agent:
     /** The summary was no smaller than what it would replace, so history was kept. */
     case SummaryNotSmaller
 
-  /** Server-side tool pauses (web search) per turn; a research turn can take many. */
+  /** Resumes per turn, whatever stopped the response; a research turn that pauses for
+    * server-side web searches can take many. */
   val MaxResumes = 20
   /** A broken provider stream gets fewer retries than a normal output-limit continuation. */
   val MaxIncompleteResumes = 2

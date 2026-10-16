@@ -29,8 +29,6 @@ import Ansi.{Blue, Bold, Cyan, Dim, Green, Red, Yellow}
   * `doc/development.md` for the layout and keyboard controls. */
 final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends AgentUI:
   private val historyPath = PromptReader.secureHistoryFile(historyFile)
-  // No grapheme-cluster probing: it sends a DECRQM query to the terminal and
-  // waits for a reply, which swallows early input on ptys that don't answer.
   private val terminal: Terminal = Tui.openTerminal(nonInteractive)
   Debug.log(
     s"terminal: ${terminal.getClass.getSimpleName} type=${terminal.getType} size=${terminal.getSize} encoding=${terminal.encoding()}"
@@ -58,7 +56,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   // ── state ─────────────────────────────────────────────────────────
 
-  /** Set while an agent turn is running; Ctrl-C sets it. */
+  /** Set by Ctrl-C during a turn; `beginTurn` clears it. */
   private val interrupted = AtomicBoolean(false)
   @volatile private var busy = false
   @volatile private var closed = false
@@ -90,7 +88,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     text => frame { statusLine.draft = text; statusLine.refresh() },
   )
   private val statusLine = StatusLine(screen, () => busy, () => popupDepth > 0, () => queuedInputs())
-  private val dialogs = Dialogs(screen, alerts, keys, statusLine, prompt)
+  private val dialogs = Dialogs(screen, alerts, statusLine, prompt)
 
   def fileChanged(change: FileChange): Unit = screen.synchronized(tool.fileChanged(change))
 
@@ -98,35 +96,28 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     * above a footer drawn again. A plain terminal has nothing to clear. */
   def clearScreen(): Unit = if !plain then
     frame:
-      screen.writeStyle(s"${screen.beforeClear}${Ansi.Esc}[H${Ansi.Esc}[2J${Ansi.Esc}[3J")
-      screen.tail = "\n\n"
+      screen.clear()
       statusLine.redraw()
 
   def clearOutputHistory(): Unit = screen.synchronized(tool.history.clear())
 
-  /** `/output`: list the retained results, or show one from a line on, 200 lines at a time. */
-  def showOutput(argument: String): Unit = frame:
-    val history = tool.history
-    val parts = argument.trim.split("\\s+").toList.filter(_.nonEmpty)
-    if parts.isEmpty then
-      if history.list.isEmpty then info("No retained tool output.")
-      else history.list.foreach(println)
-    else if parts.size > 2 || parts.lift(1).exists(value => !value.toIntOption.exists(_ >= 1)) then
-      error("Use /output <id|last> [line], with a positive line number.")
+  /** The results kept for `/output`. */
+  def outputHistory: ToolHistory = tool.history
+
+  /** `/output`: a line per retained result. */
+  def listOutput(): Unit = frame(tool.history.list(g.dot).foreach(println))
+
+  /** `/output`: `entry` from line `from` on, 200 lines at a time. */
+  def showOutput(entry: ToolHistory.Entry, from: Int): Unit = frame:
+    val lines = entry.render.linesIterator.toVector
+    if from > lines.size then error(s"Tool ${entry.id} has ${lines.size} lines of retained output.")
     else
-      val id = if parts.head == "last" then history.latest.map(_.id) else parts.head.toIntOption
-      val from = parts.lift(1).flatMap(_.toIntOption).getOrElse(1)
-      id.flatMap(history.get) match
-        case Some(entry) =>
-          val lines = entry.render.linesIterator.toVector
-          if from > lines.size then error(s"Tool ${entry.id} has ${lines.size} lines of retained output.")
-          else
-            val end = (from.toLong - 1 + 200).min(lines.size.toLong).toInt
-            (from - 1 until end).foreach: i =>
-              val line = Ansi.sanitize(lines(i))
-              renderedLine(if i < entry.changesFrom then line else diffLine(line))
-            if lines.size > end then info(s"More output: /output ${entry.id} ${end + 1}")
-        case _ => error("Output is unavailable. Use /output to list retained results.")
+      val end = (from.toLong - 1 + 200).min(lines.size.toLong).toInt
+      val diffFrom = entry.changesFrom
+      (from - 1 until end).foreach: i =>
+        val line = Ansi.sanitize(lines(i))
+        renderedLine(if i < diffFrom then line else diffLine(line))
+      if lines.size > end then info(s"More output: /output ${entry.id} ${end + 1}")
 
   /** A line of a file-change preview: the file's header bold, additions green, removals red. */
   private def diffLine(line: String): String =
@@ -152,10 +143,11 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   @volatile var askToContinue: Boolean = true
 
   override def confirmMoreToolCalls(used: Int, budget: Int): Boolean =
-    if askToContinue then alerts.alert(s"Tool limit reached after ${Format.plural(used, "call")}. Continue?")
-    askToContinue && confirm(
-      s"Tool limit reached after ${Format.plural(used, "call")}. Allow ${Format.plural(budget, "more call")}?"
-    )
+    if !askToContinue then false
+    else
+      val reached = s"Tool limit reached after ${Format.plural(used, "call")}."
+      alerts.alert(s"$reached Continue?")
+      confirm(s"$reached Allow ${Format.plural(budget, "more call")}?")
 
   terminal.handle(Terminal.Signal.INT, _ => interruptTurn())
   terminal.handle(Terminal.Signal.WINCH, _ => resized())
@@ -192,11 +184,9 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     * leave one blank line before the next prompt. */
   def endTurn(stats: Option[Tui.TurnStats] = None): Unit =
     frame:
-      screen.stopSpinner()
+      endText()
       busy = false
       statusLine.operation = stats.fold("ready")(_.outcome.label)
-      thinking.end()
-      closeProse()
       tool.endTurn()
       flushTodos()
       flushProcessEvents()
@@ -210,6 +200,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
         lines.zipWithIndex.foreach: (line, index) =>
           write((if index == 0 then "" else Indent) + styled(line, Dim) + "\n")
       blankLine()
+      statusLine.turnEnded(stats.map(s => s.outcome -> alerts.turnText(s)))
       statusLine.refresh()
     keys.stop() // outside the lock: the key thread may be waiting for it
     stats.foreach(alerts.turnEnded)
@@ -218,9 +209,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   /** Start a new block: blank line before it, and no prose/thinking block is open any more. */
   private def beginBlock(): Unit =
-    screen.stopSpinner()
-    thinking.end()
-    closeProse()
+    endText()
     blankLine()
 
   // ── plain lines (banner, slash commands, notices) ─────────────────
@@ -239,7 +228,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   /** One dim line of context, set apart from what came before. */
   def preview(s: String): Unit =
     frame(blankLine())
-    info(screen.fit(Ansi.sanitize(s).replace('\n', ' '), 0))
+    info(screen.fit(Ansi.sanitize(s), 0))
   def success(s: String): Unit = renderedLine(styled(Ansi.sanitize(s), Green))
   def warn(s: String): Unit = renderedLine(styled(s"${g.warn} ${Ansi.sanitize(s)}", Yellow))
   def error(s: String): Unit =
@@ -251,8 +240,8 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     val fields = rows.map((command, description) => styled(Ansi.sanitize(command), Cyan) -> Ansi.sanitize(description))
     TextLayout.fields(fields, width).foreach(renderedLine)
 
-  /** The start-up banner: a title, aligned `label → value` rows and a dim hint line. */
-  def banner(title: String, rows: List[(String, String)], hint: String): Unit = frame:
+  /** The start-up banner: a title, aligned `label → value` rows and the dim key hints. */
+  def banner(title: String, rows: List[(String, String)], hints: List[String]): Unit = frame:
     screen.stopSpinner()
     blankLine()
     write(styled(s"${g.bullet} ${Ansi.sanitize(title)}", Cyan, Bold) + "\n")
@@ -260,10 +249,10 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     TextLayout.fields(rows.map((label, value) => styled(Ansi.sanitize(label), Dim) -> Ansi.sanitize(value)), width)
       .foreach(line => write(line + "\n"))
     val controls =
-      Ansi.sanitize(hint).split(" · ").toList.map(c => if g == Glyphs.ascii then c.replace("→", "Right") else c)
+      hints.map(Ansi.sanitize).map(c => if g == Glyphs.ascii then c.replace("→", "Right") else c)
     // Rows of whole controls: a row break inside one would split a key from what it does.
     val hintRows = controls.foldLeft(List.empty[String]):
-      case (row :: done, control) if TextLayout.width(row) + 3 + TextLayout.width(control) <= width - 3 =>
+      case (row :: done, control) if Screen.displayWidth(row) + 3 + Screen.displayWidth(control) <= width - 3 =>
         s"$row ${g.dot} $control" :: done
       case (done, control) => control :: done
     hintRows.reverse.foreach(row =>
@@ -304,8 +293,11 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
       )
     else MarkdownStream.plain
 
-  /** Flush what the Markdown renderer still holds and end the prose block. */
-  private def closeProse(): Unit =
+  /** Stop the spinner and end the reasoning and prose blocks; the Markdown renderer
+    * writes what it still holds. */
+  private def endText(): Unit =
+    screen.stopSpinner()
+    thinking.end()
     prose.foreach(md => writeGuttered(md.finish(), Indent))
     prose = None
 
@@ -318,18 +310,13 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     if text.nonEmpty then status(text)
 
   def assistantEnd(): Unit = frame:
-    screen.stopSpinner()
-    thinking.end()
-    closeProse()
+    endText()
     ensureNewline()
 
   /** Show progress ("model is thinking"); ends the current prose block. */
   def status(text: String): Unit = frame:
-    statusLine.operation = text
-    statusLine.refresh()
-    screen.stopSpinner()
-    thinking.end()
-    closeProse()
+    statusLine.setOperation(text)
+    endText()
     ensureNewline()
     if plain then write(styled(s"~ ${Ansi.sanitize(text)}...", Dim) + "\n")
     else if !statusLine.shown then screen.spin("", Ansi.sanitize(text))
@@ -373,8 +360,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
       while pendingProcessEvents.nonEmpty do
         val line = styled(Ansi.sanitize(pendingProcessEvents.dequeue()), Cyan)
         if tool.isOpen then tool.emit(line + "\n")
-        else if prompt.reader.isReading then prompt.reader.printAbove(line)
-        else renderedLine(line)
+        else if !prompt.printAbove(line) then renderedLine(line)
 
   def toolEnd(r: ExecutionResult, millis: Long): Unit = frame:
     statusLine.setOperation(if r.success then "tool completed" else "tool failed")
@@ -402,13 +388,17 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   private val popupLock = ReentrantLock()
 
   /** A pop-up is a block of its own: a pending TODO panel is drawn first, then
-    * `body` (which reads the terminal), then the blank line that ends the block. */
-  private def popupBlock[T](body: => T): T =
+    * `body` (which reads the terminal), then the blank line that ends the block.
+    * During a turn the program status is `blocked` on `kind` (`permission`,
+    * `question` or `auth`), with `message` saying what the pop-up asks. */
+  private def popupBlock[T](kind: String, message: String)(body: => T): T =
     popupLock.lockInterruptibly()
     try
       keys.withPaused:
+        val outer = statusLine.waitingFor
         frame:
           popupDepth += 1
+          statusLine.waitingFor = (kind, message)
           statusLine.refreshTitle()
           tool.endOutput()
           tool.hold()
@@ -420,16 +410,12 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
             alerts.touch()
             blankLine()
             popupDepth -= 1
+            statusLine.waitingFor = outer
             statusLine.refreshTitle()
             if popupDepth == 0 then
               tool.release()
               flushProcessEvents()
     finally popupLock.unlock()
-
-  // Slash-command menus follow one pattern. A one-shot picker (`/model`, `/effort`)
-  // acts on the choice and closes; a menu the user comes back to (`/providers`,
-  // `/config`) is a `menuLoop` ending in Done; a menu opened from another is
-  // `chooseOrBack`, ending in Back. Esc goes back one level in each of them.
 
   /** A single-choice pop-up for a slash command (`/model`, `/classifiedmodel`).
     * `None` when there is no terminal for menus, no options, or the user
@@ -462,28 +448,38 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   private def chooseIndex(title: String, options: List[String], initial: Int = 0): Option[Int] =
     if plain || options.isEmpty then None
-    else popupBlock(dialogs.menuIndex(Ansi.sanitize(title), options.map(Ansi.sanitize), escape = "back", initial))
+    else
+      popupBlock("question", title):
+        dialogs.menuIndex(Ansi.sanitize(title), options.map(Ansi.sanitize), escape = "back", initial)
 
   /** A multi-choice pop-up with the `checked` options ticked at first: the
     * indices ticked when confirmed, `None` when left with Esc or without menus. */
   def chooseMany(title: String, options: List[String], checked: Set[Int]): Option[Set[Int]] =
     if plain || options.isEmpty then None
     else
-      popupBlock(dialogs.checkboxIndices(Ansi.sanitize(title), options.map(Ansi.sanitize), checked, escape = "back"))
-        .map(_.toSet)
+      val ticked = popupBlock("question", title):
+        dialogs.checkboxIndices(Ansi.sanitize(title), options.map(Ansi.sanitize), checked, escape = "back")
+      ticked.map(_.toSet)
 
+  // The operation is set inside the pop-up, under its lock: pop-ups that `parallel` tasks
+  // open take turns, and each restores the operation it found when its turn came.
   def askPermission(req: PermissionRequest): Decision =
-    statusLine.withOperation("waiting for permission")(popupBlock(dialogs.permission(req)))
+    val summary = s"${req.title} (${req.details.mkString(", ")})"
+    popupBlock("permission", summary):
+      alerts.alert(s"Permission needed: $summary")
+      statusLine.withOperation("waiting for permission")(dialogs.permission(req))
 
   /** A yes/no question from the app itself (see [[Dialogs.confirm]]). */
-  def confirm(question: String): Boolean = popupBlock(dialogs.confirm(question))
+  def confirm(question: String): Boolean = popupBlock("question", question)(dialogs.confirm(question))
 
   /** Ask for a secret such as an API key (see [[Dialogs.secret]]). */
-  def askSecret(question: String): Option[String] = popupBlock(dialogs.secret(question))
+  def askSecret(question: String): Option[String] = popupBlock("auth", question)(dialogs.secret(question))
 
   /** Ask the user a question on behalf of the agent (see [[Dialogs.answer]]). */
   def askUser(question: String, options: List[String], multiple: Boolean): Option[String] =
-    statusLine.withOperation("waiting for your answer")(popupBlock(dialogs.answer(question, options, multiple)))
+    popupBlock("question", question):
+      alerts.alert(s"Question: $question")
+      statusLine.withOperation("waiting for your answer")(dialogs.answer(question, options, multiple))
 
   // ── TODO panel ────────────────────────────────────────────────────
 
@@ -523,7 +519,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
         case TodoStatus.Done => styled(s"${g.done} $text", Dim)
         case TodoStatus.InProgress => styled(s"${g.inProgress} $text", Yellow)
         case TodoStatus.Pending => s"${g.pending} $text"
-      TextLayout.wrap(line, width - 5).foreach(row => write(Indent + Indent + row + "\n"))
+      TextLayout.wrap(line, width - 5, 2 * Indent.length).foreach(row => write(Indent + Indent + row + "\n"))
 
   // ── input ─────────────────────────────────────────────────────────
 
@@ -551,7 +547,8 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     var again = true
     while again do
       try
-        val typed = nextDraft + keys.takeTypeAhead()
+        // A line apart, as queued corrections are joined.
+        val typed = List(nextDraft, keys.takeTypeAhead()).filter(_.nonEmpty).mkString("\n")
         nextDraft = ""
         statusLine.draft = ""
         result = Some(prompt.read(styled(promptText, Cyan, Bold), typed))
@@ -598,8 +595,10 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 object Tui:
   /** A scripted `-p` run never needs console discovery or raw mode. Giving it
     * a known dumb UTF-8 terminal also avoids platform-specific null encodings
-    * when Windows redirects stdin/stdout (as CI and normal pipelines do). */
-  private[atc] def openTerminal(
+    * when Windows redirects stdin/stdout (as CI and normal pipelines do).
+    * There is no grapheme-cluster probing: it sends a DECRQM query to the terminal
+    * and waits for a reply, which swallows early input on ptys that do not answer. */
+  private[ui] def openTerminal(
     nonInteractive: Boolean,
     input: InputStream = System.in.nn,
     output: OutputStream = System.out.nn,
@@ -609,7 +608,7 @@ object Tui:
 
   /** Choose safe layout characters. Dumb/non-interactive terminals may report
     * no encoding at all, in which case ASCII is the only sound default. */
-  private[atc] def glyphs(encoding: Charset | Null, forceAscii: Boolean): Glyphs =
+  private[ui] def glyphs(encoding: Charset | Null, forceAscii: Boolean): Glyphs =
     if !forceAscii && Option(encoding).exists(_.name.nn.toUpperCase(Locale.ROOT).contains("UTF")) then Glyphs.unicode
     else Glyphs.ascii
 

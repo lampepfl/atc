@@ -1,15 +1,13 @@
 package atc.commands
 
 import atc.{App, Debug, FirstRun, Setup}
-import atc.config.{
-  Config, ModelCatalog, ModelListStore, ModelSpec, ObjectText, ProviderConfig, ProviderEdits, ProviderPreset
-}
+import atc.config.{Config, ModelCatalog, ObjectText, ProviderConfig, ProviderEdits, ProviderPreset}
 import atc.llm.ChatModel
 import atc.platform.PlatformPath
 
 import upickle.default.writeJs
 
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 import scala.util.control.NonFatal
 
 /** `/providers`: the provider list, back to it after each change until the
@@ -31,7 +29,9 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
       val p = settings.providers(name)
       val offered =
         if p.models.isEmpty then "offers every model it lists"
-        else ProviderEdits.offered(p, endpoint(name, p).flatMap(ModelListStore.global.load).getOrElse(Nil))
+        else
+          val stored = ModelCatalog.endpoint(name, p, models.configuration.keys).flatMap(models.lists.load)
+          ProviderEdits.offered(p, stored.getOrElse(Nil))
       s"${name.padTo(width, ' ')}  ${if p.enabled then "on " else "off"}  $offered" -> (() => actions(name))
     val addable = ProviderPreset.all.filterNot(p => settings.providers.contains(p.name))
     providers ++ Option.when(addable.nonEmpty)("Add a provider" -> (() => add(addable)))
@@ -43,23 +43,26 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
     var open = true
     while open do
       val p = models.configuration.settings.providers(name)
+      /** Whether no model of this provider is in use; says which one is when one is. */
+      def unused(): Boolean =
+        modelCommands.inUse.find(_._1.provider == name) match
+          case Some((m, role)) =>
+            tui.error(s"${m.ref} is $role; switch to another model first")
+            false
+          case None => true
       val toggle = (if p.enabled then "Turn off" else "Turn on") ->
         (() =>
-          modelCommands.inUse.find(_._1.provider == name) match
-            case Some((m, role)) if p.enabled =>
-              tui.error(s"${m.ref} is $role; switch to another model first")
-              false
-            case _ =>
-              applyEdits(
-                ProviderEdits.setEnabled(name, !p.enabled),
-                s"$name turned ${if p.enabled then "off" else "on"}"
-              )
+          (!p.enabled || unused()) &&
+            applyEdits(ProviderEdits.setEnabled(name, !p.enabled), s"$name turned ${if p.enabled then "off" else "on"}")
         )
+      // Dropping the entries removes every alias of the provider, so none of its models may be in use.
       val showAll = "Offer every model it lists (drop its model entries)" ->
         (() =>
-          val question = s"Drop the ${p.models.size} model entries of $name and their settings?"
-          tui.chooseOrBack(question, List("Drop them")).isDefined &&
-          applyEdits(ProviderEdits.showAll(name), s"$name offers every model it lists")
+          val edits = ProviderEdits.showAll(name)
+          val files = byFile(edits, None).keys.map(PlatformPath.display).mkString(" and ")
+          val question = s"Drop the ${p.models.size} model entries of $name and their settings from $files?"
+          unused() && tui.chooseOrBack(question, List("Drop them")).isDefined &&
+          applyEdits(edits, s"$name offers every model it lists")
         )
       val signIn = "Sign in with ChatGPT" ->
         (() =>
@@ -69,7 +72,7 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
         )
       val offered = List(toggle, "Choose its models" -> (() => chooseModels(name, p))) ++
         Option.when(p.models.nonEmpty)(showAll) ++
-        Option.when(p.api.exists(_.trim.equalsIgnoreCase("chatgpt")))(signIn)
+        Option.when(p.api.flatMap(ProviderConfig.canonicalApi).contains("chatgpt"))(signIn)
       tui.chooseOrBack(name, offered.map(_._1)) match
         case Some(index) => open = !offered(index)._2()
         case None => open = false
@@ -79,11 +82,11 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
     * Whether the choice was confirmed and kept. */
   private def chooseModels(name: String, p: ProviderConfig): Boolean =
     import ProviderEdits.Choice
-    val listed = endpoint(name, p).fold(Nil): spec =>
+    val listed = ModelCatalog.endpoint(name, p, models.configuration.keys).fold(Nil): spec =>
       tui.info(s"Fetching the models of $name...")
       try
         val fetched = ChatModel.listModels(spec)
-        ModelListStore.global.save(spec, fetched)
+        models.lists.save(spec, fetched)
         fetched
       catch
         case NonFatal(e) =>
@@ -121,41 +124,41 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
               true
             else applyEdits(edits, s"$name: ${chosen.size} model${if chosen.size == 1 then "" else "s"} on")
 
-  /** The provider as an endpoint whose models can be listed; `None` when its key is not bound. */
-  private def endpoint(name: String, p: ProviderConfig): Option[ModelSpec] =
-    ModelCatalog
-      .from(Config(providers = Map(name -> p.copy(models = Map.empty, enabled = true))), models.configuration.keys)
-      .discoverable.headOption
-
   private def add(addable: List[ProviderPreset]): Unit =
     tui.chooseOrBack("Add a provider", addable.map(_.label)).flatMap(addable.lift).foreach: preset =>
       val ui = Setup.firstRunUi(tui)
       FirstRun.provider(ui, preset, models.configuration.keys, ChatModel.listModels, Setup.signIn(again = false)) match
-        case Some(ready: FirstRun.Outcome.Ready) =>
+        case Some(ready) =>
           Setup.saveKeyAndModels(ready)
           val edit = ProviderEdits.Edit(List("providers", ready.provider.name), Some(writeJs(ready.provider.config)))
           if applyEdits(List(edit), s"${ready.provider.label} added", into = Some(Config.globalPath)) then
             modelCommands.switchModel(ready.model.ref)
-        case _ => tui.info("No provider added.")
+        case None => tui.info("No provider added.")
 
-  /** Write `edits`, each to the file that owns it (or `into`), and reload the
-    * models. A change that leaves an invalid config is undone. */
+  /** The files `edits` go to, `into` or those [[ProviderEdits.files]] names, each with its edits. */
+  private def byFile(edits: List[ProviderEdits.Edit], into: Option[Path]): Map[Path, List[ProviderEdits.Edit]] =
+    val layers = models.configuration.layers
+    edits.flatMap(e => into.fold(ProviderEdits.files(layers, e, Config.globalPath))(List(_)).map(_ -> e))
+      .groupMap(_._1)(_._2)
+
+  /** Write `edits` to their files ([[byFile]]) and reload the models. A change that leaves an
+    * invalid config is undone. */
   private def applyEdits(edits: List[ProviderEdits.Edit], done: String, into: Option[Path] = None): Boolean =
-    val global = Config.globalPath
-    val byFile = edits.groupBy: e =>
-      into.orElse(ProviderEdits.owner(models.configuration.layers, e.path).flatMap(_.path)).getOrElse(global)
-    val created = if byFile.contains(global) && !Files.exists(global) then Config.ensureGlobal() else Nil
-    val originals = byFile.keys.filterNot(created.contains).map(p => p -> Files.readString(p).nn).toMap
+    val files = byFile(edits, into)
     try
-      byFile.foreach: (path, es) =>
-        Config.editFile(path): text =>
-          es.foldLeft(text)((t, e) => ObjectText.withMember(t, e.path, e.value, path.toString))
-      modelCommands.reload()
-      tui.success(s"$done (saved to ${byFile.keys.map(PlatformPath.display).mkString(", ")})")
+      ConfigCommands.editConfigs(app.cwd, Config.globalDir, files.keys.toList) {
+        files.foreach: (path, es) =>
+          Config.editFile(path): text =>
+            es.foldLeft(text)((t, e) => ObjectText.withMember(t, e.path, e.value, path.toString))
+      } {
+        modelCommands.reload()
+        tui.success(s"$done (saved to ${files.keys.map(PlatformPath.display).mkString(", ")})")
+      }
       true
     catch
       case NonFatal(e) =>
-        originals.foreach((p, text) => Files.writeString(p, text))
-        created.foreach(Files.deleteIfExists)
+        // A reload that failed part way may have taken up the edited files already.
+        try modelCommands.reload()
+        catch case NonFatal(again) => Debug.trace(again)
         tui.error(s"Nothing changed: ${Debug.message(e)}")
         false

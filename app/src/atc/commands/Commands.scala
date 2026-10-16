@@ -22,17 +22,8 @@ final class Commands(app: App):
   val sessionCommands: SessionCommands = SessionCommands(app)
 
   /** Completion candidates for the words typed so far: command names, then a command's choices. */
-  def complete(words: List[String]): List[String] = words match
-    case _ :: Nil => SlashCommand.names
-    case "/model" :: _ :: Nil => models.catalog.labels
-    case "/effort" :: _ :: Nil => modelCommands.effortChoices
-    case "/classifiedmodel" :: _ :: Nil => "none" +: models.catalog.labels
-    case "/mode" :: _ :: Nil => Mode.values.toList.map(_.label)
-    case "/perms" :: _ :: Nil => List("revoke")
-    case "/config" :: _ :: Nil => "show" :: ConfigCommands.Setting.values.toList.map(_.key)
-    case "/config" :: key :: _ :: Nil => ConfigCommands.Setting.named(key).fold(Nil)(_.choices)
-    case "/config" :: key :: _ :: _ :: Nil if ConfigCommands.Setting.named(key).isDefined => ConfigCommands.ScopeNames
-    case _ => Nil
+  def complete(words: List[String]): List[String] =
+    Commands.complete(words, models.catalog.labels, modelCommands.effortChoices)
 
   /** Handle a slash command line; returns false to quit. */
   def run(line: String): Boolean =
@@ -69,12 +60,33 @@ final class Commands(app: App):
     case Cmd.Ps => tui.println(Ansi.sanitize(host.processSummary))
     case Cmd.Kill =>
       val result = host.killProcess(arg)
-      tui.println(Ansi.sanitize(result))
+      tui.println(Ansi.sanitize(result.merge))
       // The agent's handles to those processes are dead now; it should hear why.
-      if result.startsWith("killed") then agent.noteProcessesKilled(result)
+      result.foreach(agent.noteProcessesKilled)
     case Cmd.Cost => statusCommands.showCost()
-    case Cmd.Output => tui.showOutput(arg)
+    case Cmd.Output => statusCommands.output(arg)
     case Cmd.Task => statusCommands.showTask()
     case Cmd.Save => sessionCommands.save(arg)
     case Cmd.Resume => sessionCommands.resume(arg)
     case Cmd.Quit => () // `run` ends the loop instead
+
+object Commands:
+  /** As [[Commands.complete]], with the model labels and the agent model's efforts, each read
+    * only for the command that offers them. A command is named as [[SlashCommand.parse]] reads
+    * it, so its aliases complete too. */
+  def complete(words: List[String], labels: => List[String], efforts: => List[String]): List[String] = words match
+    case _ :: Nil => SlashCommand.names
+    case typed :: args =>
+      SlashCommand.parse(typed).toOption.fold(Nil): (command, _) =>
+        (command, args) match
+          case (Cmd.Model, _ :: Nil) => labels
+          case (Cmd.Effort, _ :: Nil) => efforts
+          case (Cmd.ClassifiedModel, _ :: Nil) => "none" +: labels
+          case (Cmd.Mode, _ :: Nil) => Mode.values.toList.map(_.label)
+          case (Cmd.Perms, _ :: Nil) => List("revoke")
+          case (Cmd.Config, _ :: Nil) => "show" :: ConfigCommands.Setting.values.toList.map(_.key)
+          case (Cmd.Config, key :: _ :: Nil) => ConfigCommands.Setting.named(key).fold(Nil)(_.choices)
+          case (Cmd.Config, key :: _ :: _ :: Nil) if ConfigCommands.Setting.named(key).isDefined =>
+            ConfigCommands.ScopeNames
+          case _ => Nil
+    case Nil => Nil

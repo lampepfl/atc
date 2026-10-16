@@ -36,10 +36,10 @@ private[atc] object PlatformPath:
     value == "/" ||
       (Platform.isWindows && (value == "\\" || value.matches("(?i)^[a-z]:[\\\\/]$")))
 
-  /** Remove path separators from the end without turning a root into an empty
-    * path. Call [[isRoot]] first when roots have special meaning. */
+  /** Remove path separators from the end. A root loses its separator too, so call
+    * [[isRoot]] first when roots have special meaning. */
   def stripTrailingSeparators(value: String): String =
-    value.reverse.dropWhile(isSeparator).reverse
+    value.take(value.lastIndexWhere(!isSeparator(_)) + 1)
 
   private inline def isSeparator(char: Char): Boolean =
     char == '/' || (Platform.isWindows && char == '\\')
@@ -52,6 +52,15 @@ private[atc] object PlatformPath:
       val relative = value.drop(2).map(c => if c == '/' || c == '\\' then Platform.fileSeparator else c)
       userHome.resolve(relative).toString
     else value
+
+  /** Parse path text from the user or the agent: expand `~`, refuse what [[validationError]]
+    * refuses before `java.nio` sees the text, and convert it to a native `Path`, which may
+    * be relative. Throws `IllegalArgumentException`. */
+  def parse(value: String): Path =
+    val expanded = expandHome(value)
+    validationError(expanded).foreach: reason =>
+      throw IllegalArgumentException(s"Invalid Windows path '$value': $reason")
+    Paths.get(native(expanded)).nn
 
   /** Why a path is unsafe on the current platform, if it is unsafe. */
   def validationError(value: String): Option[String] =

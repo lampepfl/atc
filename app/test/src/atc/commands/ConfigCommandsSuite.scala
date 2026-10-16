@@ -1,6 +1,9 @@
 package atc.commands
 
-import atc.config.Config
+import atc.TestEnv
+import atc.config.{Config, ProjectTrust}
+
+import java.nio.file.Files
 
 /** The settings `/config` changes: what a typed value means, and how the value in force reads. */
 class ConfigCommandsSuite extends munit.FunSuite:
@@ -26,3 +29,30 @@ class ConfigCommandsSuite extends munit.FunSuite:
   test("settings are named case-insensitively; policy settings are not among them"):
     assertEquals(named("AUTOCOMPACTTHRESHOLD"), Some(AutoCompactThreshold))
     assertEquals(named("maxToolCalls"), None)
+
+  test("a config edit keeps a trusted project trusted, and a failed one restores the files and the trust"):
+    val atcDir = TestEnv.tempDir("atc-home")
+    def project(trusted: Boolean) =
+      val root = TestEnv.tempDir("atc-project")
+      Files.createDirectories(root.resolve(".atc"))
+      Files.writeString(Config.projectPath(root), """{ "commands": ["ls"] }""")
+      if trusted then ProjectTrust.trust(root, atcDir)
+      root
+    def webSearch(root: java.nio.file.Path) = Config.setTopLevel(Config.projectPath(root), "webSearch", ujson.True)
+    val trusted = project(trusted = true)
+    ConfigCommands.editConfigs(trusted, atcDir, List(Config.projectPath(trusted)))(webSearch(trusted))(())
+    assertEquals(ProjectTrust.pending(trusted, atcDir), None, "the user's own edit keeps it trusted")
+    val untrusted = project(trusted = false)
+    ConfigCommands.editConfigs(untrusted, atcDir, List(Config.projectPath(untrusted)))(webSearch(untrusted))(())
+    assert(ProjectTrust.pending(untrusted, atcDir).isDefined, "and does not trust one that was not")
+    val config = Config.projectPath(trusted)
+    val before = Files.readString(config)
+    val global = atcDir.resolve("config.json").nn
+    intercept[IllegalStateException]:
+      ConfigCommands.editConfigs(trusted, atcDir, List(config, global)) {
+        Config.setTopLevel(config, "hosts", ujson.Arr("example.com"))
+        Config.setTopLevel(global, "model", ujson.Str("m"))
+      }(throw IllegalStateException("the reload failed"))
+    assertEquals(Files.readString(config), before)
+    assert(!Files.exists(global), "the global config it created is gone")
+    assertEquals(ProjectTrust.pending(trusted, atcDir), None)

@@ -1,6 +1,6 @@
 package atc.agent
 
-import atc.llm.{Json, ToolCall, ToolResult, ToolSpec}
+import atc.llm.{SdkJson, ToolCall, ToolResult, ToolSpec}
 import atc.perms.{Decision, Policy}
 import atc.sandbox.{ExecutionResult, ReplSession}
 
@@ -30,7 +30,7 @@ private[atc] final class ScalaToolRunner(
       )
 
   private def runScala(call: ToolCall): ToolResult =
-    val code = Json.parseObject(call.arguments).value.get("code").flatMap(_.strOpt).getOrElse("")
+    val code = SdkJson.parseObject(call.arguments).value.get("code").flatMap(_.strOpt).getOrElse("")
     if code.trim.isEmpty then ToolResult(call.id, AgentMessages.missingCodeArgument, isError = true)
     else
       ui.toolStart(code)
@@ -58,7 +58,7 @@ private[atc] object ScalaToolRunner:
     code: String
   ): (ExecutionResult, List[(Decision, String)]) =
     val decisionsBefore = policy.decisionCount
-    ui.status("running Scala")
+    ui.status(AgentMessages.runningScalaStatus)
     val start = System.nanoTime()
     val result = session.run(code)
     val millis = (System.nanoTime() - start - session.clock.paused) / 1_000_000L

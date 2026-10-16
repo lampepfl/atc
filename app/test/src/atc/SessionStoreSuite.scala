@@ -37,7 +37,7 @@ class SessionStoreSuite extends munit.FunSuite:
     assertEquals(loaded.history(1), Msg.Assistant("checking", List(ToolCall("one", "run_scala", "println(42)")), None))
 
   test("save creates an owner-only file and never overwrites an existing file"):
-    val root = Files.createTempDirectory("atc-session-store").nn
+    val root = TestEnv.tempDir("atc-session-store")
     val path = root.resolve("session.json").nn
     SessionStore.write(path, snapshot)
     assertEquals(SessionStore.read(path).task, snapshot.task)
@@ -55,7 +55,7 @@ class SessionStoreSuite extends munit.FunSuite:
     intercept[IllegalArgumentException](SessionStore.decode(SessionStore.encode(mismatched)))
 
   test("automatic saves use a stable path for each canonical working directory"):
-    val home = Files.createTempDirectory("atc-session-home").nn
+    val home = TestEnv.tempDir("atc-session-home")
     val first = Files.createDirectory(home.resolve("first")).nn
     val second = Files.createDirectory(home.resolve("second")).nn
     val path = SessionStore.autoSavePath(home, first)
@@ -64,7 +64,7 @@ class SessionStoreSuite extends munit.FunSuite:
     assert(path.startsWith(home.resolve(".atc/sessions")))
 
   test("checkpoints replace the last save and preserve it when a new save fails"):
-    val root = Files.createTempDirectory("atc-session-checkpoint").nn
+    val root = TestEnv.tempDir("atc-session-checkpoint")
     val path = root.resolve("last.json").nn
     SessionStore.checkpoint(path, snapshot)
     SessionStore.checkpoint(path, snapshot.copy(model = "updated"))

@@ -72,10 +72,10 @@ private[atc] object WindowsExecutable:
     else extensions.map(extension => base.resolveSibling(name + extension).nn) ++ exact
 
   private def validate(path: Path, argv: List[String], command: String): List[String] =
+    val resolved = path.toString :: argv.tail
     val lower = path.getFileName.toString.toLowerCase(Locale.ROOT)
     if lower.endsWith(".cmd") || lower.endsWith(".bat") then
-      val unsafe = path.toString :: argv.tail
-      if unsafe.exists(_.exists(char => char == '%' || char == '!' || char == '\r' || char == '\n' || char == 0)) then
+      if resolved.exists(_.exists(char => char == '%' || char == '!' || char == '\r' || char == '\n' || char == 0)) then
         throw IllegalArgumentException(
           s"Unsafe path or argument for Windows batch command '$command': %, ! and line breaks can be expanded by cmd.exe; invoke an explicitly permitted cmd.exe command if shell syntax is intended"
         )
@@ -83,4 +83,4 @@ private[atc] object WindowsExecutable:
       throw IllegalArgumentException(
         s"Windows cannot execute '$command' directly; invoke its interpreter explicitly (for example powershell.exe -File for .ps1)"
       )
-    path.toString :: argv.tail
+    resolved

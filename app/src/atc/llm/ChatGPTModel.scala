@@ -17,13 +17,13 @@ import scala.util.control.NonFatal
 final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
     extends OpenAIResponsesModel(configured.copy(baseUrl = configured.baseUrl.orElse(Some(ChatGPTModel.BackendUrl)))):
   override protected def authorization: Option[okhttp3.Interceptor] = Some: chain =>
-    def authorized(t: ChatGPTAuth.Tokens) =
+    def authorized(t: ChatGPTAuth.SignIn) =
       val b = chain.request().newBuilder().header("Authorization", s"Bearer ${t.access}")
       t.accountId.foreach(b.header("ChatGPT-Account-ID", _))
       b.build()
     // OkHttp reports only an `IOException` as a failed call; anything else from an asynchronous call is
     // thrown again on its dispatcher thread. The cause is left out, since its message may quote a token.
-    def signedIn(step: => ChatGPTAuth.Tokens) =
+    def signedIn(step: => ChatGPTAuth.SignIn) =
       try step
       catch
         case e: IOException => throw e
@@ -38,24 +38,24 @@ final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
   /** Codex asks for summaries, the only reasoning text the backend shows. */
   override protected def defaultReasoningSummary: Option[String] = Some("auto")
 
-  override protected def limits(b: ResponseCreateParams.Builder): Unit =
+  /** In place of the output limit and temperature the backend rejects, the conversation as the prompt cache key. */
+  override protected def requestSettings(b: ResponseCreateParams.Builder): Unit =
     b.promptCacheKey(Providers.conversation)
 
   override protected def send(params: ResponseCreateParams): Response =
     val complete =
       if params.instructions().isPresent then params
-      else params.toBuilder().instructions(ChatGPTModel.DefaultInstructions).build()
+      else params.toBuilder().instructions(Providers.DefaultInstructions).build()
     val acc = OpenAIResponsesModel.Accumulator()
     Using.resource(client.responses().createStreaming(complete))(_.stream().forEach(acc.accumulate(_)))
     acc.response()
 
   /** `GET /models`, the list Codex shows: the models marked for listing, in
     * the backend's order, with their context windows and efforts. */
-  override private[llm] def listModels(): List[ModelSpec] =
+  override private[atc] def listModels(): List[ModelSpec] =
     val base = spec.baseUrl.getOrElse(ChatGPTModel.BackendUrl).stripSuffix("/")
-    val request = okhttp3.Request.Builder().url(s"$base/models?client_version=${ChatGPTModel.ClientVersion}")
-    Providers.headers(spec).foreach((n, v) => request.header(n, v))
-    val call = http.newBuilder().callTimeout(Providers.ListTimeout).build().newCall(request.build())
+    val request = okhttp3.Request.Builder().url(s"$base/models?client_version=${ChatGPTModel.ClientVersion}").build()
+    val call = http.newBuilder().callTimeout(Providers.ListTimeout).build().newCall(request)
     val text = Using.resource(call.execute()): response =>
       val body = Option(response.body).fold("")(_.string())
       if !response.isSuccessful then throw IOException(s"HTTP ${response.code}: ${body.take(300)}")
@@ -66,8 +66,6 @@ object ChatGPTModel:
   val BackendUrl = "https://chatgpt.com/backend-api/codex"
   /** The backend lists the models a Codex release of this version may use. */
   val ClientVersion = "0.156.1"
-  /** Instructions for a one-shot call that has none: the backend requires them. */
-  private val DefaultInstructions = "Answer the request."
 
   /** The models of a `GET /models` answer, as listed models of `spec`'s provider. */
   private[atc] def models(spec: ModelSpec, json: ujson.Value): List[ModelSpec] =

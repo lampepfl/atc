@@ -1,5 +1,6 @@
 package atc.ui
 
+import atc.Threads
 import atc.agent.TurnOutcome
 
 import org.jline.terminal.Terminal
@@ -33,11 +34,7 @@ private[ui] final class Alerts(
   @volatile private var focusKnown = false
   /** The alert waiting for input, with its text; guarded by `this`. */
   private var pending: Option[(ScheduledFuture[?], String)] = None
-  private lazy val timer = Executors.newSingleThreadScheduledExecutor { r =>
-    val t = Thread(r, "atc-alert")
-    t.setDaemon(true)
-    t
-  }.nn
+  private lazy val timer = Executors.newSingleThreadScheduledExecutor(Threads.daemon("atc-alert")(_)).nn
 
   /** Tell the user that a question or permission request waits for them. */
   def alert(body: String): Unit = schedule(body, questionDelayMillis)
@@ -103,14 +100,16 @@ private[ui] final class Alerts(
 
   def turnError(message: String): Unit = synchronized { error = message }
 
-  def turnEnded(stats: Tui.TurnStats): Unit =
-    schedule(synchronized(Alerts.turnText(stats, prose.toString, error)), turnDelayMillis)
+  /** What the ended turn said or why it stopped ([[Alerts.turnText]]). */
+  def turnText(stats: Tui.TurnStats): String = synchronized(Alerts.turnText(stats, prose.toString, error))
+
+  def turnEnded(stats: Tui.TurnStats): Unit = schedule(turnText(stats), turnDelayMillis)
 
   def close(): Unit =
     take()
     reportFocus(false)
 
-private[atc] object Alerts:
+private[ui] object Alerts:
   /** How long a question or permission request waits for input or focus before it notifies the user. */
   val QuestionDelayMillis: Long = 10_000L
   /** The same for a finished turn, whose answer may take a while to read. */
@@ -121,7 +120,7 @@ private[atc] object Alerts:
   /** The alert text for an ended turn: the start of the agent's last reply,
     * after the outcome unless the turn finished normally, or the error that
     * ended it. The outcome and duration alone when there is neither. */
-  private[atc] def turnText(stats: Tui.TurnStats, prose: String, error: String): String =
+  private[ui] def turnText(stats: Tui.TurnStats, prose: String, error: String): String =
     val outcome = stats.outcome.label.capitalize
     val reply = Notifier.plainText(prose)
     stats.outcome match

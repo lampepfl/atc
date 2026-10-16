@@ -24,14 +24,8 @@ class AgentCoreLoopSuite extends munit.FunSuite:
       result(call)
 
   private def toolStep(ids: String*): ScriptedModel.Comp =
-    ScriptedModel.Comp(Completion(
-      "running tools",
-      ids.toList.map(id => ToolCall(id, toolSpec.name, s"{\"id\":\"$id\"}")),
-      None,
-      TokenUsage(1, 1),
-      "tool_use",
-      CompletionStop.Complete,
-    ))
+    val calls = ids.toList.map(id => ToolCall(id, toolSpec.name, s"{\"id\":\"$id\"}"))
+    ScriptedModel.Comp(completion("running tools", calls, reason = "tool_use"))
 
   private def setup(
     steps: Seq[ScriptedModel.Step],
@@ -47,13 +41,11 @@ class AgentCoreLoopSuite extends munit.FunSuite:
     agent.history.collect { case results: Msg.ToolResults => results }
 
   test("repeated incomplete streams stop after two continuation attempts without running tools"):
-    val unfinished = ScriptedModel.Comp(Completion(
+    val unfinished = ScriptedModel.Comp(completion(
       "",
       List(ToolCall("partial", toolSpec.name, "{}")),
-      None,
-      TokenUsage(1, 1),
-      "stream_incomplete",
-      CompletionStop.Incomplete,
+      reason = "stream_incomplete",
+      stop = CompletionStop.Incomplete,
     ))
     val (model, ui, agent) = setup(Seq.fill(5)(unfinished))
     val runner = RecordingRunner()
@@ -146,27 +138,37 @@ class AgentCoreLoopSuite extends munit.FunSuite:
     assert(ui.warnings.contains(AgentMessages.interruptedWarning), ui.warnings.toString)
     assertEquals(agent.toolCalls, 1)
 
-  test("a runner exception repairs every pending tool call in the transcript"):
+  test("a runner exception keeps the completed results and closes the batch before propagating"):
     val ids = List("completed-before-throw", "throws", "not-reached")
-    val (_, _, agent) = setup(Seq(toolStep(ids*)))
+    val (_, _, agent) = setup(Seq(toolStep(ids*), ScriptedModel.Reply("recovered")))
+    val failure = RuntimeException("runner exploded")
     val runner = RecordingRunner(call =>
-      if call.id == "throws" then throw RuntimeException("runner exploded")
+      if call.id == "throws" then throw failure
       else ToolResult(call.id, s"result:${call.id}", isError = false)
     )
 
     val error = intercept[RuntimeException](agent.runTurn(runner, "go", () => false))
 
-    assertEquals(error.getMessage, "runner exploded")
+    assertEquals(error, failure)
     assertEquals(runner.calls.map(_.id).toList, ids.take(2))
-    val results = toolResults(agent).last.results
-    assertEquals(results.map(_.callId), ids)
-    assert(results.forall(_.isError), results.toString)
-    assert(results.forall(_.output == "[turn failed: runner exploded]"), results.toString)
+    assertEquals(toolResults(agent).size, 1)
+    assertEquals(
+      toolResults(agent).head.results,
+      List(
+        ToolResult("completed-before-throw", "result:completed-before-throw", isError = false),
+        ToolResult("throws", AgentMessages.toolCallFailed(failure), isError = true),
+        ToolResult("not-reached", AgentMessages.notRunAfterFailure, isError = true),
+      ),
+    )
     val requestIndex = agent.history.indexWhere {
       case Msg.Assistant(_, calls, _) => calls.nonEmpty
       case _ => false
     }
-    assertEquals(agent.history(requestIndex + 1), Msg.ToolResults(results))
+    assertEquals(agent.history.drop(requestIndex + 1), List(toolResults(agent).head))
+    assertEquals(agent.toolCalls, 2)
+    // The history stays valid for the provider, so the next turn completes.
+    assertEquals(agent.runTurn(RecordingRunner(), "again", () => false), TurnOutcome.Finished)
+    assertEquals(agent.history.last, Msg.Assistant("recovered", Nil, None))
 
   test("turn outcomes distinguish completion, interruption, refusal and budget limits"):
     val (_, _, finished) = setup(Seq(ScriptedModel.Reply("done")))
@@ -198,6 +200,15 @@ class AgentCoreLoopSuite extends munit.FunSuite:
     agent.runTurn(runner, "deploy", () => false)
     assertEquals(runner.calls.map(_.id).toList, List("first", "revised"))
     assertEquals(model.seenHistories(1).last, Msg.User("Skip deployment; run only unit tests."))
+    assertEquals(agent.queuedInputCount, 0)
+
+  test("input queued during a model request joins the user's message without an interruption marker"):
+    val (model, ui, agent) = setup(Seq(ScriptedModel.Reply("superseded"), ScriptedModel.Reply("done")))
+    ui.onDelta = text => if text == "superseded" then agent.submit("use the staging database")
+    assertEquals(agent.runTurn(RecordingRunner(), "migrate", () => false), TurnOutcome.Finished)
+    assertEquals(model.i, 2)
+    assertEquals(model.seenHistories(1), List(Msg.User("migrate\n\nuse the staging database")))
+    assertEquals(agent.history.last, Msg.Assistant("done", Nil, None))
     assertEquals(agent.queuedInputCount, 0)
 
   test("a turn carrying only queued input sends it without empty leading text"):

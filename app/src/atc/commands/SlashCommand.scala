@@ -42,6 +42,13 @@ object SlashCommand:
   /** Usage and description of each command, as `/help` and the prompt's command list show them. */
   def table: List[(String, String)] = values.toList.map(command => command.usage -> command.help)
 
+  /** Whether a typed line is meant as a command: its first word starts with `/` and holds no
+    * other `/`. A line that starts with an absolute path, such as a pasted `/Users/me/a.txt`,
+    * is a request for the agent; a mistyped name such as `/hlep` is still a command. */
+  def isCommandLine(line: String): Boolean =
+    val word = line.trim.takeWhile(!_.isWhitespace)
+    word.startsWith("/") && !word.drop(1).contains('/')
+
   /** The command a typed line names (case-insensitively), with its argument:
     * the rest of the line, trimmed. `Left(typed)` when nothing answers to it. */
   def parse(line: String): Either[String, (SlashCommand, String)] =

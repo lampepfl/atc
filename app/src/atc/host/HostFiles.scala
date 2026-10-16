@@ -47,14 +47,8 @@ private[host] trait HostFiles:
       throw IllegalArgumentException(
         "readRange: use an inclusive range of 1 to 1000 lines, starting at line 1 or later"
       )
-    val lines = List.newBuilder[String]
-    val limited =
-      impl(fs.access(path)).scanLines("readRange", Host.CatMaxLineChars, Host.ReadRangeMaxChars):
-        (line, chars, number) =>
-          if number >= from then lines += (if chars > line.length then s"$line ... [line truncated]" else line)
-          number < to
-    if limited then lines += "[read limit reached before completing the requested range]"
-    lines.result().mkString("\n")
+    val (kept, _, limited) = window(impl(fs.access(path)), "readRange", from, to, to)
+    (kept.map(_.shown) ++ Option.when(limited)(ReadLimitNote)).mkString("\n")
 
   /** Print a numbered view capped at [[Host.CatMaxLines]]. Lines are streamed,
     * so a large file or line is never loaded whole: only the shown prefixes
@@ -84,19 +78,13 @@ private[host] trait HostFiles:
   def cat(path: String, from: Int, to: Int)(using fs: FileSystem, user: UserIO): Unit =
     if from < 1 || to < from then
       throw IllegalArgumentException(s"cat: the range must satisfy 1 <= from <= to (got $from, $to)")
-    val entry = impl(fs.access(path))
-    val kept = mutable.ListBuffer[CappedLine]()
     val last = to.toLong.min(from.toLong + Host.CatMaxLines - 1).toInt
-    var lineCount = 0
-    val limited = entry.scanLines("cat", Host.CatMaxLineChars, Host.ReadRangeMaxChars): (prefix, chars, number) =>
-      lineCount = number
-      if number >= from && number <= last then kept += CappedLine(prefix, chars)
-      number < to && number <= last
+    val (kept, lineCount, limited) = window(impl(fs.access(path)), "cat", from, last, to)
     val text =
-      if limited then numbered(kept.toList, from) + "[read limit reached before completing the requested range]\n"
+      if limited then numbered(kept, from) + ReadLimitNote + "\n"
       else if from > lineCount then s"[nothing to show: $path has $lineCount lines]\n"
       else
-        val body = numbered(kept.toList, from)
+        val body = numbered(kept, from)
         if lineCount > last then
           body + s"... [more lines: cat(${ScalaSource.stringLiteral(path)}, ${last + 1}, $to) continues]\n"
         else if to > lineCount then body + s"[end of file: $lineCount lines]\n"
@@ -104,14 +92,32 @@ private[host] trait HostFiles:
     output.print(text, text)
 
   /** The retained prefix of a line and the line's full length. */
-  private final case class CappedLine(prefix: String, chars: Long)
+  private final case class CappedLine(prefix: String, chars: Long):
+    /** The prefix, marked with the number of characters cut from it. */
+    def shown: String = if chars == prefix.length then prefix else s"$prefix ... [+${chars - prefix.length} chars]"
+
+  private val ReadLimitNote = "[read limit reached before completing the requested range]"
+
+  /** Lines `from` to `last` of `entry`, the number of lines scanned, and whether the read limit cut
+    * the scan short. When `last < to`, one more line is scanned to tell whether the range goes on. */
+  private def window(
+    entry: FileEntryImpl,
+    operation: String,
+    from: Int,
+    last: Int,
+    to: Int
+  ): (List[CappedLine], Int, Boolean) =
+    val kept = mutable.ListBuffer[CappedLine]()
+    var lineCount = 0
+    val limited = entry.scanLines(operation, Host.CatMaxLineChars, Host.ReadRangeMaxChars): (prefix, chars, number) =>
+      lineCount = number
+      if number >= from && number <= last then kept += CappedLine(prefix, chars)
+      number < to && number <= last
+    (kept.toList, lineCount, limited)
 
   private def numbered(lines: List[CappedLine], first: Int): String =
     val result = StringBuilder()
-    for (line, index) <- lines.zipWithIndex do
-      val omitted = line.chars - line.prefix.length
-      val shown = if omitted == 0 then line.prefix else line.prefix + s" ... [+$omitted chars]"
-      result.append(f"${first + index}%6d\t").append(shown).append('\n')
+    for (line, index) <- lines.zipWithIndex do result.append(f"${first + index}%6d\t").append(line.shown).append('\n')
     result.toString
 
   def readBytes(path: String)(using fs: FileSystem): Array[Byte] = fs.access(path).readBytes()
@@ -153,7 +159,7 @@ private[host] trait HostFiles:
     val entry = fs.access(path)
     val before = entry.read()
     val javaReplacement = sedReplacement(replacement)
-    val rewritten = StringBuffer()
+    val rewritten = java.lang.StringBuilder()
     val matcher = regex.matcher(before)
     var count = 0
     while matcher.find() do
@@ -236,13 +242,13 @@ private[host] trait HostFiles:
 
   def delete(path: String)(using fs: FileSystem): Unit = fs.access(path).delete()
 
-  def ls(dir: String)(using fs: FileSystem): List[String] = fs.access(dir).children.map(entry => display(entry.path))
+  def ls(dir: String)(using fs: FileSystem): List[String] = fs.access(dir).children.map(entry => fromCwd(entry.path))
 
-  def walk(dir: String)(using fs: FileSystem): List[String] = fs.access(dir).walk().map(entry => display(entry.path))
+  def walk(dir: String)(using fs: FileSystem): List[String] = fs.access(dir).walk().map(entry => fromCwd(entry.path))
 
   private def grepEntry(entry: FileEntryImpl, operation: String, regex: Regex): List[GrepMatch] =
     val matches = mutable.ListBuffer[GrepMatch]()
-    val shown = display(entry.path)
+    val shown = fromCwd(entry.path)
     entry.forEachLine(
       operation,
       (line, number) => if regex.findFirstIn(line).isDefined then matches += GrepMatch(shown, number, line)
@@ -257,10 +263,10 @@ private[host] trait HostFiles:
 
   def grepRecursive(dir: String, pattern: String, glob: String)(using fs: FileSystem): List[GrepMatch] =
     val regex = pattern.r
-    filesNamed(dir, glob).filterNot(_.isClassified).flatMap(grepEntry(_, "grepRecursive", regex))
+    filesNamed(dir, glob, classified = false).toList.flatMap(grepEntry(_, "grepRecursive", regex))
 
   def find(dir: String, glob: String)(using fs: FileSystem): List[String] =
-    filesNamed(dir, glob).map(entry => display(entry.path))
+    filesNamed(dir, glob, classified = true).map(entry => fromCwd(entry.path)).toList
 
   def search(dir: String, pattern: String, glob: String, options: SearchOptions)(using fs: FileSystem): SearchResult =
     val limits = List(
@@ -275,7 +281,7 @@ private[host] trait HostFiles:
         "search: limits must be positive (maxMatches <= 10000, maxFiles <= 100000, maxLinesPerFile <= 1000000, maxLineChars <= 10000, maxCharsPerFile <= 10000000)"
       )
     val regex = pattern.r
-    val entries = matchingFiles(impl(fs.access(dir)).walkIterator, dir, glob).filterNot(_.isClassified)
+    val entries = filesNamed(dir, glob, classified = false)
     val matches = mutable.ListBuffer[GrepMatch]()
     var scanned = 0
     // `limited` is set only where something was left out: a line cut at the
@@ -297,17 +303,16 @@ private[host] trait HostFiles:
               limited = true
               false
             else
-              if hit then matches += GrepMatch(display(entry.path), number, line)
+              if hit then matches += GrepMatch(fromCwd(entry.path), number, line)
               true
       if readLimit then limited = true
     SearchResult(matches.toList, scanned, limited || entries.hasNext)
 
-  /** Select non-directory descendants by filename or relative-path glob. */
-  private def filesNamed(dir: String, glob: String)(using fs: FileSystem): List[FileEntryImpl] =
-    matchingFiles(impl(fs.access(dir)).walkIterator, dir, glob).toList
-
-  private def matchingFiles(entries: Iterator[FileEntryImpl], dir: String, glob: String): Iterator[FileEntryImpl] =
-    val files = entries.filterNot(_.isDirectory)
+  /** Select the files of [[FileEntryImpl.files]] by filename or relative-path glob. */
+  private def filesNamed(dir: String, glob: String, classified: Boolean)(using
+    fs: FileSystem
+  ): Iterator[FileEntryImpl] =
+    val files = impl(fs.access(dir)).files(classified)
     val pattern = PathGlob.pattern(glob)
     if glob.contains('/') || glob.contains("**") then
       val base = canonical(dir)

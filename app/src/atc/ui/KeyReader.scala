@@ -1,5 +1,7 @@
 package atc.ui
 
+import atc.Threads
+
 import org.jline.terminal.{Attributes, Terminal}
 import org.jline.utils.NonBlockingReader
 
@@ -21,23 +23,25 @@ private[ui] final class KeyReader(
   private var thread: Option[Thread] = None
   private var saved: Option[Attributes] = None
   @volatile private var running = false
-  /** The pop-up handshake: both guarded by pauseLock. A pop-up may not read
-    * while the key thread is inside `read`, and the key thread may not start
-    * a read once a pop-up asked for the pause. Every change of `reading`,
-    * `pauseDepth` and `running` notifies, so the waits below have no timeout. */
+  /** The pop-up handshake, with `pauseDepth` and `reading` guarded by pauseLock. A pop-up
+    * may not read while the key thread is inside `read`, and the key thread may not start
+    * a read once a pop-up asked for the pause. Every change of `reading`, `pauseDepth` and
+    * `running` notifies, so the waits below have no timeout. */
   private val pauseLock = Object()
   private var pauseDepth = 0
   private var reading = false
   private val typeAhead = StringBuilder()
+  /** Inside a bracketed paste. The key thread reads it; a pause clears it under pauseLock. */
+  private var pasting = false
 
   def start(): Unit = if !plain && thread.isEmpty then
     saved = Some(terminal.enterRawMode())
     alerts.reportFocus(true)
-    out.print(Ansi.Esc + "[?2004h")
+    out.print(Ansi.PasteOn)
     out.flush()
+    pasting = false
     running = true
-    val t = Thread(() => loop(), "atc-keys")
-    t.setDaemon(true)
+    val t = Threads.daemon("atc-keys")(() => loop())
     thread = Some(t)
     t.start()
 
@@ -53,7 +57,7 @@ private[ui] final class KeyReader(
     saved.foreach(terminal.setAttributes)
     saved = None
     if !plain then
-      out.print(Ansi.Esc + "[?2004l")
+      out.print(Ansi.PasteOff)
       out.flush()
 
   /** Run `body` with the key thread idle (a pop-up is about to read the terminal). */
@@ -66,9 +70,11 @@ private[ui] final class KeyReader(
     finally
       pauseLock.synchronized:
         pauseDepth -= 1
+        // The pop-up read what followed, including the end of a paste the key thread was in.
+        pasting = false
         if pauseDepth == 0 && running then
           alerts.reportFocus(true) // an answer read by the line reader turned it off
-          out.print(Ansi.Esc + "[?2004h")
+          out.print(Ansi.PasteOn)
           out.flush()
         pauseLock.notifyAll()
 
@@ -81,7 +87,6 @@ private[ui] final class KeyReader(
   private def loop(): Unit =
     val in: NonBlockingReader = terminal.reader()
     var skipLf = false // a CR already added the newline of a CRLF
-    var pasting = false
     def submit(): Unit =
       val text = typeAhead.toString.trim
       if text.nonEmpty then
@@ -104,9 +109,7 @@ private[ui] final class KeyReader(
             case '\r' =>
               if pasting then typeAhead.append('\n') else submit()
               skipLf = true
-            // Collapse only a CRLF pair: an LF right after a CR. Any other real key
-            // clears the latch, so a later lone LF is not wrongly swallowed as the
-            // tail of an old CR (`skipLf` is reset in every branch below but '\r').
+            // Only an LF right after a CR completes a CRLF; any other key clears `skipLf`.
             case '\n' =>
               if !skipLf then
                 if pasting then typeAhead.append('\n') else submit()
@@ -146,9 +149,9 @@ private[ui] final class KeyReader(
             reading = false
             pauseLock.notifyAll()
 
-private[atc] object KeyReader:
+private[ui] object KeyReader:
   /** Consume CSI/SS3 bytes after ESC, stopping on a final byte, EOF or timeout. */
-  private[atc] def readEscapeSequence(read: () => Int): String =
+  private[ui] def readEscapeSequence(read: () => Int): String =
     val result = StringBuilder()
     def next(): Int =
       try

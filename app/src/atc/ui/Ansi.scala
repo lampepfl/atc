@@ -2,14 +2,21 @@ package atc.ui
 
 import scala.util.matching.Regex
 
-/** The terminal escape sequences the UI writes, by hand: JLine's `toAnsi`
-  * would rewrite box-drawing glyphs (into the DEC charset or plain ASCII).
+/** The terminal escape sequences the UI writes. They are written by hand: JLine's
+  * `toAnsi(terminal)` would rewrite box-drawing glyphs into the DEC charset or plain ASCII.
   * The named codes are the SGR parameters the front-end uses, by role. */
 object Ansi:
   val Esc = "\u001b"
+  /** Rings the bell; also ends an OSC sequence. */
+  val Bel = "\u0007"
   val Reset: String = Esc + "[0m"
   /** Back to the start of the current line and clear it. */
   val ClearLine: String = "\r" + Esc + "[2K"
+  /** Bracketed paste on and off: the terminal marks a paste with `ESC[200~` and `ESC[201~`. */
+  val PasteOn: String = Esc + "[?2004h"
+  val PasteOff: String = Esc + "[?2004l"
+  val HideCursor: String = Esc + "[?25l"
+  val ShowCursor: String = Esc + "[?25h"
 
   val Bold = 1
   val Dim = 2

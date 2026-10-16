@@ -6,7 +6,7 @@ import atc.perms.{Decision, PermissionRequest, Policy, ScopeId}
 import atc.platform.{Platform, PlatformPath}
 import atc.ui.Tui
 
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, LinkOption, Path}
 
 /** What happens before a session starts: the first-run setup and the offer of
   * a project config. */
@@ -57,7 +57,7 @@ object Setup:
       case ready: FirstRun.Outcome.Ready =>
         saveKeyAndModels(ready)
         Config.writeGlobalConfig(global, List(ready.provider))
-        Models.rememberLast(ready.model.ref)
+        Models.rememberLast(Config.globalDir, ready.model.ref)
         tui.success(
           s"Wrote ${PlatformPath.display(global)}${
               if ready.key.isDefined then s" and ${PlatformPath.display(Config.globalKeysPath)}" else ""
@@ -75,7 +75,9 @@ object Setup:
 
     def offerProjectConfig(current: Configuration): Configuration =
       val project = Config.projectPath(args.cwd)
-      val shouldOffer = interactive && !cwdReadable(current) && !Files.exists(project)
+      // In the home directory `.atc/config.json` is the global config, which only `--init-global` writes.
+      val shouldOffer = interactive && !cwdReadable(current) && !Files.exists(project, LinkOption.NOFOLLOW_LINKS) &&
+        !Config.samePath(project, global)
       if !shouldOffer then current
       else
         tui.println(
@@ -85,8 +87,8 @@ object Setup:
           tui.confirm("Write a starting project config to .atc/config.json here? It opens this directory to the agent.")
         if !accepted then current
         else
-          val created = Config.initProject(args.cwd).map(p => PlatformPath.portable(args.cwd.relativize(p)))
-          ProjectTrust.trust(args.cwd, Config.globalDir) // it grants what the user just accepted
+          val created = ProjectTrust.initProject(args.cwd, Config.globalDir)
+            .map(p => PlatformPath.portable(args.cwd.relativize(p)))
           tui.success(
             s"Wrote ${created.mkString(" and ")}; edit .atc/config.json to change what the agent may touch here."
           )
@@ -114,7 +116,7 @@ object Setup:
               else Some(if tui.confirm("Trust this project's config?") then trustIt else without)
             answer match
               case Some(`trustIt`) =>
-                ProjectTrust.trust(args.cwd, Config.globalDir)
+                ProjectTrust.trust(pending, Config.globalDir)
                 load()
               case Some("Quit") => throw App.Exit(0)
               case _ =>

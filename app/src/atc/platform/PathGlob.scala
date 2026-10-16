@@ -6,11 +6,9 @@ import java.util.regex.{Pattern, PatternSyntaxException}
   * one component, `**` crosses components, `[…]`/`[!…]` are character classes and `{a,b}` are
   * alternatives. Matching is case-insensitive where file names are (Windows and macOS). */
 private[atc] object PathGlob:
-  def pattern(glob: String): Pattern = checked(glob)(Pattern.compile(source(glob), Platform.pathRegexFlags))
-
-  /** A malformed class or brace group surfaces as an error about the glob, not the regex. */
-  private def checked[A](glob: String)(compile: => A): A =
-    try compile
+  def pattern(glob: String): Pattern =
+    // A malformed class or brace group surfaces as an error about the glob, not the regex.
+    try Pattern.compile(source(glob), Platform.pathRegexFlags)
     catch
       case e: PatternSyntaxException =>
         throw IllegalArgumentException(s"bad glob '$glob': ${e.getDescription}")

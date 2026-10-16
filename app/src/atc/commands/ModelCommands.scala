@@ -1,11 +1,10 @@
 package atc.commands
 
-import atc.{App, Debug, Models}
-import atc.config.{Config, ModelConfig, ModelSpec, ObjectText, Origin, ProjectTrust}
+import atc.{App, Debug}
+import atc.config.{Config, ModelConfig, ModelSpec, ObjectText}
 import atc.llm.ChatModel
-import atc.platform.PlatformPath
 
-import java.nio.file.{Files, Path}
+import java.nio.file.Files
 import java.util.Locale
 import scala.util.Try
 
@@ -53,7 +52,7 @@ final class ModelCommands(app: App):
       val model = models.client(spec)
       model.effort = model.defaultEffort
       agent.model = model
-      Models.rememberLast(spec.ref)
+      models.rememberLast(spec.ref)
       app.updateStatus()
       app.predictor.start()
       val saved = remember("model", Some(ujson.Str(models.catalog.label(spec))))
@@ -150,7 +149,7 @@ final class ModelCommands(app: App):
     val agentModel = moved(agent.model)
     if agentModel ne agent.model then
       agent.model = agentModel
-      Models.rememberLast(agentModel.ref)
+      models.rememberLast(agentModel.ref)
     agent.classifiedModel = agent.classifiedModel.map(moved)
     next.refresh()
     app.updateStatus()
@@ -161,31 +160,16 @@ final class ModelCommands(app: App):
     * run but is not touched from a sub-directory. Returns the note to append to
     * the confirmation. */
   private def remember(key: String, value: Option[ujson.Value]): String =
-    val cwd = app.cwd
-    def show(p: Path): String =
-      val abs = p.toAbsolutePath.nn.normalize.nn
-      if abs.startsWith(cwd) then cwd.relativize(abs).toString else PlatformPath.display(abs)
-    Some(Config.projectPath(cwd)).filter(Files.isRegularFile(_)) match
-      case None => ""
-      case Some(path) =>
-        try
-          // The user's own choice, such as a classified model, must not make a trusted project
-          // ask again at the next start, nor trust one that was not.
-          val trusted = ProjectTrust.pending(cwd, Config.globalDir).isEmpty
+    val path = Config.projectPath(app.cwd)
+    if !Files.isRegularFile(path) then ""
+    else
+      try
+        ConfigCommands.editConfigs(app.cwd, Config.globalDir, List(path)) {
           value match
             case Some(v) => Config.setTopLevel(path, key, v, after = List("model"))
             case None => Config.editFile(path)(ObjectText.withMember(_, List(key), None, path.toString))
-          if trusted then ProjectTrust.trust(cwd, Config.globalDir)
-          // A `-c` file that sets the same key wins over the project config on the next start.
-          val overridden = app.configuration.layers
-            .filter(l => l.origin == Origin.Explicit && l.defines(key))
-            .flatMap(_.path)
-            .filterNot(_.toAbsolutePath.nn.normalize == path.toAbsolutePath.nn.normalize)
-            .headOption
-            .map(p => s"; ${show(p)} also sets $key and wins over it")
-            .getOrElse("")
-          s" (saved to ${show(path)}$overridden)"
-        catch
-          case e: Exception =>
-            tui.error(s"could not save the choice to ${show(path)}: ${Debug.message(e)}")
-            ""
+        }(ConfigCommands.saved(models.configuration, app.cwd, key, path))
+      catch
+        case e: Exception =>
+          tui.error(s"could not save the choice to ${ConfigCommands.display(app.cwd, path)}: ${Debug.message(e)}")
+          ""

@@ -1,7 +1,7 @@
 package atc.commands
 
 import atc.{App, Debug}
-import atc.config.{Config, Origin}
+import atc.config.{Config, Configuration, Origin, ProjectTrust}
 import atc.platform.PlatformPath
 
 import java.nio.file.{Files, Path}
@@ -9,8 +9,8 @@ import java.util.Locale
 import scala.util.control.NonFatal
 
 /** `/config`: show the configuration, and change the settings that leave the
-  * sandbox as it is. A change applies to the running session at once and is
-  * kept for this session only, in the project config or in the global one. */
+  * sandbox as it is. A change applies to the running session at once, and is
+  * saved to the project or the global config when asked. */
 final class ConfigCommands(app: App):
   import app.{models, tui}
   import ConfigCommands.*
@@ -43,13 +43,13 @@ final class ConfigCommands(app: App):
     val keys = current.keys
     if keys.sources.nonEmpty then
       tui.println(s"key bindings: ${keys.names.mkString(", ")} (from ${keys.sources.mkString(", ")})")
-    // The sandbox keeps the policy it started with; /config changes only the rest.
-    val policy = app.config
+    // The sandbox keeps the settings it started with; /config changes only the rest.
+    val started = app.config
     val settings = List(
-      "safeMode" -> policy.safeMode.toString,
-      "executionTimeoutMs" -> policy.executionTimeoutMs.fold("none")(_.toString),
-      "maxToolCalls" -> policy.maxToolCalls.toString,
-      "respectGitignore" -> policy.respectGitignore.toString,
+      "safeMode" -> started.safeMode.toString,
+      "executionTimeoutMs" -> started.executionTimeoutMs.fold("none")(_.toString),
+      "maxToolCalls" -> started.maxToolCalls.toString,
+      "respectGitignore" -> started.respectGitignore.toString,
     ) ++ Setting.values.map(s => s.key -> s.current(current.settings))
     tui.println(settings.map((key, value) => s"$key=$value").mkString(" "))
     tui.println(s"open permission scopes: ${app.policy.openScopeCount}")
@@ -101,43 +101,62 @@ final class ConfigCommands(app: App):
   private def available: List[Scope] =
     val project = models.configuration.layers.find(_.origin == Origin.Project).flatMap(_.path)
     List(Scope("session", "This session only", None)) ++
-      project.map(p => Scope("project", s"Project config  ${display(p)}", Some(p))) :+
+      project.map(p => Scope("project", s"Project config  ${display(app.cwd, p)}", Some(p))) :+
       Scope("global", s"Global config  ${PlatformPath.display(Config.globalPath)}", Some(Config.globalPath))
 
   /** Write the file of `scope`, if it has one, and use the value in this session
     * too. On failure the file is restored and nothing changes. */
   private def apply(setting: Setting, value: ujson.Value, scope: Scope): Unit =
-    val original = scope.path.filter(Files.exists(_)).map(p => p -> Files.readString(p).nn)
-    val created = if scope.path.contains(Config.globalPath) then Config.ensureGlobal() else Nil
     try
-      scope.path.foreach(Config.setTopLevel(_, setting.key, value))
-      models.setForSession(setting.key, value)
-      app.useSettings(models.configuration.settings)
-      val shown = setting.current(models.configuration.settings)
-      tui.success(s"${setting.key} -> $shown" + scope.path.fold(" (this session only)")(saved(setting, _)))
-    catch
-      case NonFatal(e) =>
-        original.foreach((p, text) => Files.writeString(p, text))
-        created.foreach(Files.deleteIfExists)
-        tui.error(s"Nothing changed: ${Debug.message(e)}")
-
-  /** The note on a saved value, and on a later config file that sets it too and so
-    * wins over it at the next start. */
-  private def saved(setting: Setting, path: Path): String =
-    val later = models.configuration.layers
-      .filter(l => l.origin != Origin.Session && l.defines(setting.key))
-      .flatMap(_.path)
-      .lastOption
-      .filterNot(_.toAbsolutePath.nn.normalize == path.toAbsolutePath.nn.normalize)
-    s" (saved to ${display(path)}" +
-      later.fold("")(p => s"; ${display(p)} also sets ${setting.key} and wins at the next start") + ")"
-
-  /** A path under the working directory relative to it, others as [[PlatformPath.display]] shows them. */
-  private def display(path: Path): String =
-    val abs = path.toAbsolutePath.nn.normalize.nn
-    if abs.startsWith(app.cwd) then app.cwd.relativize(abs).toString else PlatformPath.display(abs)
+      def write(): Unit = scope.path.foreach(Config.setTopLevel(_, setting.key, value))
+      editConfigs(app.cwd, Config.globalDir, scope.path.toList)(write()):
+        models.setForSession(setting.key, value)
+        app.useSettings(models.configuration.settings)
+        val shown = setting.current(models.configuration.settings)
+        val where = scope.path.fold(" (this session only)")(saved(models.configuration, app.cwd, setting.key, _))
+        tui.success(s"${setting.key} -> $shown$where")
+    catch case NonFatal(e) => tui.error(s"Nothing changed: ${Debug.message(e)}")
 
 object ConfigCommands:
+  /** A path under `cwd` relative to it, others as [[PlatformPath.display]] shows them. */
+  private[commands] def display(cwd: Path, path: Path): String =
+    val abs = path.toAbsolutePath.nn.normalize.nn
+    if abs.startsWith(cwd) then cwd.relativize(abs).toString else PlatformPath.display(abs)
+
+  /** The note on a value of `key` saved to `path`, naming a config file that comes after it in
+    * `configuration`, sets the key too and so wins over it at the next start. */
+  private[commands] def saved(configuration: Configuration, cwd: Path, key: String, path: Path): String =
+    def same(p: Path) = p.toAbsolutePath.nn.normalize == path.toAbsolutePath.nn.normalize
+    val later = configuration.layers.dropWhile(!_.path.exists(same)).drop(1)
+      .filter(l => l.origin != Origin.Session && l.defines(key)).flatMap(_.path).lastOption
+    s" (saved to ${display(cwd, path)}" +
+      later.fold("")(p => s"; ${display(cwd, p)} also sets $key and wins at the next start") + ")"
+
+  /** Change config files with `write`, then run `use` (which loads them), so that a failure of
+    * either leaves the files as they were. `files` are those `write` may change; the global
+    * config of `atcDir` among them is created first when it is missing. A project the user
+    * trusted stays trusted when its config is among them, and one that was not trusted is not:
+    * the user's own edit must not make it ask again. It is trusted again once the files hold
+    * their final text, before `use` reads them. On failure the files get their text back, those
+    * created are deleted, trust is restored the same way, and the failure is thrown again. */
+  private[commands] def editConfigs[A](cwd: Path, atcDir: Path, files: List[Path])(write: => Unit)(use: => A): A =
+    val originals = files.distinct.filter(Files.exists(_)).map(p => p -> Files.readString(p).nn)
+    val global = atcDir.resolve("config.json").nn
+    val created = if files.contains(global) && !Files.exists(global) then Config.ensureGlobal(global) else Nil
+    val project = Config.projectRoot(cwd).map(Config.projectPath)
+    val trusted = project.exists(p => files.exists(Config.samePath(_, p))) && ProjectTrust.pending(cwd, atcDir).isEmpty
+    def retrust(): Unit = if trusted then ProjectTrust.trust(cwd, atcDir)
+    try
+      write
+      retrust()
+      use
+    catch
+      case NonFatal(e) =>
+        originals.foreach((p, text) => Files.writeString(p, text))
+        created.foreach(Files.deleteIfExists)
+        retrust()
+        throw e
+
   /** The scopes `/config <setting> <value> <scope>` accepts. */
   val ScopeNames: List[String] = List("session", "project", "global")
 

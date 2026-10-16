@@ -1,7 +1,7 @@
 package atc
 
 import atc.host.*
-import atc.lib.{Classified, Exec, ExecOptions, FileSystem, Network}
+import atc.lib.{Classified, Exec, ExecOptions, FileSystem}
 import atc.perms.*
 import atc.platform.{Platform, PlatformPath}
 import atc.sandbox.ReplSession
@@ -12,8 +12,7 @@ import java.nio.file.{Files, Path}
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Exec and network permission enforcement, at the host level and end-to-end
-  * through a sandbox REPL (migrated from TACIT's ProcessPermissionSuite,
-  * WebOpsSuite and the exec/network parts of LibraryIntegrationSuite). */
+  * through a sandbox REPL. */
 class PermissionSuite extends munit.FunSuite:
   override val munitTimeout = scala.concurrent.duration.Duration(5, "min")
 
@@ -91,8 +90,6 @@ class PermissionSuite extends munit.FunSuite:
   test("exec runs an allowed command and captures stdout/exit code"):
     val env = TestEnv(commands = permits("echo"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val r = env.host.exec(fixture("echo"), List("hello", "world"))
     assertEquals(r.exitCode, 0)
     assertEquals(r.stdout.trim, "hello world")
@@ -103,8 +100,6 @@ class PermissionSuite extends munit.FunSuite:
   test("exec rejects a disallowed command with a request hint"):
     val env = TestEnv(commands = List("echo"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val e = intercept[SecurityException](env.host.exec("rm", List("-rf", "/")))
     assert(e.getMessage.nn.contains("no permitted pattern"), e.getMessage)
     assert(e.getMessage.nn.contains("requestExec"), e.getMessage)
@@ -112,8 +107,6 @@ class PermissionSuite extends munit.FunSuite:
   test("exec captures a non-zero exit code and stderr instead of throwing"):
     val env = TestEnv(commands = permits("fail"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val r = env.host.exec(fixture("fail"), List("7", "no-such-file-xyz"))
     assertEquals(r.exitCode, 7)
     assertEquals(r.stderr, "no-such-file-xyz\n")
@@ -122,8 +115,6 @@ class PermissionSuite extends munit.FunSuite:
     val env = TestEnv(commands = permits("pwd"))
     env.dir("sub")
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val r = env.host.exec(fixture("pwd"), Nil, env.root.resolve("sub").toString)
     assertEquals(Path.of(r.stdout.trim), env.root.resolve("sub"))
 
@@ -131,8 +122,6 @@ class PermissionSuite extends munit.FunSuite:
     val env = TestEnv(commands = permits("pwd"))
     val outside = TestEnv.outsideDir()
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val e = intercept[SecurityException](env.host.exec(fixture("pwd"), Nil, outside.toString))
     assert(e.getMessage.nn.contains("Access denied"), e.getMessage)
 
@@ -147,8 +136,6 @@ class PermissionSuite extends munit.FunSuite:
     )
     env.dir("secrets")
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val secrets = env.root.resolve("secrets").toString
     val e = intercept[SecurityException](env.host.exec(fixture("pwd"), Nil, secrets))
     assert(e.getMessage.nn.contains("classified"), e.getMessage)
@@ -158,8 +145,6 @@ class PermissionSuite extends munit.FunSuite:
     val env = TestEnv(commands = permits("pwd"))
     val outside = TestEnv.outsideDir()
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     env.decisions = List(Decision.AllowOnce)
     val out = env.host.requestFiles(outside.toString, atc.lib.Access.Read, "run there") {
       env.host.exec(fixture("pwd"), Nil, outside.toString).stdout.trim
@@ -171,13 +156,13 @@ class PermissionSuite extends munit.FunSuite:
 
   test("exec's default working directory is allowed even when cwd is reached through a symlink"):
     val env = TestEnv(commands = permits("pwd"))
-    val link = Files.createTempDirectory("atc-link").nn.resolve("proj").nn
+    val link = TestEnv.tempDir("atc-link").resolve("proj").nn
     assume(TestEnv.trySymbolicLink(link, env.root), "symbolic links are unavailable for this account")
     // A host whose cwd is the symlink (as `atc -C /tmp/proj` would be on macOS, where /tmp -> /private/tmp).
     val host = Host(env.policy, link, env.output, env.llm, env.ui)
-    import env.given
-    given ex: Exec = host.processes
-    given fs: FileSystem = host.fileSystem
+    import env.io
+    given Exec = host.processes
+    given FileSystem = host.fileSystem
     val r = host.exec(fixture("pwd"))
     assertEquals(r.exitCode, 0, r.stderr)
     assertEquals(Path.of(host.execOutput(fixture("pwd")).trim), env.root)
@@ -185,8 +170,6 @@ class PermissionSuite extends munit.FunSuite:
   test("exec enforces a timeout"):
     val env = TestEnv(commands = permits("sleep"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val e = intercept[RuntimeException](
       env.host.exec(fixture("sleep"), List("30000"), ExecOptions(timeoutMs = 150L))
     )
@@ -205,8 +188,6 @@ class PermissionSuite extends munit.FunSuite:
   test("permission matching preserves argv boundaries"):
     val env = TestEnv(commands = List("./allowed safe"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     // This is one executable whose filename contains a space, not `./allowed`
     // with argument `safe`; its canonical permission line retains the quotes.
     val error = intercept[SecurityException](env.host.exec("'./allowed safe'"))
@@ -215,8 +196,6 @@ class PermissionSuite extends munit.FunSuite:
   test("exec rejects non-positive timeouts before starting a process"):
     val env = TestEnv(commands = permits("echo"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     for timeout <- List(0L, -1L, Long.MinValue) do
       val error = intercept[IllegalArgumentException](
         env.host.exec(fixture("echo"), List("must-not-run"), ExecOptions(timeoutMs = timeout))
@@ -228,8 +207,6 @@ class PermissionSuite extends munit.FunSuite:
   test("requestExec opens a scope, prompts once, and closes it"):
     val env = TestEnv(commands = Nil)
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     env.decisions = List(Decision.AllowOnce)
     val pattern = ProcessFixture.pattern("pwd")
     val out = env.host.requestExec(Set(pattern), "inspect the working directory") {
@@ -245,8 +222,6 @@ class PermissionSuite extends munit.FunSuite:
   test("requestExec with AllowSession persists the grant"):
     val env = TestEnv(commands = Nil)
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     env.decisions = List(Decision.AllowSession)
     val pattern = ProcessFixture.pattern("pwd")
     env.host.requestExec(Set(pattern), "inspect the working directory") { () }
@@ -255,8 +230,6 @@ class PermissionSuite extends munit.FunSuite:
   test("requestExec on an already-permitted pattern does not prompt"):
     val env = TestEnv(commands = permits("echo"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val r = env.host.requestExec(Set(ProcessFixture.pattern("echo"))) {
       env.host.exec(fixture("echo"), List("hi")).stdout.trim
     }
@@ -266,7 +239,6 @@ class PermissionSuite extends munit.FunSuite:
   test("a denied requestExec throws and runs nothing"):
     val env = TestEnv(commands = List("echo"))
     import env.given
-    given ex: Exec = env.host.processes
     env.decisions = List(Decision.Deny)
     var ran = false
     intercept[SecurityException](env.host.requestExec(Set("rm")) { ran = true })
@@ -278,8 +250,6 @@ class PermissionSuite extends munit.FunSuite:
     // through the base capability.
     val env = TestEnv(commands = Nil)
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     env.decisions = List(Decision.AllowOnce)
     val catLine = fixture("cat")
     val (handle, visibleInside) = env.host.requestExec(Set(ProcessFixture.pattern("cat")), "interactive") {
@@ -298,8 +268,6 @@ class PermissionSuite extends munit.FunSuite:
   test("a process spawned on the base scope stays usable for the session"):
     val env = TestEnv(commands = permits("cat"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val cat = env.host.spawn(fixture("cat"))
     cat.sendLine("hi")
     assertEquals(cat.readUntil("hi\n", 5000), "hi\n")
@@ -311,13 +279,11 @@ class PermissionSuite extends munit.FunSuite:
   test("httpGet returns the body when the host is allowed"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     assertEquals(env.host.httpGet(url("/ok")), "hello")
 
   test("HTTP responses use the bounded JDK reader and redirects stay disabled"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     val largest = env.host.httpGet(url("/max-body"))
     assertEquals(largest.length, Host.HttpMaxResponseBytes)
     assert(largest.forall(_ == 'x'))
@@ -330,7 +296,6 @@ class PermissionSuite extends munit.FunSuite:
   test("httpGet/httpPost throw on an HTTP error with the status and the body; httpRequest reports it raw"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     val e = intercept[RuntimeException](env.host.httpGet(url("/not-found")))
     assert(e.getMessage.nn.contains("HTTP 404") && e.getMessage.nn.contains("not found"), e.getMessage)
     val e2 = intercept[RuntimeException](env.host.httpPost(url("/boom"), "x"))
@@ -338,7 +303,7 @@ class PermissionSuite extends munit.FunSuite:
     val raw = env.host.httpRequest("GET", url("/not-found"))
     assertEquals(raw.status, 404)
     assert(raw.body.contains("not found"))
-    // the new overloads without secretHeaders
+    // the overloads without secretHeaders
     assertEquals(env.host.httpPost(url("/echo"), "ping", "text/plain", Map("X-A" -> "1")), "ping")
     assertEquals(env.host.httpRequest("POST", url("/echo"), "pong", Map("X-A" -> "1")).body, "pong")
     // the classified POST stays status-blind: no throw, the body stays classified
@@ -348,8 +313,6 @@ class PermissionSuite extends munit.FunSuite:
   test("exec splits a command line like a shell, honouring quotes, but runs no shell"):
     val env = TestEnv(commands = permits("echo", "cat"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val echo = fixture("echo")
     val cat = fixture("cat")
     assertEquals(env.host.exec(s"$echo hello   world").stdout.trim, "hello world")
@@ -367,8 +330,6 @@ class PermissionSuite extends munit.FunSuite:
   test("pipelines: stages are connected, checked one by one, exit code pipefail-style, stderr labelled"):
     val env = TestEnv(commands = permits("echo", "unsorted", "cat", "sort", "upper", "fail"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val echoHello = fixture("echo", "hello")
     val cat = fixture("cat")
     val sort = fixture("sort")
@@ -388,8 +349,7 @@ class PermissionSuite extends munit.FunSuite:
     assertEquals(env.commandsWrapped, 4) // each pipeline ran inside the clock-pausing hook once
     val denying = TestEnv(commands = permits("echo", "cat"), denyCommands = List(ProcessFixture.pattern("cat")))
     val d = intercept[SecurityException] {
-      given Exec = denying.host.processes
-      given FileSystem = denying.host.fileSystem
+      import denying.given
       denying.host.exec(s"${fixture("echo", "hi")} | $cat")
     }
     assert(d.getMessage.nn.contains("denyCommands"), d.getMessage)
@@ -399,8 +359,6 @@ class PermissionSuite extends munit.FunSuite:
     // anything the operating system allows it to read.
     val env = TestEnv(TestEnv.withSecrets, commands = permits("cat"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     env.file("secrets/key.txt", "s3cret")
     intercept[SecurityException](env.host.read("secrets/key.txt"))
     assertEquals(env.host.exec(fixture("cat"), List("secrets/key.txt")).stdout, "s3cret")
@@ -408,8 +366,6 @@ class PermissionSuite extends munit.FunSuite:
   test("redirections are file operations: checked like read/write, streamed, classified refused"):
     val env = TestEnv(TestEnv.withSecrets, commands = permits("echo", "cat", "fail"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     env.file("in.txt", "from a file\n")
     val cat = fixture("cat")
     val echo = fixture("echo")
@@ -433,8 +389,6 @@ class PermissionSuite extends munit.FunSuite:
   test("spawn: talk to a process while it runs, read what it says, and it is reported to the user"):
     val env = TestEnv(commands = permits("cat", "sort"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val catLine = fixture("cat")
     val catShown = CommandLine.parsePipeline(catLine).stages.head.line
     val cat = env.host.spawn(catLine)
@@ -473,8 +427,6 @@ class PermissionSuite extends munit.FunSuite:
   test("spawn: waits time out with the output so far, kill works, the count is bounded, the session end kills all"):
     val env = TestEnv(commands = permits("cat", "sleep"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val sleep = fixture("sleep", "30000")
     val sleeper = env.host.spawn(sleep)
     intercept[IllegalArgumentException](sleeper.readUntil("never", -1))
@@ -495,8 +447,8 @@ class PermissionSuite extends munit.FunSuite:
     val e3 = intercept[IllegalStateException](env.host.spawn(sleep))
     assert(e3.getMessage.nn.contains("kill()"), e3.getMessage)
     assertEquals(env.host.runningProcesses.size, Host.MaxProcesses)
-    assertEquals(env.host.killProcess("p1"), "no running process 'p1' (see /ps)") // p1 (the sleeper) is gone
-    assert(env.host.killProcess(s"p${many.head.id}").startsWith("killed p"))
+    assertEquals(env.host.killProcess("p1"), Left("no running process 'p1' (see /ps)")) // p1 (the sleeper) is gone
+    assert(env.host.killProcess(s"p${many.head.id}").exists(_.startsWith("killed p")))
     assert(env.host.processSummary.linesIterator.size == Host.MaxProcesses - 1)
     env.host.killProcesses() // what the app does when the session ends
     assert(many.forall(p => p.waitFor(5000).isDefined))
@@ -507,8 +459,6 @@ class PermissionSuite extends munit.FunSuite:
   test("execOutput throws on a non-zero exit; exec reports it"):
     val env = TestEnv(commands = permits("echo", "fail"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     val failure = fixture("fail", "1", "expected")
     assertEquals(env.host.exec(failure).exitCode, 1)
     val e = intercept[RuntimeException](env.host.execOutput(failure))
@@ -518,8 +468,6 @@ class PermissionSuite extends munit.FunSuite:
   test("ExecOptions: stdin is fed to the command and closed, a timeout quotes the output so far"):
     val env = TestEnv(commands = permits("echo", "cat", "sleep"))
     import env.given
-    given ex: Exec = env.host.processes
-    given fs: FileSystem = env.host.fileSystem
     assertEquals(env.host.exec(fixture("cat"), Nil, ExecOptions(stdin = "fed\nin")).stdout, "fed\nin")
     assertEquals(env.host.exec(fixture("cat")).stdout, "") // stdin closed: EOF at once, no hang
     val e = intercept[RuntimeException](
@@ -536,7 +484,6 @@ class PermissionSuite extends munit.FunSuite:
   test("httpPost sends the body and httpRequest reports status"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     assertEquals(env.host.httpPost(url("/echo"), "ping", "text/plain", Map.empty), "ping")
     val resp = env.host.httpRequest("DELETE", url("/method"), "", Map.empty)
     assertEquals(resp.status, 200)
@@ -545,7 +492,6 @@ class PermissionSuite extends munit.FunSuite:
   test("secret headers are sent to the host but never returned to the agent"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     val token: Classified[String] = env.host.classify("s3cr3t")
     val echoed = env.host.httpGet(url("/header"), Map.empty, Map("X-Token" -> token))
     // The server reflects the header verbatim. The response must nevertheless
@@ -556,7 +502,6 @@ class PermissionSuite extends munit.FunSuite:
   test("a failed classified secret header aborts the request without leaking the failure bit"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     env.clearOutput()
     val before = echoRequests.get()
     val failed = env.host.classify("s3cr3t").map(s => throw RuntimeException(s"boom $s"))
@@ -574,7 +519,6 @@ class PermissionSuite extends munit.FunSuite:
   test("a secret-dependent invalid header value fails only inside the classified response"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     val secret = "HEADER-SECRET\nforged: yes"
     val result = env.host.httpGet(url("/ok"), Map.empty, Map("X-Token" -> env.host.classify(secret)))
     assertEquals(result.toString, "Classified(***)")
@@ -585,7 +529,6 @@ class PermissionSuite extends munit.FunSuite:
   test("secret-header names cannot collide with plain headers case-insensitively"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     val error = intercept[IllegalArgumentException](
       env.host.httpGet(
         url("/ok"),
@@ -598,7 +541,6 @@ class PermissionSuite extends munit.FunSuite:
   test("an unusable secret-header name is reported plainly, like a plain one"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     val secret = env.host.classify("s3cr3t")
     val before = echoRequests.get()
     // A header name is agent-supplied and carries nothing classified, so a
@@ -611,7 +553,6 @@ class PermissionSuite extends munit.FunSuite:
   test("httpPostClassified with a failed body makes no request and returns the failure unchanged"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     val before = echoRequests.get()
     val failed = env.host.classify("secret").map(s => throw RuntimeException(s"boom $s"))
     val r = env.host.httpPostClassified(url("/echo"), failed)
@@ -621,7 +562,6 @@ class PermissionSuite extends munit.FunSuite:
   test("httpGet rejects a host that matches no pattern"):
     val env = TestEnv(hosts = List("example.com"))
     import env.given
-    given net: Network = env.host.network
     val e = intercept[SecurityException](env.host.httpGet(url("/ok")))
     assert(e.getMessage.nn.contains("no permitted pattern"), e.getMessage)
     assert(e.getMessage.nn.contains("requestNetwork"), e.getMessage)
@@ -629,7 +569,6 @@ class PermissionSuite extends munit.FunSuite:
   test("httpGet rejects a URL with no host"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     val e = intercept[SecurityException](env.host.httpGet("file:///etc/passwd"))
     assert(e.getMessage.nn.contains("Invalid URL"), e.getMessage)
     assert(e.getMessage.nn.contains("file:///etc/passwd"), e.getMessage) // the URL, not a literal "$url"
@@ -637,7 +576,6 @@ class PermissionSuite extends munit.FunSuite:
   test("httpPost sends exactly one Content-Type: the caller's header wins over `contentType`"):
     val env = TestEnv(hosts = List(host))
     import env.given
-    given net: Network = env.host.network
     assertEquals(env.host.httpPost(url("/content-type"), "x", "text/plain", Map.empty), "[text/plain]")
     assertEquals(
       env.host.httpPost(url("/content-type"), "x", "text/plain", Map("content-type" -> "application/xml")),
@@ -649,35 +587,20 @@ class PermissionSuite extends munit.FunSuite:
       "[text/csv]"
     )
 
-  test("host matching honours glob patterns, case-insensitively"):
-    assert(GlobMatcher.matchesHost("API.GitHub.com", "*.github.com"))
-    assert(!GlobMatcher.matchesHost("github.com", "*.github.com"))
-    assert(GlobMatcher.matchesHost("127.0.0.1", "127.*"))
+  test("a glob host pattern admits the hosts it matches"):
     val env = TestEnv(hosts = List("127.*"))
     import env.given
-    given net: Network = env.host.network
     assertEquals(env.host.httpGet(url("/ok")), "hello")
 
   test("denyHosts cannot be dodged by an equivalent host spelling"):
     val env = TestEnv(hosts = List("*"), denyHosts = List("169.254.169.254", "evil.com"))
     import env.given
-    given net: Network = env.host.network
     // a trailing dot names the same host but is not the same string
     val e1 = intercept[SecurityException](env.host.httpGet("http://EVIL.COM./x"))
     assert(e1.getMessage.nn.contains("denyHosts"), e1.getMessage)
     // a single decimal number is an IPv4 literal the JDK resolves: 2852039166 = 169.254.169.254
     val e2 = intercept[SecurityException](env.host.httpGet("http://2852039166/latest/meta-data"))
     assert(e2.getMessage.nn.contains("denyHosts"), e2.getMessage)
-
-  test("normalizeHost: case, trailing dot, numeric IP literals; hostnames untouched"):
-    assertEquals(GlobMatcher.normalizeHost("Example.COM"), "example.com")
-    assertEquals(GlobMatcher.normalizeHost("evil.com."), "evil.com")
-    assertEquals(GlobMatcher.normalizeHost("2852039166"), "169.254.169.254")
-    assertEquals(GlobMatcher.normalizeHost("127.1"), "127.0.0.1")
-    assertEquals(GlobMatcher.normalizeHost("127.0.0.1"), "127.0.0.1")
-    assertEquals(GlobMatcher.normalizeHost("example.com"), "example.com")
-    assertEquals(GlobMatcher.normalizeHost("999.1.2.3"), "999.1.2.3") // out of range: not a literal
-    assertEquals(GlobMatcher.normalizeHost(""), "")
 
   test("exact IPv6 host rules are canonicalized on both sides"):
     val env = TestEnv(hosts = List("::1"), denyHosts = List("2001:db8::1"))
@@ -687,7 +610,6 @@ class PermissionSuite extends munit.FunSuite:
   test("requestNetwork widens the host set for its block only"):
     val env = TestEnv(hosts = Nil)
     import env.given
-    given net: Network = env.host.network
     env.decisions = List(Decision.AllowOnce)
     val body = env.host.requestNetwork(Set(host), "fetch") { env.host.httpGet(url("/ok")) }
     assertEquals(body, "hello")

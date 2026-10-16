@@ -1,8 +1,5 @@
 package atc.ui
 
-import org.jline.terminal.{Size, Sized, Terminal}
-import org.jline.terminal.impl.DumbTerminal
-
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
 
@@ -76,15 +73,12 @@ class ListMenuSuite extends munit.FunSuite:
     assertEquals(menu.matches.take(3).map(models), Vector("gemini-2.5-pro", "gemini-3.8-flash", "gemini-2.5-flash"))
 
   test("the menu fits the screen: title and counts stay, rows scroll, long labels are cut"):
-    val terminal =
-      DumbTerminal("test", "xterm-256color", ByteArrayInputStream(Array.emptyByteArray), ByteArrayOutputStream(), UTF_8)
-    (terminal: Terminal).setSize(Size(50, 16))
-    val screen = Screen(terminal, plain = false, Glyphs.unicode)
+    val screen = Screen(TestTerminal(50, 16), plain = false, Glyphs.unicode)
     val menu = MenuState(models :+ ("x" * 80), multi = true, 0, Set(4))
     // As the menu's live region draws them: cut to one row.
     def plain(lines: List[String]) =
       lines.map(line => org.jline.utils.AttributedString.fromAnsi(screen.fit(line, 0)).nn.toString)
-    val (lines, rows) = ListMenu.render(menu, "Models gemini offers", "keys", keysInMenu = false, 16, screen)
+    val (lines, rows) = ListMenu.render(menu, "Models gemini offers", "keys", keysInMenu = false, screen)
     val shown = plain(lines)
     assert(lines.size < 16 - 1, shown)
     assert(shown.forall(Screen.displayWidth(_) < 50), shown)
@@ -93,25 +87,30 @@ class ListMenuSuite extends munit.FunSuite:
     assertEquals(shown(3), "❯ ◉ gemini-3.8-flash")
     assertEquals(shown.last, s"  ▼ ${26 - rows} more")
     menu(End, rows)
-    val end = plain(ListMenu.render(menu, "Models gemini offers", "keys", keysInMenu = true, 16, screen)._1)
+    val end = plain(ListMenu.render(menu, "Models gemini offers", "keys", keysInMenu = true, screen)._1)
     assert(end.exists(_.startsWith("❯ ◯ xxxx")) && end.exists(_.endsWith("…")), end)
     assertEquals(end.last, "  keys")
     // under a question: no title row, only the count, and every row indented
-    val under = plain(ListMenu.render(menu, "", "keys", keysInMenu = false, 16, screen, indent = "    ")._1)
+    val under = plain(ListMenu.render(menu, "", "keys", keysInMenu = false, screen, indent = "    ")._1)
     assertEquals(under.head, "    · 1 of 26 ticked")
     assert(under.drop(1).filter(_.nonEmpty).forall(_.startsWith("    ")), under)
 
-  /** Run a two-row menu on a terminal that sends `input` after `delayMillis`, then ends. */
-  private def choose(input: String, delayMillis: Long = 0): Option[List[Int]] =
+  /** Run a two-row menu on a terminal that sends `input` after `delayMillis`, then ends;
+    * what the menu writes goes to `out`. */
+  private def choose(
+    input: String,
+    delayMillis: Long = 0,
+    glyphs: Glyphs = Glyphs.unicode,
+    out: ByteArrayOutputStream = ByteArrayOutputStream(),
+  ): Option[List[Int]] =
     val bytes = ByteArrayInputStream(input.getBytes(UTF_8))
     val source = new java.io.InputStream:
       private var waited = false
       override def read(): Int =
         if !waited then { Thread.sleep(delayMillis); waited = true }
         bytes.read()
-    val terminal = DumbTerminal("test", "xterm-256color", source, ByteArrayOutputStream(), UTF_8)
-    terminal.setSize(Size.of(80, 24): Sized)
-    val screen = Screen(terminal, plain = false, Glyphs.unicode)
+    val terminal = TestTerminal(input = source, output = out)
+    val screen = Screen(terminal, plain = false, glyphs)
     val alerts = Alerts(terminal, plain = false, _ => ())
     val status = StatusLine(screen, () => true, () => true, () => 0)
     ListMenu(screen, status, alerts).run("Allow?", List("Allow once", "Deny"), multi = false, 0, Set.empty, "deny")
@@ -126,3 +125,18 @@ class ListMenuSuite extends munit.FunSuite:
       "keys after a paste count"
     )
     assertEquals(choose("\r", delayMillis = 500), Some(List(0)))
+
+  test("a menu turns bracketed paste on while it reads, and off when it ends"):
+    val out = ByteArrayOutputStream()
+    assertEquals(choose("\r", delayMillis = 500, out = out), Some(List(0)))
+    val text = out.toString(UTF_8)
+    val on = text.indexOf("\u001b[?2004h")
+    assert(on >= 0 && on < text.indexOf("Allow once"), text.replace("\u001b", "ESC"))
+    assert(text.indexOf("\u001b[?2004l", on) > on, text.replace("\u001b", "ESC"))
+
+  test("with ASCII glyphs a menu writes only ASCII"):
+    val out = ByteArrayOutputStream()
+    assertEquals(choose("\r", delayMillis = 500, glyphs = Glyphs.ascii, out = out), Some(List(0)))
+    val text = out.toString(UTF_8)
+    assert(text.forall(_ < 128), text.filter(_ >= 128))
+    assert(Ansi.Sgr.replaceAllIn(text, "").contains("Allow? > Allow once"), text.replace("\u001b", "ESC"))

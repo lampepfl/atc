@@ -164,5 +164,6 @@ ${ATC_JAVA_OPTS:-}$JVM_OPTS"
 fi
 
 # Later flags win: the defaults, then ATC_JAVA_OPTS, then -Xmx/-Xms from the command line.
+# The cache flag holds a path, which may contain spaces, so it stays one argument.
 # shellcheck disable=SC2086
-exec java $DEFAULT_JVM_OPTS $VERSIONED_JVM_OPTS $STARTUP_OPTS ${ATC_JAVA_OPTS:-} $JVM_OPTS -Dfile.encoding=UTF-8 -Datc.lib.classpath="$LIBJAR" -jar "$JAR" "$@"
+exec java $DEFAULT_JVM_OPTS $VERSIONED_JVM_OPTS ${STARTUP_OPTS:+"$STARTUP_OPTS"} ${ATC_JAVA_OPTS:-} $JVM_OPTS -Dfile.encoding=UTF-8 -Datc.lib.classpath="$LIBJAR" -jar "$JAR" "$@"

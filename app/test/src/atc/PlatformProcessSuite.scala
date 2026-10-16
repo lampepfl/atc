@@ -1,36 +1,32 @@
 package atc
 
-import atc.host.{CommandLine, Processes, WindowsExecutable}
-import atc.lib.{Exec, FileSystem}
+import atc.host.{CommandLine, WindowsExecutable}
 import atc.platform.Platform
 
 import java.nio.file.{Files, Path}
 
-/** Small native-tool checks kept apart from the portable process contract in
-  * [[PermissionSuite]]. */
-class UnixProcessIntegrationSuite extends munit.FunSuite:
+/** Native-tool checks for one platform each, kept apart from the portable process
+  * contract in [[PermissionSuite]]. */
+class PlatformProcessSuite extends munit.FunSuite:
   test("a real Unix pipeline is connected and reports pipefail"):
     assume(!Platform.isWindows)
     val env = TestEnv(commands = List("printf", "tr", "cat", "false"))
     import env.given
-    given Exec = env.host.processes
-    given FileSystem = env.host.fileSystem
     assertEquals(env.host.exec("printf hello | tr a-z A-Z | cat").stdout, "HELLO")
     assertEquals(env.host.exec("false | cat").exitCode, 1)
 
-class WindowsProcessIntegrationSuite extends munit.FunSuite:
   test("the low-level process boundary always enables strict Windows quoting"):
     assume(Platform.isWindows)
     System.setProperty("jdk.lang.Process.allowAmbiguousCommands", "true")
     val argv = CommandLine.parseCommandLine(ProcessFixture.command("echo", "strict"))
-    val result = Processes.run(ProcessBuilder(argv*), "test process", 10_000L)
+    val result = ProcessFixture.run(ProcessBuilder(argv*), "test process", 10_000L)
     assertEquals(result.stdout.trim, "strict")
     assertEquals(System.getProperty("jdk.lang.Process.allowAmbiguousCommands"), "false")
 
   test("PATH/PATHEXT resolution excludes cwd and validates script entry points"):
     assume(Platform.isWindows)
-    val cwd = Files.createTempDirectory("atc-win-cwd").nn.toRealPath().nn
-    val bin = Files.createTempDirectory("atc-win-path").nn.toRealPath().nn
+    val cwd = TestEnv.tempDir("atc-win-cwd").toRealPath().nn
+    val bin = TestEnv.tempDir("atc-win-path").toRealPath().nn
     val shadow = Files.writeString(cwd.resolve("tool.exe"), "not an executable").nn
     Files.writeString(bin.resolve("tool.exe"), "not an executable")
     val cmd = Files.writeString(bin.resolve("tool.cmd"), "@exit /b 0\r\n").nn
@@ -60,8 +56,6 @@ class WindowsProcessIntegrationSuite extends munit.FunSuite:
     val command = ProcessFixture.line(script.toString)
     val allowed = TestEnv(commands = List(CommandLine.parsePipeline(command).stages.head.line))
     import allowed.given
-    given Exec = allowed.host.processes
-    given FileSystem = allowed.host.fileSystem
     val result = allowed.host.exec(command, List("two words"))
     assertEquals(result.exitCode, 0, result.stderr)
     assertEquals(result.stdout.trim, "cmd-ok")
@@ -78,8 +72,6 @@ class WindowsProcessIntegrationSuite extends munit.FunSuite:
     val command = ProcessFixture.line(powershell)
     val env = TestEnv(commands = List(CommandLine.parsePipeline(command).stages.head.line))
     import env.given
-    given Exec = env.host.processes
-    given FileSystem = env.host.fileSystem
     val script =
       "$b=[byte[]](255,254,104,0,233,0,108,0,108,0,111,0);[Console]::OpenStandardOutput().Write($b,0,$b.Length)"
     val result = env.host.exec(command, List("-NoProfile", "-Command", script))

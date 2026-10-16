@@ -4,15 +4,7 @@ import atc.agent.{AgentMessages, CompletionPolicy}
 import atc.llm.*
 
 class CompletionPolicySuite extends munit.FunSuite:
-  private val usage = TokenUsage(1, 1)
   private def call(id: String = "call-1") = ToolCall(id, "run_scala", "{}")
-  private def completion(
-    text: String = "answer",
-    calls: List[ToolCall] = Nil,
-    native: Option[NativeTurn] = None,
-    reason: String = "end_turn",
-    stop: CompletionStop = CompletionStop.Complete,
-  ): Completion = Completion(text, calls, native, usage, reason, stop)
 
   test("a complete tool request is preserved and selected for execution"):
     val native = NativeTurn("provider", "model", "payload")
@@ -41,7 +33,10 @@ class CompletionPolicySuite extends munit.FunSuite:
     assert(decision.message.text.contains("tool calls were not executed"), decision.message.text)
     assertEquals(decision.message.toolCalls, Nil)
     assertEquals(decision.message.native, None)
-    assertEquals(decision.next, CompletionPolicy.Next.Resume(Some(AgentMessages.truncatedToolCall)))
+    assertEquals(
+      decision.next,
+      CompletionPolicy.Next.Resume(Some(AgentMessages.truncatedToolCall), truncatedCall = true)
+    )
     assert(decision.warnings.exists(_.contains("ignored 1 tool call")), decision.warnings.toString)
     // with text before the cut call, the marker still says the call did not run
     val withText = CompletionPolicy(completion(

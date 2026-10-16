@@ -19,17 +19,26 @@ import scala.jdk.OptionConverters.*
 final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
   val providerKey: String = "openai"
 
-  private def reasoningEffort(thinking: Boolean): Option[ReasoningEffort] =
-    requestEffort(thinking).map(ReasoningEffort.of)
-
   /** The provider's `reasoningStyle` fragment for a call, which then goes in place of
     * `reasoning_effort`: `request` when the call reasons, `requestOff` when it does not. */
   private def styleFragment(thinking: Boolean): Option[ujson.Value] =
     spec.reasoningStyle.flatMap(s => if thinking then s.request else s.requestOff)
       .map(ReasoningStyle.withEffort(_, if thinking then requestEffort(thinking) else None))
 
-  private def putFragment(b: ChatCompletionCreateParams.Builder, fragment: ujson.Value): Unit =
-    fragment.obj.foreach((key, value) => b.putAdditionalBodyProperty(key, JsonValue.from(Json.toJava(value))))
+  /** The `reasoning_effort` of a call, unless the provider's style fragment goes in its place. */
+  private def reasoningEffort(thinking: Boolean): Option[ReasoningEffort] =
+    if styleFragment(thinking).isDefined then None else requestEffort(thinking).map(ReasoningEffort.of)
+
+  /** What `params` and `simple` both set: the output limit, the sampling, the reasoning (the
+    * style fragment, else `effort`) and the `thinking` switch. */
+  private def configure(b: ChatCompletionCreateParams.Builder, thinking: Boolean, effort: Option[ReasoningEffort])
+    : Unit =
+    settings.maxTokens.foreach(n => b.maxCompletionTokens(n.toLong))
+    settings.temperature.foreach(b.temperature)
+    for fragment <- styleFragment(thinking); (key, value) <- fragment.obj do
+      b.putAdditionalBodyProperty(key, JsonValue.from(SdkJson.toJava(value)))
+    effort.foreach(b.reasoningEffort)
+    thinkingSwitch(thinking).foreach(b.putAdditionalBodyProperty("thinking", _))
 
   /** The reasoning tags of the provider's `reasoningStyle`, when it writes reasoning into the text. */
   private val tags: Option[(String, String)] =
@@ -39,23 +48,15 @@ final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
   private def answer(text: String): String = tags.fold(text)((open, close) => OpenAIChatModel.answer(text, open, close))
 
   private def functionTool(t: ToolSpec): ChatCompletionFunctionTool =
-    val schema = ujson.read(t.parametersJson)
-    val params = FunctionParameters.builder()
-    schema.obj.foreach((k, v) => params.putAdditionalProperty(k, JsonValue.from(Json.toJava(v))))
+    val params = FunctionParameters.builder().putAllAdditionalProperties(schema(t)).build()
     ChatCompletionFunctionTool.builder()
-      .function(FunctionDefinition.builder().name(t.name).description(t.description).parameters(params.build()).build())
+      .function(FunctionDefinition.builder().name(t.name).description(t.description).parameters(params).build())
       .build()
 
   private def params(system: SystemPrompt, history: List[Msg], tools: List[ToolSpec]): ChatCompletionCreateParams =
     val b = ChatCompletionCreateParams.builder().model(modelId).addSystemMessage(system)
     b.streamOptions(ChatCompletionStreamOptions.builder().includeUsage(true).build())
-    Providers.headers(spec).foreach((n, v) => b.putAdditionalHeader(n, v))
-    settings.maxTokens.foreach(n => b.maxCompletionTokens(n.toLong))
-    settings.temperature.foreach(b.temperature)
-    styleFragment(thinking = true) match
-      case Some(fragment) => putFragment(b, fragment)
-      case None => reasoningEffort(thinking = true).foreach(b.reasoningEffort)
-    thinkingSwitch(thinking = true).foreach(b.putAdditionalBodyProperty("thinking", _))
+    configure(b, thinking = true, reasoningEffort(thinking = true))
     tools.foreach(t => b.addTool(functionTool(t)))
     if webSearch then b.webSearchOptions(ChatCompletionCreateParams.WebSearchOptions.builder().build())
     history.foreach:
@@ -126,19 +127,13 @@ final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     OpenAIChatModel.usageOf(c.usage().toScala)
 
   def simple(system: Option[String], prompt: String, thinking: Boolean): Reply =
-    val fragment = styleFragment(thinking)
     def request(effort: Option[ReasoningEffort]): ChatCompletion =
       val b = ChatCompletionCreateParams.builder().model(modelId)
-      fragment.foreach(putFragment(b, _))
-      Providers.headers(spec).foreach((n, v) => b.putAdditionalHeader(n, v))
       system.foreach(b.addSystemMessage)
       b.addUserMessage(prompt)
-      settings.maxTokens.foreach(n => b.maxCompletionTokens(n.toLong))
-      settings.temperature.foreach(b.temperature)
-      effort.foreach(b.reasoningEffort)
-      thinkingSwitch(thinking).foreach(b.putAdditionalBodyProperty("thinking", _))
+      configure(b, thinking, effort)
       client.chat().completions().create(b.build())
-    val c = withEffortFallback(thinking, if fragment.isDefined then None else reasoningEffort(thinking))(request)
+    val c = withEffortFallback(thinking, reasoningEffort(thinking))(request)
     Reply(answer(c.choices().asScala.headOption.flatMap(_.message().content().toScala).getOrElse("")), usageOf(c))
 
 object OpenAIChatModel:
@@ -212,19 +207,12 @@ object OpenAIChatModel:
     val split = TagSplitter(open, close)
     (split.push(text) ++ split.finish()).collect { case (false, part) => part }.mkString
 
-  /** Feeds a stream's chunks to the SDK accumulator, which accepts the finish chunk and then
-    * at most one choice-less chunk, and only if it carries the usage the completion lacks.
-    * Providers differ in where the usage goes: OpenAI sends it in a choice-less chunk after
-    * the finish chunk, DeepSeek puts it on the finish chunk itself, and OpenCode's gateway
-    * does both for GLM (the finish chunk carries it and a usage chunk follows; a `cost`
-    * line after `[DONE]` never reaches the SDK). So usage is never fed as it comes: the
-    * last one seen is fed once, as the choice-less chunk the accumulator expects, when the
-    * completion is taken. Chunks the accumulator would refuse are dropped: choice-less
-    * chunks without usage, and chunks with choices after the finish chunk. One choice per
-    * completion is assumed (the request never sets `n`).
-    *
-    * Gemini sends each tool call whole and without the `index` the accumulator requires
-    * to join a call's fragments; such a fragment is numbered here (see [[numbered]]). */
+  /** Feeds a stream's chunks to the SDK accumulator, which takes the finish chunk and then at
+    * most one choice-less chunk, carrying the usage. Providers put the usage on the finish chunk,
+    * in a later chunk or in both, so the last usage seen is fed once, when the completion is
+    * taken, and chunks the accumulator would refuse are dropped. One choice per completion is
+    * assumed (the request never sets `n`). Tool-call fragments without an `index` (Gemini's)
+    * are numbered ([[numbered]]). */
   private[atc] final class ChunkFeed:
     private val acc = ChatCompletionAccumulator.create()
     private var finished = false

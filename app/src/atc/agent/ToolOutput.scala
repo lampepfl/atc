@@ -1,5 +1,6 @@
 package atc.agent
 
+import atc.TextFiles
 import atc.perms.Decision
 import atc.sandbox.ExecutionResult
 
@@ -69,8 +70,8 @@ object ToolOutput:
     val bounded =
       if hinted.length <= maxChars then hinted
       else
-        val head = AgentMessages.takeChars(hinted, maxChars * 2 / 3)
-        val tail = AgentMessages.takeRightChars(hinted, maxChars / 3)
+        val head = TextFiles.takeChars(hinted, maxChars * 2 / 3)
+        val tail = TextFiles.takeRightChars(hinted, maxChars / 3)
         s"$head\n... [${hinted.length - head.length - tail.length} characters omitted] ...\n$tail"
     val withCodeHint = codeHint(code).fold(bounded)(h => s"$bounded\nHint: $h")
     if decisions.isEmpty then withCodeHint else s"$withCodeHint\n${decisionNote(decisions)}"

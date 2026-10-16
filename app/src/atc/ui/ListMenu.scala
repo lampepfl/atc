@@ -57,7 +57,7 @@ private[ui] final class MenuState(
     if multi then labels.indices.filter(ticked) ++ labels.indices.filterNot(ticked) else labels.indices
   private var query = ""
   private var shown: IndexedSeq[Int] = order
-  /** The cursor, as a position in `shown`, and the first position in view. */
+  /** The cursor, as a position in `shown`. */
   private var at = initial.max(0).min((labels.size - 1).max(0))
   /** The first position in view; `-1` until the first window, which centres the cursor. */
   private var first = -1
@@ -151,35 +151,37 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
     if labels.isEmpty then None
     else
       val state = MenuState(labels.toIndexedSeq, multi, initial, checked)
-      val keys = ListMenu.hint(state, escape)
+      val keys = ListMenu.hint(state, escape, screen.g.dot)
       val region = screen.synchronized:
         screen.stopSpinner()
         screen.ensureNewline()
         screen.LiveRegion()
       var page = MenuState.MaxRows
       def draw(force: Boolean = false): Unit = screen.frame:
-        val (lines, rows) = ListMenu.render(state, title, keys, !status.shown, screen.height, screen, indent)
+        val (lines, rows) = ListMenu.render(state, title, keys, !status.shown, screen, indent)
         page = rows
         region.redraw(lines, force)
       val outcome = status.withHint(keys):
         alerts.withFocusReports:
           val saved = screen.terminal.enterRawMode()
-          screen.frame(screen.writeStyle(Ansi.Esc + "[?25l"))
+          // Bracketed paste on, so `read` can tell a pasted newline from Enter. Between turns
+          // nothing else has it on, and an answer read inside a pop-up turns it off.
+          screen.frame(screen.writeStyle(Ansi.HideCursor + Ansi.PasteOn))
           try
             draw()
             read(state, () => page, draw)
           finally
             screen.terminal.setAttributes(saved)
-            screen.frame(screen.writeStyle(Ansi.Esc + "[?25h"))
+            screen.frame(screen.writeStyle(Ansi.PasteOff + Ansi.ShowCursor))
       screen.frame:
         outcome match
           case MenuState.Outcome.Chosen(items) =>
             val answer =
               if multi then Format.plural(items.size, "item") + " ticked" else items.headOption.fold("")(labels(_))
+            val chosen = s"${screen.g.chosen} ${Ansi.sanitize(answer)}"
             val line =
-              if title.isEmpty then indent + styled(s"› ${Ansi.sanitize(answer)}", Cyan)
-              else
-                indent + styled("? ", Cyan, Bold) + Ansi.sanitize(title) + styled(s" › ${Ansi.sanitize(answer)}", Cyan)
+              if title.isEmpty then indent + styled(chosen, Cyan)
+              else indent + styled("? ", Cyan, Bold) + Ansi.sanitize(title) + styled(s" $chosen", Cyan)
             region.redraw(List(line), force = true)
             region.freeze()
           case _ => region.clear()
@@ -224,21 +226,20 @@ private[ui] object ListMenu:
   /** How long after a menu opens Enter is ignored. */
   val EnterDelayNanos: Long = 300_000_000L
 
-  /** The keys a menu takes, for the footer. */
-  def hint(state: MenuState, escape: String): String =
-    val choose = if state.multi then "Space tick · Enter save" else "Enter choose"
-    val filter = if state.filterable then " · type to filter" else ""
-    s"Arrows move · $choose$filter · Esc $escape"
+  /** The keys a menu takes, for the footer, separated by `dot`. */
+  def hint(state: MenuState, escape: String, dot: String): String =
+    val choose = if state.multi then s"Space tick $dot Enter save" else "Enter choose"
+    val filter = if state.filterable then s" $dot type to filter" else ""
+    s"Arrows move $dot $choose$filter $dot Esc $escape"
 
-  /** The menu's lines for a terminal of `height` rows, and how many item rows are in view.
-    * The region cuts each line to one row. The window leaves room for the title, the filter
+  /** The menu's lines for the screen's height, and how many item rows are in view. The
+    * region cuts each line to one row. The window leaves room for the title, the filter
     * line, the rows out of view and the footer, so the whole menu stays shorter than the screen. */
   def render(
     state: MenuState,
     title: String,
     keys: String,
     keysInMenu: Boolean,
-    height: Int,
     screen: Screen,
     indent: String = "",
   ): (List[String], Int) =
@@ -253,9 +254,10 @@ private[ui] object ListMenu:
     val filterLine = Option.when(state.filterable):
       if state.filter.isEmpty then styled(s"  Type to filter ${g.dot} $total items", Dim)
       else "  Filter: " + styled(Ansi.sanitize(state.filter), Cyan) + styled(s"  ${g.dot} ${shown.size} of $total", Dim)
-    val fixed = head.size + filterLine.size + (if keysInMenu then 1 else 0) +
-      2 // title, filter, keys, the rows out of view
-    val rows = (height - fixed - 3).min(MenuState.MaxRows).max(1) // and the footer, the line under, a margin
+    // The rows besides the items: the title, the filter line, the keys and the two rows out of view.
+    val fixed = head.size + filterLine.size + (if keysInMenu then 1 else 0) + 2
+    // The footer, the line under the menu and a margin stay free.
+    val rows = (screen.height - fixed - 3).min(MenuState.MaxRows).max(1)
     val (from, until) = state.window(rows)
     val scrolls = shown.size > rows
     val above = Option.when(scrolls)(

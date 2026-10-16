@@ -1,19 +1,21 @@
 package atc.config
 
-import atc.Debug
-import atc.platform.PlatformPath
+import atc.{Debug, TextFiles}
+import atc.platform.{OwnerOnlyFiles, PlatformPath}
 
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
-import java.util.HexFormat
+import java.util.{HexFormat, Locale}
+import scala.collection.mutable
 
 /** Whether the user trusts what a project's configuration adds beyond its own files: the
-  * commands and hosts its `.atc/config.json` pre-approves, the classified model it names and
-  * the bindings of its `.atc/keys.properties`. A cloned repository can ship both files, so
-  * [[Config.load]] leaves these out until the user has trusted them. Trust is a fingerprint of
-  * exactly these grants, kept per project in `trusted-projects.json` beside the global config,
-  * so a change to them (a `git pull`, say) is put to the user again and other edits are not. */
+  * commands and hosts its `.atc/config.json` pre-approves, the classified model it names, the
+  * provider web search it turns on and the bindings of its `.atc/keys.properties`. A cloned
+  * repository can ship both files, so [[Config.load]] leaves these out until the user has
+  * trusted them. Trust is a fingerprint of exactly these grants, kept per project in
+  * `trusted-projects.json` beside the global config, so a change to them (a `git pull`, say) is
+  * put to the user again and other edits are not. */
 object ProjectTrust:
   val StoreFile = "trusted-projects.json"
 
@@ -23,19 +25,20 @@ object ProjectTrust:
     hosts: List[String],
     classifiedModel: Option[String],
     keys: List[String],
+    webSearch: Boolean,
     fingerprint: String,
   ):
-    def isEmpty: Boolean = commands.isEmpty && hosts.isEmpty && classifiedModel.isEmpty && keys.isEmpty
+    def isEmpty: Boolean =
+      commands.isEmpty && hosts.isEmpty && classifiedModel.isEmpty && keys.isEmpty && !webSearch
 
-    /** What the user is asked to trust, one row per kind. */
+    /** What the user is asked to trust, one row per kind, with every entry. */
     def describe: List[String] =
-      def listed(values: List[String], shown: Int) =
-        values.take(shown).mkString(", ") + (if values.sizeIs > shown then s" and ${values.size - shown} more" else "")
       List(
-        Option.when(commands.nonEmpty)(s"pre-approves the commands ${listed(commands, 20)}"),
-        Option.when(hosts.nonEmpty)(s"allows the hosts ${listed(hosts, 12)}"),
+        Option.when(commands.nonEmpty)(s"pre-approves the commands ${commands.mkString(", ")}"),
+        Option.when(hosts.nonEmpty)(s"allows the hosts ${hosts.mkString(", ")}"),
         classifiedModel.map(model => s"sends classified data to the model $model"),
-        Option.when(keys.nonEmpty)(s"binds the keys ${listed(keys, 12)} in .atc/keys.properties"),
+        Option.when(keys.nonEmpty)(s"binds the keys ${keys.mkString(", ")} in .atc/keys.properties"),
+        Option.when(webSearch)("turns on the provider's web search, which the allowed hosts do not limit"),
       ).flatten
 
   /** Grants of the project at `root` the user has not trusted, and whether an earlier
@@ -43,12 +46,22 @@ object ProjectTrust:
   final case class Pending(root: Path, grants: Grants, changed: Boolean)
 
   /** The untrusted grants of the project `cwd` belongs to, with the store in `atcDir`; `None`
-    * when it has none or they are trusted. In the home directory the "project" is the global
-    * config itself, which is the user's own. */
+    * when it has none or they are trusted. */
   def pending(cwd: Path, atcDir: Path): Option[Pending] =
-    val global = atcDir.toAbsolutePath.nn.normalize
-    Config.projectRoot(cwd).filterNot(_.resolve(".atc").toAbsolutePath.nn.normalize == global).flatMap: root =>
-      val grants = of(root)
+    Config.projectRoot(cwd).flatMap(root => pending(root, readConfig(root), readKeys(root), atcDir))
+
+  /** As [[pending]], for the project at `root` whose config reads as `config` and whose key file
+    * binds `keys`. In the home directory the "project" is the global config itself, which is the
+    * user's own. */
+  private[config] def pending(
+    root: Path,
+    config: ujson.Obj,
+    keys: Map[String, String],
+    atcDir: Path,
+  ): Option[Pending] =
+    if Config.samePath(root.resolve(".atc").nn, atcDir) then None
+    else
+      val grants = of(config, keys)
       val recorded = read(atcDir).get(key(root))
       Option.when(!grants.isEmpty && !recorded.contains(grants.fingerprint))(
         Pending(root, grants, changed = recorded.isDefined)
@@ -56,35 +69,103 @@ object ProjectTrust:
 
   /** Trust what the project `cwd` belongs to grants now. */
   def trust(cwd: Path, atcDir: Path): Unit =
-    Config.projectRoot(cwd).foreach: root =>
-      val store = read(atcDir).updated(key(root), of(root).fingerprint)
-      val text = ujson.write(ujson.Obj.from(store.toList.sortBy(_._1).map((k, v) => k -> ujson.Str(v))), indent = 2)
-      Config.replaceFile(atcDir.resolve(StoreFile).nn, text + "\n", keepPermissions = false)
+    Config.projectRoot(cwd).foreach(root => record(root, of(readConfig(root), readKeys(root)).fingerprint, atcDir))
+
+  /** Trust the grants `pending` describes, and not a later version of the files. */
+  def trust(pending: Pending, atcDir: Path): Unit = record(pending.root, pending.grants.fingerprint, atcDir)
+
+  /** Write the starter project config in `dir` ([[Config.initProject]]) and trust it, since ATC
+    * wrote what it grants. A key file that `dir` already had and the user has not trusted keeps
+    * the project waiting for the prompt that shows its bindings. Returns the paths written. */
+  def initProject(dir: Path, atcDir: Path): List[Path] =
+    val root = dir.toAbsolutePath.nn.normalize.nn
+    val waiting = pending(root, atcDir).exists(_.root == root)
+    val created = Config.initProject(root, atcDir.resolve("config.json").nn)
+    if created.nonEmpty && !waiting then trust(root, atcDir)
+    created
+
+  private def record(root: Path, fingerprint: String, atcDir: Path): Unit =
+    val store = read(atcDir).updated(key(root), fingerprint)
+    val text = ujson.write(ujson.Obj.from(store.toList.sortBy(_._1).map((k, v) => k -> ujson.Str(v))), indent = 2)
+    OwnerOnlyFiles.replace(atcDir.resolve(StoreFile).nn, TextFiles.strictUtf8(text + "\n"), keepPermissions = false)
 
   /** `layer` without the settings that need trust. */
   def withoutGrants(layer: ConfigLayer): ConfigLayer =
-    val json = ujson.Obj.from(layer.json.value.filterNot((k, v) => Removed(k) && !v.isNull))
+    val json = new ujson.Obj(ujson.copy(layer.json).obj)
+    // A `null` stays: only `classifiedModel` may be null, which unsets the global one and so
+    // sends classified data to no model.
+    for key <- Removed if json.value.get(key).exists(!_.isNull) do json.value.remove(key)
+    for entry <- webSearchEntries(json) do entry.remove("webSearch")
     layer.copy(json = json, config = ConfigLayer.settings(json, layer.path.fold("")(_.toString)))
 
   private val Removed = Set("commands", "hosts", "classifiedModel")
 
-  private def of(root: Path): Grants =
+  /** The top-level object and the model entries of `json` that turn web search on. */
+  private def webSearchEntries(json: ujson.Obj): List[mutable.Map[String, ujson.Value]] =
+    val models =
+      for
+        providers <- json.value.get("providers").flatMap(_.objOpt).toList
+        provider <- providers.values.flatMap(_.objOpt)
+        entries <- provider.get("models").flatMap(_.objOpt).toList
+        entry <- entries.values.flatMap(_.objOpt)
+      yield entry
+    (json.value :: models).filter(_.get("webSearch").contains(ujson.True))
+
+  /** What the providers of `json` say about the model `reference` names: the entries of that alias,
+    * by `provider/alias`, and which providers it turns off. A change to either can change the
+    * provider, model id or settings the reference resolves to. */
+  private def definition(json: ujson.Obj, reference: String): ujson.Obj =
+    def names(name: String) = name.toLowerCase(Locale.ROOT) == reference.trim.toLowerCase(Locale.ROOT)
+    val parts = mutable.ListBuffer[(String, ujson.Value)]()
+    for
+      providers <- json.value.get("providers").flatMap(_.objOpt)
+      (name, provider) <- providers
+      fields <- provider.objOpt
+    do
+      fields.get("enabled").foreach(on => parts += s"$name.enabled" -> on)
+      for
+        models <- fields.get("models").flatMap(_.objOpt)
+        (alias, entry) <- models
+        if names(alias) || names(s"$name/$alias")
+      do parts += s"$name/$alias" -> entry
+    ujson.Obj.from(parts.sortBy(_._1))
+
+  private def readConfig(root: Path): ujson.Obj =
     val config = Config.projectPath(root)
-    val json =
-      if Files.isRegularFile(config) then ObjectText.parse(Files.readString(config).nn, config.toString)
-      else ujson.Obj()
-    def strings(key: String) = json.value.get(key).flatMap(_.arrOpt).fold(Nil)(_.toList.flatMap(_.strOpt))
+    if Files.isRegularFile(config) then ConfigLayer.parse(Files.readString(config).nn, config.toString)
+    else ujson.Obj()
+
+  private def readKeys(root: Path): Map[String, String] =
     val keyFile = Config.keysPath(root)
-    val keys = (if Files.isRegularFile(keyFile) then KeyBindings.read(keyFile).toList else Nil).sortBy(_._1)
+    if Files.isRegularFile(keyFile) then KeyBindings.read(keyFile) else Map.empty
+
+  private def of(json: ujson.Obj, bindings: Map[String, String]): Grants =
+    def strings(key: String) = json.value.get(key).flatMap(_.arrOpt).fold(Nil)(_.toList.flatMap(_.strOpt))
+    val commands = strings("commands")
+    val hosts = strings("hosts")
+    val keys = bindings.toList.sortBy(_._1)
     val classified = json.value.get("classifiedModel").flatMap(_.strOpt)
+    val webSearch = webSearchEntries(json).nonEmpty
+    // Web search enters only when it is on, so that fingerprints recorded without it still match.
     val granted = ujson.Obj(
-      "commands" -> ujson.Arr.from(strings("commands")),
-      "hosts" -> ujson.Arr.from(strings("hosts")),
+      "commands" -> ujson.Arr.from(commands),
+      "hosts" -> ujson.Arr.from(hosts),
       "classifiedModel" -> classified.fold[ujson.Value](ujson.Null)(ujson.Str(_)),
       "keys" -> ujson.Obj.from(keys.map((name, value) => name -> ujson.Str(value))),
     )
+    if webSearch then granted("webSearch") = ujson.True
+    // The classified model is trusted as the project's providers define it. The definition enters
+    // only when they say something about it, so that fingerprints recorded without it still match.
+    classified.map(definition(json, _)).filter(_.value.nonEmpty).foreach(granted("classifiedDefinition") = _)
     val digest = MessageDigest.getInstance("SHA-256").nn.digest(ujson.write(granted).getBytes(UTF_8))
-    Grants(strings("commands"), strings("hosts"), classified, keys.map(_._1), HexFormat.of().nn.formatHex(digest))
+    Grants(
+      commands,
+      hosts,
+      classified,
+      keys.map(_._1),
+      webSearch,
+      HexFormat.of().nn.formatHex(digest),
+    )
 
   private def key(root: Path): String = PlatformPath.portable(PlatformPath.canonical(root))
 

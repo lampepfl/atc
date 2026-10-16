@@ -1,6 +1,8 @@
 package atc.config
 
 import atc.{Debug, ProcessEnvironment, TextFiles}
+import atc.platform.OwnerOnlyFiles
+import atc.ui.Ansi
 
 import java.io.StringReader
 import java.nio.file.{Files, Path}
@@ -57,15 +59,25 @@ object KeyBindings:
     case _ => None
 
   /** The environment variables a provider's credentials may come from: the `${VAR}`s of
-    * its key and headers, its `keyEnv`, and the SDK's own variables when it names no key. */
+    * its key and headers, its `keyEnv`, and, for the default endpoint, the secrets its SDK
+    * reads from the environment. The adapters let the SDK read them whenever no key resolves
+    * and no `url` is set (`Providers.key`), which includes a configured `key` or `keyEnv`
+    * whose variable is unset. */
   def variables(p: ProviderConfig): Set[String] =
     val named = (p.key.toList ++ p.headers.values).flatMap(envRefName) ++ p.keyEnv
     val sdkDefaults =
-      if p.key.nonEmpty || p.keyEnv.nonEmpty then Nil
+      if p.url.nonEmpty then Nil
       else
-        p.api match
-          case Some("anthropic") if p.url.isEmpty => List("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-          case Some("openai" | "openai-responses") if p.url.isEmpty => List("OPENAI_API_KEY")
+        p.api.flatMap(ProviderConfig.canonicalApi) match
+          case Some("anthropic") => List("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+          case Some("openai" | "openai-responses") =>
+            List(
+              "OPENAI_API_KEY",
+              "AZURE_OPENAI_KEY",
+              "OPENAI_ADMIN_KEY",
+              "OPENAI_WEBHOOK_SECRET",
+              "OPENAI_CUSTOM_HEADERS"
+            )
           case _ => Nil
     (named ++ sdkDefaults).toSet
 
@@ -77,12 +89,14 @@ object KeyBindings:
     val line = s"$name=${value.replace("\\", "\\\\")}"
     if !Files.exists(path) then
       Option(path.getParent).foreach(Files.createDirectories(_))
-      Config.writeOwnerOnly(path, s"# API keys for the providers in config.json, one NAME=value per line.\n$line\n")
+      val text = s"# API keys for the providers in config.json, one NAME=value per line.\n$line\n"
+      OwnerOnlyFiles.create(path, TextFiles.strictUtf8(text))
     else
       val lines = TextFiles.splitLines(TextFiles.stripBom(Files.readString(path).nn)).lines
       val binds = s"^\\s*${Pattern.quote(name)}\\s*[=:\\s]".r
       val kept = lines.filterNot(l => binds.findFirstIn(l + " ").isDefined)
-      Config.replaceFile(path.toRealPath().nn, (kept :+ line).mkString("", "\n", "\n"), keepPermissions = false)
+      val text = (kept :+ line).mkString("", "\n", "\n")
+      OwnerOnlyFiles.replace(path.toRealPath().nn, TextFiles.strictUtf8(text), keepPermissions = false)
 
   /** Read existing `keys.properties` files from most to least specific. Warn if
     * a file containing API keys is readable by other users. */
@@ -90,7 +104,9 @@ object KeyBindings:
     val present = paths.filter(Files.isRegularFile(_)).distinctBy(_.toAbsolutePath.normalize)
     present.foreach: p =>
       if sharedReadable(p) then
-        System.err.println(s"atc: warning: $p can be read by other users and holds API keys; chmod 600 it")
+        System.err.println(
+          Ansi.sanitize(s"atc: warning: $p can be read by other users and holds API keys; chmod 600 it")
+        )
     KeyBindings(present.map(p => p -> read(p)))
 
   /** Whether `p` is readable by its group or by other users. Returns `false`

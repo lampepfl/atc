@@ -1,14 +1,18 @@
 package atc
 
 import atc.host.*
-import atc.lib.{IOCap, Todo, UserIO}
+import atc.lib.{Exec, FileSystem, IOCap, Network, Todo, UserIO}
 import atc.perms.*
 import atc.platform.PlatformPath
-import atc.sandbox.{ReplSession, Sandbox, SandboxConfig}
+import atc.sandbox.{ReplSession, SandboxConfig}
 
 import java.io.IOException
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, LinkOption, Path}
+import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.ConcurrentLinkedQueue
 import scala.collection.mutable.ListBuffer
+import scala.jdk.CollectionConverters.*
+import scala.util.Using
 
 /** A recording test environment: a fresh temp root, a policy with a scripted
   * permission prompter, and a [[Host]] whose output, LLM calls, questions and
@@ -24,21 +28,10 @@ final class TestEnv(
   denyCommands: List[String] = Nil,
   denyHosts: List[String] = Nil,
 ):
-  val root: Path = Files.createTempDirectory(prefix).nn.toRealPath().nn
+  val root: Path = TestEnv.tempDir(prefix).toRealPath().nn
 
-  // ── permission prompter (scripted; unanswered requests are denied) ──
-  var decisions: List[Decision] = Nil
-  val requests: ListBuffer[PermissionRequest] = ListBuffer()
-  /** Called on every prompt before the scripted decision (e.g. to simulate a slow user). */
-  var onRequest: PermissionRequest => Unit = _ => ()
-  val prompter: PermissionPrompter = r =>
-    requests += r
-    onRequest(r)
-    decisions match
-      case d :: rest =>
-        decisions = rest
-        d
-      case Nil => Decision.Deny
+  val prompter: ScriptedPrompter = ScriptedPrompter()
+  export prompter.{decisions, decisions_=, onRequest, onRequest_=, requests}
 
   val policy: Policy = Policy(mkRules(root), commands, hosts, prompter, denyCommands, denyHosts)
 
@@ -61,6 +54,8 @@ final class TestEnv(
   var commandsWrapped: Int = 0
   /** What the user was shown about spawned processes (started / input / exited). */
   val processEvents: ListBuffer[String] = ListBuffer()
+  /** The previews of the file changes the host reported. */
+  val fileChanges: ListBuffer[FileChange] = ListBuffer()
 
   val output: HostOutput = new HostOutput:
     def print(agentText: String, userText: String): Unit = agentOut.synchronized:
@@ -85,6 +80,7 @@ final class TestEnv(
     override def processExited(id: Int, exitCode: Int): Unit =
       processEvents.synchronized(processEvents += s"p$id exited $exitCode")
     override def commandOutput(text: String): Unit = liveCommandOut.synchronized(liveCommandOut.append(text))
+    override def fileChanged(change: FileChange): Unit = fileChanges.synchronized(fileChanges += change)
 
   val llm: HostLlm = new HostLlm:
     def chat(m: String): String =
@@ -109,6 +105,9 @@ final class TestEnv(
   /** Root capabilities for calling the host directly from tests. */
   given io: IOCap = new IOCap()
   given user: UserIO = new UserIO()
+  given fs: FileSystem = host.fileSystem
+  given ex: Exec = host.processes
+  given net: Network = host.network
 
   // ── helpers ──
   def file(rel: String, content: String): Path =
@@ -131,13 +130,6 @@ final class TestEnv(
     agentOut.clear()
     userOut.clear()
 
-  /** Re-install this env's host as the sandbox implementation. The installed
-    * host is process-global (one sandbox per JVM), so a suite that keeps more
-    * than one session alive must activate the right env before evaluating.
-    * Otherwise a session picks up another env's host when its `api` object is
-    * first forced, and its effects land in the wrong temp root. */
-  def activate(): Unit = Sandbox.installHost(host)
-
   /** Open a sandbox session on this host (installs it as the sandbox API). */
   def newSession(
     safeMode: Boolean = true,
@@ -150,7 +142,44 @@ final class TestEnv(
     session = Some(s)
     s
 
+/** Answers permission requests with the scripted decisions in order and denies
+  * once they run out. Every request is recorded. */
+final class ScriptedPrompter(var decisions: List[Decision] = Nil) extends PermissionPrompter:
+  val requests: ListBuffer[PermissionRequest] = ListBuffer()
+  /** Called on every request before its decision (e.g. to simulate a slow user). */
+  var onRequest: PermissionRequest => Unit = _ => ()
+  def ask(request: PermissionRequest): Decision =
+    requests += request
+    onRequest(request)
+    decisions match
+      case d :: rest =>
+        decisions = rest
+        d
+      case Nil => Decision.Deny
+
 object TestEnv:
+  private val tempDirs = ConcurrentLinkedQueue[Path]()
+  java.lang.Runtime.getRuntime.nn.addShutdownHook(Thread(() => tempDirs.asScala.foreach(deleteTree)))
+
+  /** A new temporary directory, deleted with its contents when the test JVM exits. */
+  def tempDir(prefix: String): Path =
+    val dir = Files.createTempDirectory(prefix).nn
+    tempDirs.add(dir)
+    dir
+
+  /** Delete `path` and whatever a directory holds. A link, or a Windows junction, which
+    * reads as a directory that is also "other", is removed without being entered. */
+  private def deleteTree(path: Path): Unit =
+    val attributes =
+      try Some(Files.readAttributes(path, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS).nn)
+      catch case _: IOException => None
+    for a <- attributes do
+      if a.isDirectory && !a.isOther then
+        try Using.resource(Files.list(path).nn)(_.iterator.nn.asScala.foreach(deleteTree))
+        catch case _: IOException => ()
+      try Files.deleteIfExists(path)
+      catch case _: IOException => ()
+
   /** Create a symbolic link when the platform/account permits it. Ordinary
     * Windows users may not have Developer Mode or SeCreateSymbolicLinkPrivilege. */
   def trySymbolicLink(link: Path, target: Path): Boolean =
@@ -172,6 +201,6 @@ object TestEnv:
 
   /** A second temp directory outside any root, with one readable file. */
   def outsideDir(content: String = "outside"): Path =
-    val d = Files.createTempDirectory("atc-outside").nn.toRealPath().nn
+    val d = tempDir("atc-outside").toRealPath().nn
     Files.writeString(d.resolve("o.txt"), content)
     d

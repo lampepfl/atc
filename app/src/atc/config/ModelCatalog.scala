@@ -1,13 +1,14 @@
 package atc.config
 
-import atc.Debug
+import atc.{Debug, TextFiles, Threads}
+import atc.platform.OwnerOnlyFiles
 
 import upickle.default.*
 
 import java.nio.file.{Files, Path}
 import java.time.Duration
 import java.util.Locale
-import java.util.concurrent.{CompletableFuture, TimeUnit, TimeoutException}
+import java.util.concurrent.{CompletableFuture, Executors, TimeUnit, TimeoutException}
 import scala.collection.mutable
 import scala.util.control.NonFatal
 
@@ -55,10 +56,11 @@ final case class ModelSpec(
   * id when no configured alias and no other listed model has it.
   *
   * A provider's list is fetched by `discover` at most once per catalog: by
-  * [[refresh]] in the background, or when [[models]] needs it. Until then a
-  * lookup uses the list `store` kept from an earlier session, and takes a
-  * `provider/model-id` it does not know as given; so do lookups after a failed
-  * fetch, which is otherwise ignored: the provider keeps its stored list, if any.
+  * [[refresh]] in the background, or when [[models]] needs it. A lookup never
+  * fetches: until a list arrives it uses the list `store` kept from an earlier
+  * session, and takes a `provider/model-id` it does not know as given; so do
+  * lookups after a failed fetch, which is otherwise ignored: the provider keeps
+  * its stored list, if any.
   */
 final class ModelCatalog(
   val configured: List[ModelSpec],
@@ -69,35 +71,36 @@ final class ModelCatalog(
   store: Option[ModelListStore] = None,
   /** How long [[models]] waits for the lists being fetched. */
   listWait: Duration = ModelCatalog.ListWait,
+  /** Every configured provider's name, turned off or not: [[find]] reads a reference that
+    * starts with one and `/` as naming that provider's model. */
+  providerNames: Set[String] = Set.empty,
 ):
   private def lower(s: String) = s.toLowerCase(Locale.ROOT)
+
+  private val providers: Set[String] = providerNames ++ configured.map(_.provider) ++ discoverable.map(_.provider)
 
   private lazy val aliasCount: Map[String, Int] =
     configured.groupBy(m => lower(m.alias)).map((a, ms) => a -> ms.size)
 
   /** The lists kept from earlier sessions, read once. */
-  private lazy val stored: Map[String, List[ModelSpec]] =
-    discoverable.flatMap(p => store.flatMap(_.load(p)).map(p.provider -> _)).toMap
+  private lazy val stored: Map[String, List[ModelSpec]] = store.fold(Map.empty)(_.load(discoverable))
 
   /** This session's fetches by provider name, `None` for one that failed. */
   private val fetches = mutable.Map[String, CompletableFuture[Option[List[ModelSpec]]]]()
 
   private def fetching(provider: ModelSpec): Option[CompletableFuture[Option[List[ModelSpec]]]] =
     discover.map: list =>
+      def fetch(): Option[List[ModelSpec]] =
+        try
+          val models = list(provider)
+          store.foreach(_.save(provider, models))
+          Some(models)
+        catch
+          case NonFatal(e) =>
+            Debug.log(s"could not list the models of ${provider.provider}: ${Debug.describe(e)}")
+            None
       synchronized:
-        fetches.getOrElseUpdate(
-          provider.provider,
-          CompletableFuture.supplyAsync(() =>
-            try
-              val models = list(provider)
-              store.foreach(_.save(provider, models))
-              Some(models)
-            catch
-              case NonFatal(e) =>
-                Debug.log(s"could not list the models of ${provider.provider}: ${Debug.describe(e)}")
-                None
-          )
-        )
+        fetches.getOrElseUpdate(provider.provider, CompletableFuture.supplyAsync(() => fetch(), ModelCatalog.Listing))
 
   /** The finished fetch of `provider`, if any. */
   private def fetched(provider: ModelSpec): Option[Option[List[ModelSpec]]] =
@@ -118,18 +121,22 @@ final class ModelCatalog(
     catch
       case _: TimeoutException => Debug.log(s"model lists still loading after ${listWait.toSeconds} s")
       case _: InterruptedException => Thread.currentThread().interrupt()
-    configured ++ discoverable.flatMap(known(_).getOrElse(Nil))
+    available
+
+  /** Every model known without waiting: the configured ones, then each provider's newest list. */
+  private def available: List[ModelSpec] = configured ++ discoverable.flatMap(known(_).getOrElse(Nil))
 
   /** The shortest name that identifies `m` on its own. */
   def label(m: ModelSpec): String =
     if !configured.exists(_.ref == m.ref) || aliasCount.getOrElse(lower(m.alias), 0) > 1 then m.ref else m.alias
 
-  /** All models' labels, for messages and menus. */
-  def labels: List[String] = models.map(label)
+  /** The labels of every model known without waiting for a list, for Tab completion. */
+  def labels: List[String] = available.map(label)
 
-  /** The model a reference names. Throws `IllegalArgumentException` naming the
-    * configured models when it matches none, or both candidates when a name is
-    * ambiguous. */
+  /** The model a reference names, without waiting for a list. Throws `IllegalArgumentException`
+    * naming the configured models when it matches none, or both candidates when a name is
+    * ambiguous. A reference that starts with a provider's name and `/` names a model of that
+    * provider only, never a listed id of another one. */
   def find(reference: String): ModelSpec =
     val wanted = lower(reference.trim)
     if wanted.isEmpty then throw IllegalArgumentException("No model given")
@@ -140,9 +147,9 @@ final class ModelCatalog(
             if fetched(provider).exists(_.isDefined) then throw unknown(reference)
             provider.listed(reference.trim.drop(provider.provider.length + 1), provider.settings)
           }
+        case None if providers.exists(p => wanted.startsWith(lower(p) + "/")) => throw unknown(reference)
         case None =>
-          def matching = discoverable.flatMap(known(_).getOrElse(Nil)).filter(m => lower(m.alias) == wanted)
-          (if matching.nonEmpty then matching else models.filter(m => lower(m.alias) == wanted)) match
+          discoverable.flatMap(known(_).getOrElse(Nil)).filter(m => lower(m.alias) == wanted) match
             case one :: Nil => one
             case Nil => throw unknown(reference)
             case many => throw ambiguous(reference, many)
@@ -179,14 +186,17 @@ final class ModelCatalog(
 
   /** The model used when the config and the command line name none. */
   def default: ModelSpec =
-    configured.headOption.orElse(discoverable.flatMap(known(_).getOrElse(Nil)).headOption)
-      .orElse(models.headOption).getOrElse(
-        throw IllegalArgumentException("No models configured (see \"providers\" in the config)")
-      )
+    available.headOption.orElse(models.headOption).getOrElse(
+      throw IllegalArgumentException("No models configured (see \"providers\" in the config)")
+    )
 
 object ModelCatalog:
   /** Long enough for an HTTP listing (`Providers.ListTimeout`); Claude Code's can take minutes. */
   val ListWait: Duration = Duration.ofSeconds(30)
+
+  /** Where the fetches run: a listing blocks on HTTP or on a CLI, which the common pool, sized
+    * for computation, does not compensate for, so one slow provider would hold back the others. */
+  private val Listing = Executors.newCachedThreadPool(Threads.daemon("atc-model-list")(_))
 
   /** Resolve every model of every provider. A provider's `${VAR}` key is
     * resolved through `keys` (a project's `.atc/keys.properties`, then the global one)
@@ -214,10 +224,18 @@ object ModelCatalog:
         )
     val discoverable = providers.collect {
       case (p, endpoint)
-          if p.models.isEmpty && !endpoint.api.trim.equalsIgnoreCase("echo") &&
+          if p.models.isEmpty && !ProviderConfig.canonicalApi(endpoint.api).contains("echo") &&
             (endpoint.apiKey.isDefined || (p.key.isEmpty && p.keyEnv.isEmpty)) => endpoint
     }
-    ModelCatalog(configured, discoverable, discover, store)
+    ModelCatalog(configured, discoverable, discover, store, providerNames = config.providers.keySet.toSet)
+
+  /** The provider `name` as an endpoint whose models can be listed, whatever models it
+    * configures and whether it is on; `None` when its key is not bound. */
+  def endpoint(name: String, provider: ProviderConfig, keys: KeyBindings): Option[ModelSpec] =
+    from(
+      Config(providers = Map(name -> provider.copy(models = Map.empty, enabled = true))),
+      keys
+    ).discoverable.headOption
 
 /** The model lists providers returned, kept in one JSON file (`~/.atc/model-lists.json`)
   * so that a session can name and describe listed models before fetching them
@@ -231,20 +249,32 @@ final class ModelListStore(path: Path):
     try read[Map[String, Saved]](Files.readString(path).nn)
     catch case NonFatal(_) => Map.empty
 
-  def load(provider: ModelSpec): Option[List[ModelSpec]] =
-    all().get(provider.provider).filter(s => s.api == provider.api && s.url == provider.baseUrl).map: saved =>
-      saved.models.map(m => provider.listed(m.id, m.settings.copy(webSearch = provider.settings.webSearch)))
+  def load(provider: ModelSpec): Option[List[ModelSpec]] = load(List(provider)).get(provider.provider)
+
+  /** The stored lists of `providers` by provider name, from one reading of the file. */
+  def load(providers: List[ModelSpec]): Map[String, List[ModelSpec]] =
+    val saved = all()
+    val found =
+      for
+        p <- providers
+        list <- saved.get(p.provider) if list.api == p.api && list.url == p.baseUrl
+      yield p.provider -> list.models.map(m => p.listed(m.id, m.settings.copy(webSearch = p.settings.webSearch)))
+    found.toMap
 
   def save(provider: ModelSpec, models: List[ModelSpec]): Unit = ModelListStore.synchronized:
     try
       val saved =
         Saved(provider.api, provider.baseUrl, models.map(m => Model(m.modelId, m.settings.copy(webSearch = None))))
-      Config.replaceFile(path, write(all().updated(provider.provider, saved)), keepPermissions = false)
+      val text = write(all().updated(provider.provider, saved))
+      OwnerOnlyFiles.replace(path, TextFiles.strictUtf8(text), keepPermissions = false)
     catch case NonFatal(_) => ()
 
 object ModelListStore:
   private final case class Model(id: String, settings: ModelConfig) derives ReadWriter
   private final case class Saved(api: String, url: Option[String], models: List[Model]) derives ReadWriter
 
+  /** `model-lists.json` in `atcDir`. */
+  def in(atcDir: Path): ModelListStore = ModelListStore(atcDir.resolve("model-lists.json").nn)
+
   /** `~/.atc/model-lists.json`. */
-  def global: ModelListStore = ModelListStore(Config.globalDir.resolve("model-lists.json").nn)
+  def global: ModelListStore = in(Config.globalDir)

@@ -45,15 +45,15 @@ final class Host(
   def network(using IOCap): Network = NetworkImpl(ScopeId.Base)
 
   /** Run the tasks on up to [[Host.MaxParallel]] daemon threads of a pool that lives for
-    * this call only (a nested `parallel` gets its own, so it cannot starve the outer one).
-    * Every task runs to its end before the call returns, even when one of them failed: a
-    * task's effects (a command, a request) must not outlive the snippet. A fatal throwable
-    * from any task wins over ordinary failures, since the REPL's stop signal (`ThreadDeath`,
-    * raised in instrumented agent code on every thread once the session is interrupted)
-    * must reach the evaluation thread. Interrupting the caller while it waits interrupts
-    * the workers (for blocking host calls) and is reported as an interruption. */
+    * this call only. A nested call, made from one of those threads, runs its tasks one after
+    * another on that thread. A fatal throwable from any task wins over ordinary failures, so
+    * that the REPL's stop signal reaches the evaluation thread. Interrupting the caller while
+    * it waits interrupts the workers. */
   def parallel[A, C <: caps.CapSet](tasks: Seq[() => A]): List[A] =
     if tasks.isEmpty then Nil
+    else if Thread.currentThread.isInstanceOf[Host.ParallelThread] then
+      // `Try` lets fatal throwables through at once; the first other failure is rethrown in order.
+      tasks.toList.map(task => Try(task())).map(_.get)
     else
       val pool = Executors.newFixedThreadPool(math.min(tasks.size, Host.MaxParallel), Host.parallelThreads)
       try
@@ -87,8 +87,11 @@ object Host:
   /** Largest HTTP response body retained in memory. */
   val HttpMaxResponseBytes: Int = 8 * 1024 * 1024
 
+  /** A worker of `parallel`, so that a nested call can tell it runs inside a task. */
+  private final class ParallelThread(runnable: Runnable, name: String) extends Thread(runnable, name)
+
   private val parallelThreadCount = AtomicInteger()
   private val parallelThreads: ThreadFactory = runnable =>
-    val thread = Thread(runnable, s"atc-parallel-${parallelThreadCount.incrementAndGet()}")
+    val thread = ParallelThread(runnable, s"atc-parallel-${parallelThreadCount.incrementAndGet()}")
     thread.setDaemon(true)
     thread

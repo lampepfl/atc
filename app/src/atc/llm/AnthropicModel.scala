@@ -6,7 +6,7 @@ import atc.config.{ModelSpec, Tokens}
 import com.anthropic.backends.AnthropicBackend
 import com.anthropic.client.{AnthropicClient, AnthropicClientImpl}
 import com.anthropic.core.{ClientOptions, JsonValue, RequestOptions, Timeout}
-import com.anthropic.core.http.HttpClient
+import com.anthropic.core.http.{HttpClient, HttpRequest}
 import com.anthropic.helpers.MessageAccumulator
 import com.anthropic.models.messages.*
 import com.anthropic.models.models.ModelListParams
@@ -20,27 +20,24 @@ import scala.util.Try
   * server-side web-search tool when enabled. */
 final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
   val providerKey: String = "anthropic"
-  protected def knownEfforts: List[String] = List("low", "medium", "high", "xhigh", "max")
+  protected def knownEfforts: List[String] = AnthropicModel.Efforts
+  private val maxTokens: Int = settings.maxTokens.getOrElse(AnthropicModel.DefaultMaxTokens)
   /** What the request asks for: the context fitter reserves exactly this. */
-  override val maxOutputTokens: Option[Int] = Some(settings.maxTokens.getOrElse(AnthropicModel.DefaultMaxTokens))
+  override val maxOutputTokens: Option[Int] = Some(maxTokens)
 
   private final case class Connection(client: AnthropicClient, transport: HttpClient)
   private var opened: Option[Connection] = None
   private def connection: Connection = synchronized:
     opened.getOrElse:
       val backendBuilder = AnthropicBackend.builder()
-      // As in `Providers.openAiClient`: the environment's credentials are for Anthropic's API,
-      // so a custom `url` without a configured key gets a placeholder instead of them.
-      spec.apiKey match
-        case Some(key) => backendBuilder.apiKey(key)
-        case None if spec.baseUrl.isDefined => backendBuilder.apiKey("none")
-        case None => backendBuilder.fromEnv()
+      Providers.key(spec).fold(backendBuilder.fromEnv())(backendBuilder.apiKey)
       spec.baseUrl.foreach(backendBuilder.baseUrl)
       val backend = backendBuilder.build()
       val timeout = Timeout.builder().request(Providers.RequestTimeout).build()
       // The SDK builds and owns the OkHttp client (since 2.63 its transport takes no outside one);
       // cancellation goes through `ModelRequest.scopedTransport` instead of an OkHttp event listener.
-      val transport = com.anthropic.client.okhttp.OkHttpClient.builder().timeout(timeout).backend(backend).build()
+      val transport =
+        withHeaders(com.anthropic.client.okhttp.OkHttpClient.builder().timeout(timeout).backend(backend).build())
       val options = ClientOptions.builder().httpClient(transport)
         .baseUrl(backend.baseUrl()).timeout(Providers.RequestTimeout)
       backend.applyCredentials(transport, options)
@@ -58,16 +55,27 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
     opened.foreach(_.client.close())
     opened = None
 
+  /** `base` with the provider's headers on every request, model lists included. */
+  private def withHeaders(base: HttpClient): HttpClient =
+    def headed(request: HttpRequest): HttpRequest =
+      val b = request.toBuilder()
+      Providers.headers(spec).foreach((name, value) => b.replaceHeaders(name, value))
+      b.build()
+    new HttpClient:
+      def execute(request: HttpRequest, options: RequestOptions) = base.execute(headed(request), options)
+      def executeAsync(request: HttpRequest, options: RequestOptions) = base.executeAsync(headed(request), options)
+      def close(): Unit = base.close()
+
   private def toolUnion(t: ToolSpec): Tool =
     val schema = ujson.read(t.parametersJson)
     val props = Tool.InputSchema.Properties.builder()
     for properties <- schema.obj.get("properties"); (k, v) <- properties.obj do
-      props.putAdditionalProperty(k, JsonValue.from(Json.toJava(v)))
+      props.putAdditionalProperty(k, JsonValue.from(SdkJson.toJava(v)))
     val input = Tool.InputSchema.builder().properties(props.build())
     schema.obj.get("required").foreach(r => input.required(r.arr.map(_.str).toList.asJava))
     // The rest of the schema (`additionalProperties: false`, ...) as the OpenAI adapters send it.
     for (k, v) <- schema.obj if k != "type" && k != "properties" && k != "required" do
-      input.putAdditionalProperty(k, JsonValue.from(Json.toJava(v)))
+      input.putAdditionalProperty(k, JsonValue.from(SdkJson.toJava(v)))
     Tool.builder().name(t.name).description(t.description).inputSchema(input.build()).build()
 
   private def params(system: SystemPrompt, history: List[Msg], tools: List[ToolSpec]): MessageCreateParams =
@@ -78,9 +86,8 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
     val systemBlock = TextBlockParam.builder().text(system).cacheControl(cache).build()
     val b = MessageCreateParams.builder()
       .model(modelId)
-      .maxTokens(maxOutputTokens.get.toLong)
+      .maxTokens(maxTokens.toLong)
       .systemOfTextBlockParams(List(systemBlock).asJava)
-    Providers.headers(spec).foreach((n, v) => b.putAdditionalHeader(n, v))
     configuredThinking(b)
     // `temperature` is not applied: current Anthropic models reject sampling parameters.
     tools.foreach(t => b.addTool(toolUnion(t)))
@@ -108,8 +115,8 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
               if text.nonEmpty then blocks += ContentBlockParam.ofText(text)
               calls.foreach: c =>
                 val input = ToolUseBlockParam.Input.builder()
-                Json.parseObject(c.arguments).value
-                  .foreach((k, v) => input.putAdditionalProperty(k, JsonValue.from(Json.toJava(v))))
+                SdkJson.parseObject(c.arguments).value
+                  .foreach((k, v) => input.putAdditionalProperty(k, JsonValue.from(SdkJson.toJava(v))))
                 blocks += ContentBlockParam.ofToolUse(
                   ToolUseBlockParam.builder().id(c.id).name(c.name).input(input.build()).build()
                 )
@@ -133,7 +140,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
       block.text().toScala.foreach(t => text.append(t.text()))
       block.toolUse().toScala.foreach: tu =>
         val json =
-          try ujson.write(Json.fromJava(tu._input().convert(classOf[java.util.Map[String, AnyRef]])))
+          try ujson.write(SdkJson.fromJava(tu._input().convert(classOf[java.util.Map[String, AnyRef]])))
           catch case _: Exception => "{}"
         calls += ToolCall(tu.id(), tu.name(), json)
     val stop = m.stopReason().toScala.map(_.toString).getOrElse("end_turn").toLowerCase(Locale.ROOT)
@@ -179,7 +186,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
   private def configuredThinking(b: MessageCreateParams.Builder): Unit =
     if settings.thinking.getOrElse(true) then b.thinking(ThinkingConfigAdaptive.builder().build())
     effort.foreach: e =>
-      b.outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.of(e.toLowerCase(Locale.ROOT))).build())
+      b.outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.of(e)).build())
 
   /** `input` is the whole prompt (Anthropic reports the uncached part, the
     * cache reads and the cache writes separately; OpenAI's `prompt_tokens`
@@ -193,7 +200,6 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
   def simple(system: Option[String], prompt: String, thinking: Boolean): Reply =
     val b = MessageCreateParams.builder().model(modelId)
       .maxTokens(settings.maxTokens.getOrElse(AnthropicModel.SimpleMaxTokens).toLong).addUserMessage(prompt)
-    Providers.headers(spec).foreach((n, v) => b.putAdditionalHeader(n, v))
     system.foreach(b.system)
     if thinking then configuredThinking(b) else b.thinking(ThinkingConfigDisabled.builder().build())
     val m = client.messages().create(b.build())
@@ -202,7 +208,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
   /** `GET /v1/models`, with the display name, input limit, effort levels and
     * whether adaptive thinking is supported (the only kind this adapter asks for).
     * Capabilities a response leaves out are left to the defaults. */
-  private[llm] def listModels(): List[ModelSpec] =
+  private[atc] def listModels(): List[ModelSpec] =
     val options = RequestOptions.builder().timeout(Providers.ListTimeout).build()
     val params = ModelListParams.builder().limit(1000L).build()
     def optional[T](read: => T): Option[T] = Try(read).toOption
@@ -234,6 +240,8 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
       )
 
 private[atc] object AnthropicModel:
+  /** The efforts Claude models take, lowest first. */
+  val Efforts: List[String] = List("low", "medium", "high", "xhigh", "max")
   private val DefaultMaxTokens = 32000
   /** As `Providers.StreamTimeout`, in this SDK's type. */
   val StreamTimeout: Timeout = Timeout.builder().read(Providers.RequestTimeout).write(Providers.RequestTimeout)

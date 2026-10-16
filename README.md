@@ -133,8 +133,8 @@ scripts, use `atc.cmd`, or allow local scripts with
 `atc`. The first start asks you to choose a provider, paste its API key and choose one of
 its models; the key is saved in `~/.atc/keys.properties`, readable only by you. With a
 ChatGPT plan you can sign in through the browser instead of giving a key, and with a
-Claude plan ATC can use your signed-in [Claude Code](https://claude.com/claude-code) CLI. To set up
-providers by hand instead, choose *Configure providers myself*: ATC writes
+Claude plan ATC can use your signed-in [Claude Code](https://claude.com/claude-code) CLI.
+To set up providers by hand instead, choose *Configure providers myself*: ATC writes
 `~/.atc/config.json` and exits. On Windows, `~/.atc` is `%USERPROFILE%\.atc`.
 
 **2. Open the project.** If no configuration grants access to the current directory and
@@ -158,8 +158,9 @@ atc -p 'summarise the README'
 ## Capabilities and ambient authority
 
 In ordinary Scala, any code can call `Files.readString` or start a process: authority is
-*ambient*, available to anyone who can name the method. The agent-facing library takes that
-away. Every effectful method demands the capability it needs as a `using` parameter:
+*ambient*, available to anyone who can name the method. In ATC, safe mode and the validator
+reject those JDK APIs in agent code, and every effectful method of the agent-facing library
+demands the capability it needs as a `using` parameter:
 
 ```scala
 def read(path: String)(using FileSystem): String
@@ -189,10 +190,10 @@ Runtime.rootUser ──► user: UserIO^                  println · print · as
 ```
 
 `io` is the common capture root for every published machine capability. Local and full mode
-expose it as `IOCap^`. The derivations are sandbox-internal, so
-holding the root does not create a capability omitted by the current mode.
-Command operations require both full capabilities, `Exec^` and `FileSystem^`; every mode that
-publishes `ex` also publishes a full `fs` under the same root.
+expose it as `IOCap^`. The derivations are sandbox-internal, so holding the root does not
+create a capability omitted by the current mode. Command operations require both full
+capabilities, `Exec^` and `FileSystem^`; every mode that publishes `ex` also publishes a
+full `fs` under the same root.
 
 | Capability | What it authorises | Where one comes from |
 |---|---|---|
@@ -208,12 +209,14 @@ conversation, not on the machine, so it survives when the agent may touch nothin
 
 ### Read-only and full views
 
-Each capability type has two views, following the nightly compiler's
+The stateful capabilities `FileSystem`, `FileEntry`, `IOCap` and `UserIO` have two views,
+following the nightly compiler's
 [mutable-capability model](https://nightly.scala-lang.org/docs/reference/experimental/capture-checking/mutability.html):
 the **bare** type (`FileSystem`, `IOCap`) is the **read-only** view; `^`, or `^{io}` ("as
-capable as `io`"), is the **full** view. The mutating operations are declared `update def`
-in the library, and an `update` method can only be called through a full capture set. This
-rule turns "read-only" from a runtime check into a typing rule:
+capable as `io`"), is the **full** view. `Exec` and `Network` have no read-only view; a bare
+`Exec` is already full. The mutating operations are declared `update def` in the library,
+and an `update` method can only be called through a full capture set. This rule turns
+"read-only" from a runtime check into a typing rule:
 
 ```scala
 val e: FileEntry^{fs} = fs.access("notes.md")   // as capable as `fs` itself
@@ -247,14 +250,13 @@ of rules: `readClassified(path)` returns a `Classified[String]`, whose `map` and
 take a function that may capture **read-only** capabilities only (`T ->{any.rd} B`). Every
 untrusted outward channel needs a *full* one (`println`/`ask`/normal-model `chat` need
 `UserIO^`, `write` needs `FileSystem^`, `exec` needs both `Exec^` and `FileSystem^`, and
-`httpGet` needs `Network^`), so none of them can appear inside a `map`. The agent can compute
-on a secret but never see it; `toString` is
-`Classified(***)`. The output paths are `println` (you see the
-value in the terminal, marked `[classified]`; the model sees `Classified(***)`),
-`writeClassified` into a classified path, `classifiedChat` with the configured classified
-model, and `httpPostClassified` / `secretHeaders` to an allow-listed host. A response to a
-request carrying classified content stays `Classified`, so a peer cannot reflect a secret
-header or body back into a plain model-visible value.
+`httpGet` needs `Network^`), so none of them can appear inside a `map`. The agent can
+compute on a secret but never see it; `toString` is `Classified(***)`. The output paths are
+`println` (you see the value in the terminal, marked `[classified]`; the model sees
+`Classified(***)`), `writeClassified` into a classified path, `classifiedChat` with the
+configured classified model, and `httpPostClassified` / `secretHeaders` to an allow-listed
+host. A response to a request carrying classified content stays `Classified`, so a peer
+cannot reflect a secret header or body back into a plain model-visible value.
 
 In this example `secrets/` is classified in the project config, and the agent is asked a
 question about a key it must never see:
@@ -266,8 +268,8 @@ question about a key it must never see:
   │ val key = readClassified("secrets/api.env")
   │ val live = key.map(_.trim.stripPrefix("API_KEY=").startsWith("sk-live"))
   ├ result
-  │ val key: Classified[String] = Classified(***)
-  │ val live: Classified[Boolean] = Classified(***)
+  │ val key: Classified[String]^{} = Classified(***)
+  │ val live: Classified[Boolean]^{} = Classified(***)
   └ ok 41 ms
 
 ● The check ran, but a value computed from a secret is a secret too, so I cannot read
@@ -298,29 +300,21 @@ file, a process, or the network:
   └ failed 88 ms
 ```
 
-`rs$line$3` is the preamble line that holds the `user` given; the `exec` and `write`
-attempts name the lines that hold `ex` and `fs`. The same line can compile in one mode and
-not another, because the view of `fs` changes. In local and full mode `fs` is the full
-view, so even a harmless read inside the `map` captures a full capability and is refused:
-
-```scala
-> key.map(k => k + read("notes.md"))               // local/full: fs is the full view
-Reference `rs$line$4` is not included in the allowed capture set {any.rd} …
-```
-
-In read-only mode `fs` is `FileSystem^{io.rd}`, so the identical line is accepted. Reading
-cannot leak the secret, whereas writing could, and the capability view distinguishes the
-two. The agent can always route a secret to an authorized channel: the terminal, a
-classified file, the classified model, or an allow-listed host.
+`rs$line$3` is the REPL wrapper of the preamble line that holds the `user` given (see
+[the capability design](doc/development.md#the-capability-design)). Reading inside the `map`
+cannot leak the secret, so it compiles through a read-only file system: in read-only mode,
+where `fs` is `FileSystem^{io.rd}`, and in the other modes as `read(path)(using ro)` with
+`val ro: FileSystem^{fs.rd} = fs`. The agent can always route a secret to an authorized
+channel: the terminal, a classified file, the classified model, or an allow-listed host.
 
 ### Runtime permissions
 
 Types decide what compiles, but they know nothing about your configuration. Every host method
 therefore also checks the permission policy for the relevant path, command, or host, and a
-capability from a `request*` block is refused once that block has closed. Underneath sit a
-validator that rejects the obvious escape hatches (`java.io`, reflection, the application's
-own packages) before compilation, and a class loader that shows agent code only the JDK,
-`scala.*` and the agent library. The details are in
+capability from a `request*` block is refused once that block has closed. Before
+compilation, a validator rejects the obvious escape hatches (`java.io`, reflection, the
+application's own packages), and the class loader gives agent code only the JDK, `scala.*`
+and the agent library. The details are in
 [doc/development.md](doc/development.md#defence-in-depth).
 
 ## Modes: read-only, local, full
@@ -334,9 +328,9 @@ agent can express at all, before the permission policy applies:
 | **local** | also write files and run commands |
 | **full** | also reach the network, and let the model's provider search the web |
 
-A mode withdraws an effect while leaving the conversation intact, so the agent can always
-explain what it *would* have done. The policy enforces the same three levels again at run
-time. Switch with `/mode` (cycles the three), **Shift-Tab** on an empty prompt, `--mode`,
+A mode leaves capabilities out of the preamble but keeps the conversation, so the agent can
+still explain what it *would* have done. The policy enforces the same three levels again at
+run time. Switch with `/mode` (cycles the three), **Shift-Tab** on an empty prompt, `--mode`,
 or `"mode"` in the config; switching starts a fresh REPL but keeps the conversation. The
 default is full.
 
@@ -377,10 +371,10 @@ reach, refuses `rm -rf *`, `sudo` and bare shells, and grants no files, commands
 The [project config](app/resources/atc/project-template.json) opens a project, and because
 it lives inside the repository it can open *that repository* but no files beyond it, cannot
 loosen the limits the global config sets, and cannot change a provider's address or key.
-What it adds beyond its own files (pre-approved commands and hosts, a classified model, the
-keys in its `.atc/keys.properties`) applies only after ATC has shown it to you and you chose
-to trust it; ATC asks again when that part changes.
-`/config` changes the settings that leave the sandbox alone (input prediction,
+What it adds beyond its own files (pre-approved commands and hosts, a classified model,
+provider web search, the keys in its `.atc/keys.properties`) applies only after ATC has
+shown it to you and you chose to trust it; ATC asks again when that part changes.
+`/config` changes the settings that cannot loosen the sandbox (input prediction,
 notifications, web search, compaction) for the session or in either file. The exact merge
 rules are in [doc/development.md](doc/development.md#configuration-semantics).
 
@@ -418,10 +412,12 @@ rules are in [doc/development.md](doc/development.md#configuration-semantics).
 `models`; leave `models` out and ATC lists the provider's own. `/providers` turns providers
 and their models on or off, or adds a provider. `/model` switches the model and `/effort`
 its reasoning effort, both remembered in the project config; `webSearch` turns on the
-provider's web search where it has one. **Keys** never go in a config: `"key": "${DEEPSEEK_API_KEY}"` names a variable set
-in `.atc/keys.properties` or in the environment. Set `classifiedModel` only for a model that
-runs in an isolated environment with no outward connection; without one, the default,
-classified data goes to no model. `/classifiedmodel` chooses one, or `none`. Every setting is described in
+provider's web search where it has one. **Keep real keys out of config files:**
+`"key": "${DEEPSEEK_API_KEY}"` names a variable set in `.atc/keys.properties` or in the
+environment, and a literal suits only a placeholder such as Ollama's. Set `classifiedModel`
+only for a model that runs in an isolated environment with no outward connection; without
+one, the default, classified data goes to no model. `/classifiedmodel` chooses one, or
+`none`. Every setting is described in
 [doc/development.md](doc/development.md#configuration-reference).
 
 **Files, commands and hosts.** A file rule has a gitignore-style `path` pattern (a bare
@@ -434,8 +430,9 @@ access. `commands` are patterns over the whole command line (`"git status"` also
 `denyCommands` and `denyHosts` use the same syntax and override every allow, session grant
 and open scope. A pre-approved command runs with your privileges and outside the file
 rules, so pre-approve the subcommands you mean rather than `git *`, and check their options:
-`git diff` and `git blame` can print any file, and `git log --output` can write one. Pattern details and
-Windows notes are in [doc/development.md](doc/development.md#file-rules-and-command-patterns).
+`git diff` and `git blame` can print any file, and `git log --output` can write one. Pattern
+details and Windows notes are in
+[doc/development.md](doc/development.md#file-rules-and-command-patterns).
 
 ## Security model
 
@@ -501,15 +498,16 @@ and the configured permissions.
 ## The terminal
 
 `/help` lists the slash commands, and typing `/` lists them under the prompt (↑/↓ select,
-Tab fills in, Enter runs). Ctrl-C interrupts the turn. Finished code runs fold
-to a summary (`/output <n>` shows one in full), and Ctrl-O switches to writing code, output
-and reasoning out in full, Shift-Tab cycles the mode, and Shift+Enter adds a line. While the
-agent is working, type a correction and press Enter: it reaches the agent before its next
-tool call. Sessions are saved when you leave, and the next start in the same directory
-offers to resume. ATC notifies you when a turn ends or the agent waits for you.
+Tab fills in, Enter runs). Ctrl-C interrupts the turn, Shift-Tab cycles the mode, and
+Shift-Enter adds a line. Finished code runs fold to a summary, and `/output <n>` shows one
+in full. Ctrl-O switches to writing code, output and reasoning out in full. While the agent
+is working, type a correction and press Enter: it reaches the agent before its next tool
+call. Sessions are saved after every turn, and the next start in the same directory
+offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
+reports whether it is working, waiting or done to terminals that track program status.
 
-Without a terminal (`-p` in a pipe) nothing asks: a permission the configuration does not
-grant fails instead of waiting, so use `--approve-all` only in a trusted setup.
+A `-p` run asks nothing: a permission the configuration does not grant fails instead of
+waiting. `--approve-all` approves such requests instead; use it only in a trusted setup.
 
 ## License
 

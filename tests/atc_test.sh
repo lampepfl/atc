@@ -257,6 +257,16 @@ if [[ ! -w "$fake_checkout/out/dist.dest" ]]; then
 fi
 chmod 755 "$fake_checkout/out/dist.dest"
 
+# The flag that uses the cache stays one argument when the checkout's path has a space.
+spaced_checkout="$TEST_TMP/spaced checkout"
+mkdir -p "$spaced_checkout/out/dist.dest"
+cp "$REPO_ROOT/start.sh" "$spaced_checkout/start.sh"
+cp "$fake_checkout/out/dist.dest/atc.jar" "$fake_checkout/out/dist.dest/atc-lib.jar" "$spaced_checkout/out/dist.dest/"
+start_output="$(env -i PATH="$start_dir/java25:/usr/bin:/bin" ATC_ENV_FILE="$start_dir/skip.env" \
+  TRAIN_LOG="$TEST_TMP/train.log" /bin/sh "$spaced_checkout/start.sh" 2>/dev/null)"
+assert_contains "start.sh passes a cache path with a space as one argument" \
+  "arg=<-XX:AOTCache=$spaced_checkout/out/dist.dest/startup/atc.aot>" "$start_output"
+
 echo "--- java version ---"
 
 assert_eq "JDK 21" "21" "$(java_major_from_line 'openjdk version "21.0.1" 2023-10-17')"

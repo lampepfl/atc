@@ -1,6 +1,6 @@
 package atc.config
 
-import atc.perms.{Access, Mode, PathPattern}
+import atc.perms.{Access, Mode, PathPattern, PermissionRequest}
 
 import java.nio.file.Paths
 import java.util.Locale
@@ -10,20 +10,6 @@ import java.util.Locale
 object ConfigValidation:
   private val ReasoningSummaries = Set("auto", "concise", "detailed")
   private val NotificationChoices = Set("auto", "system", "terminal", "bell", "off")
-  private val ProviderApis = Set(
-    "anthropic",
-    "claude",
-    "openai-responses",
-    "responses",
-    "openai",
-    "openai-chat",
-    "chat",
-    "chatgpt",
-    "claude-code",
-    "echo",
-  )
-  /** The names of the Chat Completions api, the only one a `reasoningStyle` applies to. */
-  private val ChatApis = Set("openai", "openai-chat", "chat")
   private val AnthropicWebSearchVersions = Set("20250305", "20260209")
 
   /** Reject settings that would otherwise fail much later, in output slicing,
@@ -42,9 +28,7 @@ object ConfigValidation:
     config.executionTimeoutMs.foreach(requirePositive("executionTimeoutMs", _))
     validateChoice("notifications", config.notifications, NotificationChoices)
     config.effort.foreach(validateChoice("effort", _, ModelConfig.ReasoningEfforts :+ ModelConfig.DefaultEffort))
-    config.mode.foreach: m =>
-      try Mode.parse(m)
-      catch case e: IllegalArgumentException => invalid(e.getMessage.nn)
+    validateMode(config.mode, "")
     config.providers.foreach(validateProvider)
     // `model` and `classifiedModel` are not checked here: a model a provider
     // lists may be named before the list is fetched, and the start warns
@@ -61,12 +45,38 @@ object ConfigValidation:
     * [[Configuration.combine]] validates every layer first, so combining modes
     * can assume valid input. */
   private[config] def validateLayerMode(layer: ConfigLayer): Unit =
-    layer.config.mode.foreach: m =>
+    validateMode(layer.config.mode, " " + layer.path.map(_.toString).getOrElse(s"(${layer.origin.label} layer)"))
+
+  /** Reject an unknown `mode`; `where` follows "Invalid config" in the message. */
+  private def validateMode(mode: Option[String], where: String): Unit =
+    mode.foreach: m =>
       try Mode.parse(m)
-      catch
-        case e: IllegalArgumentException =>
-          val where = layer.path.map(_.toString).getOrElse(s"(${layer.origin.label} layer)")
-          throw IllegalArgumentException(s"Invalid config $where: ${e.getMessage}")
+      catch case e: IllegalArgumentException => throw IllegalArgumentException(s"Invalid config$where: ${e.getMessage}")
+
+  /** Reject what the JSON reader takes without complaint and turns into a different value:
+    * `null` where the setting is not optional, which it reads as `null`, `0` or `false`, and
+    * a number that an integer setting would truncate or clamp. `value` is what `json` was
+    * read as, and `path` names it in the error. A `null` for an optional setting unsets it,
+    * and JSON fragments such as a `reasoningStyle.request` are taken as they are. */
+  private[config] def requireExact(json: ujson.Value, value: Any, path: String = ""): Unit =
+    def at(key: String) = if path.isEmpty then key else s"$path.$key"
+    def wholeNumber(n: Double, read: Double) =
+      if n != read then
+        throw IllegalArgumentException(s"$path must be a whole number in range (was ${ujson.write(json)})")
+    (json, value) match
+      case (_, _: ujson.Value) => ()
+      case (_, option: Option[?]) => option.foreach(requireExact(json, _, path))
+      case (ujson.Null, _) => throw IllegalArgumentException(s"$path must not be null")
+      case (ujson.Num(n), i: Int) => wholeNumber(n, i.toDouble)
+      case (ujson.Num(n), l: Long) => wholeNumber(n, l.toDouble)
+      case (ujson.Obj(members), map: Map[?, ?]) =>
+        for (k, v) <- map; item <- members.get(k.toString) do requireExact(item, v, at(k.toString))
+      case (ujson.Arr(items), seq: Seq[?]) =>
+        for ((item, v), i) <- items.zip(seq).zipWithIndex do requireExact(item, v, s"$path[$i]")
+      case (ujson.Obj(members), product: Product) =>
+        for (k, v) <- product.productElementNames.zip(product.productIterator); item <- members.get(k) do
+          requireExact(item, v, at(k))
+      case _ => ()
 
   /** A `files` entry of any layer (the project layer's included, which
     * `settings.files` leaves out): the path must be a usable pattern and the
@@ -85,17 +95,21 @@ object ConfigValidation:
   private def validateProvider(name: String, provider: ProviderConfig): Unit =
     requireValid(name.trim.nonEmpty, "provider names must not be blank")
     requireValid(name == name.trim, s"provider name '$name' must not start or end with whitespace")
+    requireValid(
+      !name.exists(_.isControl),
+      s"provider name '${PermissionRequest.visible(name)}' must not contain control characters"
+    )
     // `api` may be absent from a layer that only extends an earlier provider, but
     // the fully merged provider must define it.
     requireValid(
       provider.api.exists(_.trim.nonEmpty),
-      s"provider '$name' has no api (expected anthropic | openai | openai-responses | chatgpt | claude-code | echo)"
+      s"provider '$name' has no api (expected ${ProviderConfig.apiNames})"
     )
-    provider.api.foreach(api => validateChoice(s"providers.$name.api", api, ProviderApis))
+    provider.api.foreach(api => validateChoice(s"providers.$name.api", api, ProviderConfig.Apis.keys))
     provider.reasoningStyle.foreach: style =>
       val where = s"providers.$name.reasoningStyle"
       requireValid(
-        provider.api.exists(api => ChatApis.contains(api.trim.toLowerCase(Locale.ROOT))),
+        provider.api.flatMap(ProviderConfig.canonicalApi).contains("openai"),
         s"$where applies to Chat Completions (api openai) only"
       )
       for (field, fragment) <- List("request" -> style.request, "requestOff" -> style.requestOff); f <- fragment do
@@ -112,6 +126,10 @@ object ConfigValidation:
     requireValid(alias.trim.nonEmpty, s"model aliases of provider '$provider' must not be blank")
     requireValid(alias == alias.trim, s"model alias '$alias' must not start or end with whitespace")
     requireValid(!alias.contains('/'), s"model alias '$alias' must not contain '/'")
+    requireValid(
+      !alias.exists(_.isControl),
+      s"model alias '${PermissionRequest.visible(alias)}' must not contain control characters"
+    )
     requireValid(!model.name.exists(_.trim.isEmpty), s"$where.name must not be blank")
     requireValid(!model.displayName.exists(_.trim.isEmpty), s"$where.displayName must not be blank")
     requireValid(

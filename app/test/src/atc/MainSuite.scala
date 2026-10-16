@@ -19,7 +19,7 @@ class MainSuite extends munit.FunSuite:
     assertEquals(a.prompt, Some("hi"))
     assertEquals(a.mode, Some(Mode.Local))
     assert(a.approveAll)
-    val absoluteCwd = Files.createTempDirectory("atc-main-absolute").nn.toAbsolutePath.nn.normalize.nn
+    val absoluteCwd = TestEnv.tempDir("atc-main-absolute").toAbsolutePath.nn.normalize.nn
     val absoluteConfig = absoluteCwd.resolve("c.json").nn
     val b = parse("--cwd", absoluteCwd.toString, "--config", absoluteConfig.toString, "--prompt", "x")
     assertEquals(b.cwd, absoluteCwd)
@@ -30,7 +30,7 @@ class MainSuite extends munit.FunSuite:
     assert(parse("--version").version && parse("-v").version)
 
   test("relative cwd and config resolve consistently regardless of flag order"):
-    val base = Files.createTempDirectory("atc-main-base").nn.toAbsolutePath.nn.normalize.nn
+    val base = TestEnv.tempDir("atc-main-base").toAbsolutePath.nn.normalize.nn
     val expectedCwd = base.resolve("project").nn
     val expectedConfig = Some(base.resolve("project/extra.json").nn)
     val cwdFirst = Cli.parse(List("--cwd", "project", "--config", "extra.json"), Cli.Args(cwd = base))
@@ -65,7 +65,7 @@ class MainSuite extends munit.FunSuite:
     )
     assert(LauncherEnvironment.isInternal("atc_Internal_Arg_0"))
 
-    val cwd = Files.createTempDirectory("atc-launch-cwd").nn.toAbsolutePath.nn.normalize.nn
+    val cwd = TestEnv.tempDir("atc-launch-cwd").toAbsolutePath.nn.normalize.nn
     assertEquals(
       LauncherEnvironment.workingDirectory(Map("ATC_INTERNAL_LAUNCH_CWD" -> cwd.toString).get),
       cwd,
@@ -73,13 +73,13 @@ class MainSuite extends munit.FunSuite:
 
   test("Windows-friendly path syntax expands home and validates paths before running"):
     assertEquals(parse("-C", "~").cwd, Paths.get(scala.util.Properties.userHome).toAbsolutePath.normalize)
-    val missingDir = Files.createTempDirectory("atc-main-missing").nn.resolve("gone")
+    val missingDir = TestEnv.tempDir("atc-main-missing").resolve("gone")
     val cwdError = intercept[IllegalArgumentException](Cli.validate(Cli.Args(cwd = missingDir)))
     assert(cwdError.getMessage.nn.contains("does not exist"), cwdError.getMessage)
-    val file = Files.createTempFile("atc-main-file", ".txt").nn
+    val file = Files.writeString(TestEnv.tempDir("atc-main-file").resolve("file.txt"), "").nn
     val fileError = intercept[IllegalArgumentException](Cli.validate(Cli.Args(cwd = file)))
     assert(fileError.getMessage.nn.contains("not a directory"), fileError.getMessage)
-    val cwd = Files.createTempDirectory("atc-main-cwd").nn
+    val cwd = TestEnv.tempDir("atc-main-cwd")
     val configError = intercept[IllegalArgumentException](
       Cli.validate(Cli.Args(cwd = cwd, config = Some(cwd.resolve("missing.json"))))
     )

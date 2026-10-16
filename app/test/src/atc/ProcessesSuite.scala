@@ -1,7 +1,8 @@
 package atc
 
-import atc.host.{CommandLine, OutputBuffer, Processes}
+import atc.host.{CommandLine, OutputBuffer, TextSink}
 
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.{CompletableFuture, TimeUnit}
 import java.util.regex.Pattern
 import scala.jdk.CollectionConverters.*
@@ -28,7 +29,7 @@ class ProcessesSuite extends munit.FunSuite:
 
   test("captured stderr reports truncation at its output limit"):
     val command = ProcessFixture.command("stderr", (8 * 1024 * 1024 + 1).toString)
-    val result = Processes.run(ProcessBuilder(CommandLine.parseCommandLine(command).asJava), command, 10000L)
+    val result = ProcessFixture.run(ProcessBuilder(CommandLine.parseCommandLine(command).asJava), command, 10000L)
     assertEquals(result.exitCode, 0)
     assertEquals(result.stdout, "")
     assert(result.stderr.contains("truncated"), result.stderr.takeRight(100))
@@ -44,7 +45,7 @@ class ProcessesSuite extends munit.FunSuite:
 
     buffer.append("!")
     assertEquals(buffer.peek, text.drop(1) + "!")
-    assert(buffer.marker.contains("older output dropped"), buffer.marker)
+    assert(buffer.marker.contains("older output dropped: exceeded 64 characters"), buffer.marker)
 
     val continued = (0 until 4096).map(i => ('A' + i % 26).toChar).mkString
     continued.foreach(char => buffer.append(char.toString))
@@ -76,3 +77,34 @@ class ProcessesSuite extends munit.FunSuite:
 
     buffer.append("tail")
     assertEquals(buffer.take(), "tail")
+
+  test("TextSink incrementally decodes UTF-8, UTF-16 BOMs, and malformed bytes"):
+    val sb = StringBuilder()
+    val sink = TextSink(s => sb.append(s))
+    for b <- "héllo 🙂 x".getBytes("UTF-8") do sink.write(Array(b), 0, 1) // one byte at a time
+    sink.finish()
+    assertEquals(sb.toString, "héllo 🙂 x")
+    val sb2 = StringBuilder()
+    val sink2 = TextSink(s => sb2.append(s))
+    sink2.write(Array(0xc3.toByte, 0x28.toByte), 0, 2) // malformed UTF-8, not an encoding marker
+    sink2.finish()
+    assertEquals(sb2.toString, "\uFFFD(")
+    def bomText(bom: Array[Byte], encoded: Array[Byte]): String =
+      val out = StringBuilder()
+      val sink = TextSink(s => out.append(s))
+      for byte <- bom ++ encoded do sink.write(Array(byte), 0, 1)
+      sink.finish()
+      out.toString
+    val sample = "bom 🙂"
+    assertEquals(
+      bomText(Array(0xef.toByte, 0xbb.toByte, 0xbf.toByte), sample.getBytes(StandardCharsets.UTF_8)),
+      sample,
+    )
+    assertEquals(
+      bomText(Array(0xff.toByte, 0xfe.toByte), sample.getBytes(StandardCharsets.UTF_16LE)),
+      sample,
+    )
+    assertEquals(
+      bomText(Array(0xfe.toByte, 0xff.toByte), sample.getBytes(StandardCharsets.UTF_16BE)),
+      sample,
+    )

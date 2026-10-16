@@ -12,7 +12,8 @@ import scala.util.{Try, Using}
 /** Runtime capabilities carry a permission scope ID. The host checks scope,
   * configured permissions and sandbox mode on each operation. Agent-facing
   * capture types enforce the read-only/full distinction over these same objects.
-  * Capability constructors are private to ATC. */
+  * Agent code cannot construct them: the sandbox loader shares only Scala and
+  * `atc.lib` classes. */
 sealed trait Scoped:
   def scope: ScopeId
 
@@ -28,9 +29,6 @@ final class FileEntryImpl(fs: FileSystemImpl, p: Path) extends FileEntry:
   private def scope: ScopeId = fs.scope
   private[host] def canonicalPath: Path = p
 
-  /** Require read access for `operation` and that the content is not
-    * classified; `alternative` names the `Classified`-returning member to use
-    * instead. */
   private def requireReadable(operation: String, alternative: String): Unit =
     host.requireReadable(scope, p, operation, alternative)
     ()
@@ -41,7 +39,7 @@ final class FileEntryImpl(fs: FileSystemImpl, p: Path) extends FileEntry:
     val result = Try:
       host.requireRead(scope, p, operation)
       op
-    ClassifiedImpl.fromTry(result)
+    ClassifiedImpl(result)
 
   def path: String = PlatformPath.portable(p)
 
@@ -189,9 +187,12 @@ final class FileEntryImpl(fs: FileSystemImpl, p: Path) extends FileEntry:
     requireReadable("walk", "walkClassified")
     host.walkPaths(scope, p, intoClassified = false).map(FileEntryImpl(fs, _))
 
-  private[host] def walkIterator: Iterator[FileEntryImpl] =
+  /** The non-directory descendants `walk` lists, lazily; classified ones only when `classified`. */
+  private[host] def files(classified: Boolean): Iterator[FileEntryImpl] =
     requireReadable("walk", "walkClassified")
-    host.iteratePaths(scope, p, intoClassified = false).map(FileEntryImpl(fs, _))
+    host.iteratePaths(scope, p, intoClassified = false)
+      .filter(entry => !entry.isDirectory && (classified || !entry.permission.classified))
+      .map(entry => FileEntryImpl(fs, entry.path))
 
   def readClassified(): Classified[String] =
     asClassified("readClassified")(Files.readString(p, UTF_8).nn)

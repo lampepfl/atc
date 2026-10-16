@@ -1,5 +1,7 @@
 package atc.llm
 
+import atc.Threads
+
 import java.util.concurrent.{CompletableFuture, ExecutionException}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import scala.util.Using
@@ -36,8 +38,7 @@ private[atc] final class ModelRequest:
           done.completeExceptionally(e)
           throw e
       finally ModelRequest.current.remove()
-    val thread = Thread(work, "atc-model-request")
-    thread.setDaemon(true)
+    val thread = Threads.daemon("atc-model-request")(work)
     val active = Pending(cancelled, thread, scope, done)
     synchronized:
       if pending != null && pending.nn.thread.isAlive then
@@ -86,7 +87,9 @@ private[atc] final class ModelRequest:
 private[atc] object ModelRequest:
   private val current = ThreadLocal[Scope]()
 
-  /** SDK async streams can be cancelled even before response headers arrive. */
+  /** Wait until the SDK stream `completion` finishes, registered with the request so that
+    * cancelling it closes the stream (`closeStream`), even before its response headers arrive.
+    * A failure of the stream is thrown as it is, not wrapped. */
   def awaitStream(closeStream: () => Unit)(completion: => CompletableFuture[?]): Unit =
     val stream: AutoCloseable = () => closeStream()
     withResource(stream): _ =>

@@ -3,7 +3,6 @@ package atc.llm
 import atc.Debug
 import atc.config.ModelSpec
 
-import com.openai.core.JsonValue
 import com.openai.helpers.ResponseAccumulator
 import com.openai.models.{Reasoning, ReasoningEffort}
 import com.openai.models.responses.*
@@ -34,11 +33,9 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
       r.build()
 
   private def functionTool(t: ToolSpec): Tool =
-    val schema = ujson.read(t.parametersJson)
-    val params = FunctionTool.Parameters.builder()
-    schema.obj.foreach((k, v) => params.putAdditionalProperty(k, JsonValue.from(Json.toJava(v))))
+    val params = FunctionTool.Parameters.builder().putAllAdditionalProperties(schema(t)).build()
     Tool.ofFunction(
-      FunctionTool.builder().name(t.name).description(t.description).parameters(params.build()).strict(false).build()
+      FunctionTool.builder().name(t.name).description(t.description).parameters(params).strict(false).build()
     )
 
   private def outputItemsToInput(items: java.util.List[ResponseOutputItem]): List[ResponseInputItem] =
@@ -51,14 +48,11 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
 
   private def params(system: SystemPrompt, history: List[Msg], tools: List[ToolSpec]): ResponseCreateParams =
     val b = ResponseCreateParams.builder().model(modelId).instructions(system).store(false)
-    Providers.headers(spec).foreach((n, v) => b.putAdditionalHeader(n, v))
     // Stateless (store(false)) replay must carry the reasoning between calls: ask
     // for the encrypted reasoning content, or the replayed reasoning items are
     // invalid (backends answer HTTP 400 invalid_encrypted_content).
     b.addInclude(ResponseIncludable.REASONING_ENCRYPTED_CONTENT)
-    limits(b)
-    reasoning(thinking = true).foreach(b.reasoning)
-    thinkingSwitch(thinking = true).foreach(b.putAdditionalBodyProperty("thinking", _))
+    configure(b, thinking = true, reasoning(thinking = true))
     tools.foreach(t => b.addTool(functionTool(t)))
     if webSearch then b.addTool(Tool.ofWebSearch(WebSearchTool.builder().`type`(WebSearchTool.Type.WEB_SEARCH).build()))
     val input = List.newBuilder[ResponseInputItem]
@@ -85,9 +79,16 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     b.build()
 
   /** The configured output limit and sampling of a request. */
-  protected def limits(b: ResponseCreateParams.Builder): Unit =
+  protected def requestSettings(b: ResponseCreateParams.Builder): Unit =
     settings.maxTokens.foreach(n => b.maxOutputTokens(n.toLong))
     settings.temperature.foreach(b.temperature)
+
+  /** What `params` and `simple` both set: the [[requestSettings]], the `reasoning` block and the
+    * `thinking` switch. */
+  private def configure(b: ResponseCreateParams.Builder, thinking: Boolean, reasoning: Option[Reasoning]): Unit =
+    requestSettings(b)
+    reasoning.foreach(b.reasoning)
+    thinkingSwitch(thinking).foreach(b.putAdditionalBodyProperty("thinking", _))
 
   /** Send a one-shot request. */
   protected def send(params: ResponseCreateParams): Response = client.responses().create(params)
@@ -164,11 +165,8 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
   def simple(system: Option[String], prompt: String, thinking: Boolean): Reply =
     def request(reasoning: Option[Reasoning]): Response =
       val b = ResponseCreateParams.builder().model(modelId).input(prompt).store(false)
-      Providers.headers(spec).foreach((n, v) => b.putAdditionalHeader(n, v))
       system.foreach(b.instructions)
-      limits(b)
-      reasoning.foreach(b.reasoning)
-      thinkingSwitch(thinking).foreach(b.putAdditionalBodyProperty("thinking", _))
+      configure(b, thinking, reasoning)
       send(b.build())
     val r = withEffortFallback(thinking, reasoning(thinking))(request)
     val text = r.output().asScala.filter(_.isMessage)

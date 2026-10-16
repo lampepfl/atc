@@ -24,7 +24,7 @@ final case class Glyphs(
   /** Horizontal rule, also table rules. */
   rule: String,
   ellipsis: String,
-  /** Separator in summary lines ("worked for 3 s · 2 tool calls"). */
+  /** Separator in summary lines ("finished in 3 s · 2 tool calls"). */
   dot: String,
   /** Table header/rule crossing. */
   junction: String,
@@ -34,6 +34,8 @@ final case class Glyphs(
   unticked: String,
   above: String,
   below: String,
+  /** Marks the choice a menu leaves behind (`› Yes`). */
+  chosen: String,
   spinner: IndexedSeq[String]
 )
 object Glyphs:
@@ -60,6 +62,7 @@ object Glyphs:
     unticked = "◯",
     above = "▲",
     below = "▼",
+    chosen = "›",
     spinner = IndexedSeq("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"),
   )
   val ascii: Glyphs = Glyphs(
@@ -85,5 +88,6 @@ object Glyphs:
     unticked = "[ ]",
     above = "^",
     below = "v",
+    chosen = ">",
     spinner = IndexedSeq("|", "/", "-", "\\"),
   )

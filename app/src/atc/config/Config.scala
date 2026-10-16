@@ -1,14 +1,12 @@
 package atc.config
 
 import atc.{Debug, Resources, TextFiles}
-import atc.platform.PlatformPath
+import atc.platform.{OwnerOnlyFiles, PlatformPath}
 
 import upickle.default.*
 
-import java.nio.file.{
-  AtomicMoveNotSupportedException, FileAlreadyExistsException, Files, Path, StandardCopyOption, StandardOpenOption
-}
-import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.{FileAlreadyExistsException, Files, LinkOption, Path, StandardOpenOption}
+import java.util.Locale
 
 /** One model of a provider: the id the provider knows it by, plus the
   * settings that apply to this model only. Everything about *where* to send
@@ -28,18 +26,21 @@ final case class ModelConfig(
   /** The efforts the model accepts, offered by `/effort`. Unset: every effort
     * its provider's api knows. `[]`: the model takes no effort setting. */
   efforts: Option[List[String]] = None,
-  /** Anthropic: adaptive thinking (default on); `false` disables it. OpenAI-
-    * compatible vendors with a `thinking: {"type": ...}` switch (DeepSeek, GLM,
-    * Kimi, MiniMax): sends `enabled`/`disabled`; leave it unset for OpenAI
-    * itself, which rejects the parameter. */
+  /** Anthropic: adaptive thinking (default on); `false` disables it. Claude Code:
+    * `false` runs the CLI with `--thinking=disabled`. OpenAI-compatible vendors with a
+    * `thinking: {"type": ...}` switch (DeepSeek, GLM, Kimi, MiniMax): sends
+    * `enabled`/`disabled`; leave it unset for OpenAI itself, which rejects the parameter. */
   thinking: Option[Boolean] = None,
   /** OpenAI Responses: stream reasoning summaries (`auto|concise|detailed`);
     * OpenAI only sends them when asked. */
   reasoningSummary: Option[String] = None,
   maxTokens: Option[Int] = None,
   /** The model's context window, in tokens (`200000`, `"256k"`, `"1m"`; see
-    * [[Tokens]]). When a conversation would exceed it, the oldest exchanges
-    * are dropped from what the model sees. Unset: never cut. */
+    * [[Tokens]]). The conversation is compacted as it nears the window
+    * (`autoCompactThreshold`), and when a request would still exceed it, the oldest
+    * exchanges are dropped from what the model sees. Unset: the window a listed model's
+    * provider or the Claude Code CLI reports; without one, nothing is compacted
+    * automatically or cut. */
   contextWindow: Option[Tokens] = None,
   temperature: Option[Double] = None,
   /** Anthropic web-search tool version: `20260209` (default) or `20250305`. */
@@ -85,9 +86,9 @@ final case class ProviderConfig(
   /** How this Chat Completions endpoint (`api: openai`) asks for reasoning and returns
     * it, where that differs from OpenAI's `reasoning_effort`. Unset: OpenAI's way. */
   reasoningStyle: Option[ReasoningStyle] = None,
-  /** The provider's models, by alias. Empty: the models the provider lists
-    * (`GET /models`) are fetched the first time they are needed, and each is
-    * named `provider/model-id`. */
+  /** The provider's models, by alias. Empty: the models the provider lists, each named
+    * `provider/model-id`; the list is fetched in the background once a session starts and
+    * kept between sessions ([[ModelCatalog]]). */
   models: Map[String, ModelConfig] = Map.empty,
   /** `false` turns the provider off: none of its models is offered or fetched. */
   enabled: Boolean = true,
@@ -128,6 +129,26 @@ object ProviderConfig:
     * per request by `Providers.headers`. */
   val SessionRef = "${ATC_SESSION}"
 
+  /** Every name an `api` may be written as, in lower case, with the api it names. */
+  val Apis: Map[String, String] = Map(
+    "anthropic" -> "anthropic",
+    "claude" -> "anthropic",
+    "openai-responses" -> "openai-responses",
+    "responses" -> "openai-responses",
+    "openai" -> "openai",
+    "openai-chat" -> "openai",
+    "chat" -> "openai",
+    "chatgpt" -> "chatgpt",
+    "claude-code" -> "claude-code",
+    "echo" -> "echo",
+  )
+
+  /** The api `name` stands for, ignoring case and surrounding whitespace; `None` for an unknown name. */
+  def canonicalApi(name: String): Option[String] = Apis.get(name.trim.toLowerCase(Locale.ROOT))
+
+  /** The apis, each by its own name, for messages. */
+  def apiNames: String = Apis.values.toList.distinct.sorted.mkString(" | ")
+
 /** A provider the first run can set up, from `atc/providers.json`; the starting
   * global config lists all of them. */
 final case class ProviderPreset(
@@ -159,7 +180,8 @@ final case class FileRuleConfig(
 
 final case class Config(
   /** The agent's model: a model alias, or `provider/alias` when two providers
-    * use the same alias. Unset picks the first configured model. */
+    * use the same alias. Unset: the model last chosen with `/model` while it still
+    * resolves, else the first one (`Models.initial`). */
   model: Option[String] = None,
   /** The isolated, effect-free model trusted by `classifiedChat`, named the
     * same way. Unset means classified data is never sent to a model. */
@@ -194,7 +216,7 @@ final case class Config(
     * files, run commands) or `full` (also network). `/mode` switches at run time. */
   mode: Option[String] = None,
   /** Wall-clock limit for one snippet, excluding time spent waiting for the user
-    * or for a command (`exec` has its own `ExecOptions.timeoutMs`). */
+    * or for a command (`exec` has its own `ExecOptions.timeoutMs`). `null` sets no limit. */
   executionTimeoutMs: Option[Long] = Some(300000L),
   /** Tool calls per user turn before the agent checks in: an interactive session
     * asks the user whether to continue for another `maxToolCalls`, a `-p` run stops. */
@@ -211,8 +233,8 @@ final case class Config(
     * it as ghost text at the prompt (Tab / → accepts). One extra, small model
     * call per turn; `false` turns it off. */
   predictInput: Boolean = true,
-  /** After a turn, compact when estimated context usage reaches this fraction
-    * of the model's context window. Zero disables automatic compaction. */
+  /** Before a model request, compact when the estimated context usage reaches this
+    * fraction of the model's context window. Zero disables automatic compaction. */
   autoCompactThreshold: Double = 0.8,
   /** Fraction of the context window reserved for recent verbatim exchanges
     * during manual or automatic compaction. Zero summarizes everything. */
@@ -244,6 +266,9 @@ object Config:
 
   /** The name of the key bindings file, in `.atc` beside a `config.json`. */
   val KeysFile = "keys.properties"
+
+  /** Whether `a` and `b` name the same file, through links or not. Neither needs to exist. */
+  def samePath(a: Path, b: Path): Boolean = PlatformPath.canonical(a) == PlatformPath.canonical(b)
 
   /** The project a directory belongs to: the nearest ancestor of `from`
     * (itself included) whose `.atc` holds a `config.json` or a `keys.properties`. A
@@ -279,23 +304,29 @@ object Config:
       if !Files.exists(path) then throw IllegalArgumentException(s"Explicit config does not exist: $path")
       if !Files.isRegularFile(path) then throw IllegalArgumentException(s"Explicit config is not a regular file: $path")
     val root = projectRoot(cwd)
-    val untrusted = !trustProject && ProjectTrust.pending(cwd, global.getParent.nn).isDefined
+    val atcDir = global.getParent.nn
     val candidates =
       List(Origin.Global -> global) ++ root.map(Origin.Project -> projectPath(_)) ++ explicit.map(Origin.Explicit -> _)
-    // A path named twice is read once, in the first role it appears in. That
-    // keeps `~/.atc/config.json` a granting layer when atc runs in the home
+    // A file named twice, through links or not, is read once, in the first role it appears in.
+    // That keeps `~/.atc/config.json` a granting layer when atc runs in the home
     // directory, and keeps `-c ./.atc/config.json` a narrowing one.
-    val layers = candidates
+    val read = candidates
       .filter((_, p) => Files.isRegularFile(p))
-      .distinctBy((_, p) => p.toAbsolutePath.normalize)
+      .distinctBy((_, p) => PlatformPath.canonical(p))
       .map((origin, path) => ConfigLayer.read(origin, path))
-      .map(layer => if untrusted && layer.origin == Origin.Project then ProjectTrust.withoutGrants(layer) else layer)
-    val bundled = Option.when(bundledGlobal && !layers.exists(_.origin == Origin.Global))(ConfigLayer.bundled)
     // Keys are read separately, most specific first: they are secrets, not
     // settings, so they never take part in the layer merge.
-    val projectKeys = if untrusted then Nil else root.map(keysPath).toList
-    val keys = KeyBindings.load(projectKeys :+ global.getParent.nn.resolve(KeysFile).nn)
-    Configuration.combine(bundled.toList ++ layers, keys)
+    val projectKeys = root.map(keysPath).filter(Files.isRegularFile(_))
+    val keys = KeyBindings.load(projectKeys.toList :+ atcDir.resolve(KeysFile).nn)
+    // Trust is judged on the same reading of the project's files that its layer and keys come from.
+    val untrusted = !trustProject && root.exists: r =>
+      val config = read.find(_.origin == Origin.Project).fold(ujson.Obj())(_.json)
+      val bindings = keys.files.collectFirst { case (p, b) if projectKeys.contains(p) => b }
+      ProjectTrust.pending(r, config, bindings.getOrElse(Map.empty), atcDir).isDefined
+    val layers = read.map(l => if untrusted && l.origin == Origin.Project then ProjectTrust.withoutGrants(l) else l)
+    val bundled = Option.when(bundledGlobal && !layers.exists(_.origin == Origin.Global))(ConfigLayer.bundled)
+    val trustedKeys = if untrusted then KeyBindings(keys.files.filterNot((p, _) => projectKeys.contains(p))) else keys
+    Configuration.combine(bundled.toList ++ layers, trustedKeys)
 
   /** Create the global configuration and adjacent key bindings if they are
     * missing, ensuring that narrowing layers have a base. Key bindings are
@@ -314,7 +345,7 @@ object Config:
     else
       Option(target.getParent).foreach(Files.createDirectories(_))
       try
-        if ownerOnly then writeOwnerOnly(target, content)
+        if ownerOnly then OwnerOnlyFiles.create(target, TextFiles.strictUtf8(content))
         else Files.writeString(target, content, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
         Some(target)
       catch case _: FileAlreadyExistsException => None // another atc created it meanwhile; leave it alone
@@ -322,14 +353,23 @@ object Config:
   /** Create the starter project configuration for `dir` and ensure that its
     * `.gitignore` excludes `keys.properties`. The configuration belongs in the
     * repository; `.atc/keys.properties` does not. Returns the paths created or
-    * modified, or an empty list if the configuration already exists. */
-  def initProject(dir: Path): List[Path] =
+    * modified, or an empty list if the configuration already exists.
+    *
+    * Throws `IllegalArgumentException` when the file would be the global config `global`, as it
+    * is in the home directory, or when `.atc` or its `.gitignore` is a symbolic link: a cloned
+    * repository can ship links that point the writes elsewhere. */
+  def initProject(dir: Path, global: Path): List[Path] =
     val config = projectPath(dir)
-    if Files.exists(config) then Nil
+    val atc = config.getParent.nn
+    val ignore = atc.resolve(".gitignore").nn
+    if samePath(config, global) then
+      throw IllegalArgumentException(s"$config is the global config; atc --init-global writes that one")
+    if Files.exists(config, LinkOption.NOFOLLOW_LINKS) then Nil
     else
-      Files.createDirectories(config.getParent)
-      Files.writeString(config, projectTemplate)
-      val ignore = config.getParent.nn.resolve(".gitignore").nn
+      List(atc, ignore).find(Files.isSymbolicLink(_)).foreach: link =>
+        throw IllegalArgumentException(s"$link is a symbolic link; atc does not write a project config through it")
+      Files.createDirectories(atc)
+      Files.writeString(config, projectTemplate, StandardOpenOption.CREATE_NEW, LinkOption.NOFOLLOW_LINKS)
       val ignoreChanged = ensureIgnored(ignore, KeysFile)
       config :: Option.when(ignoreChanged)(ignore).toList
 
@@ -341,36 +381,15 @@ object Config:
       .map(_.trim).filter(line => line == entry || line == s"!$entry").lastOption
     if lastRule.contains(entry) then false
     else
-      Files.writeString(path, TextFiles.appendLine(current.getOrElse(""), entry))
+      val text = TextFiles.appendLine(current.getOrElse(""), entry)
+      Files.writeString(
+        path,
+        text,
+        StandardOpenOption.CREATE,
+        StandardOpenOption.TRUNCATE_EXISTING,
+        LinkOption.NOFOLLOW_LINKS
+      )
       true
-
-  private val OwnerOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
-
-  /** Create `target` with owner-only access on POSIX file systems, falling back
-    * to a regular (new-file) write when POSIX permissions are unavailable. */
-  private[config] def writeOwnerOnly(target: Path, content: String): Unit =
-    try Files.createFile(target, OwnerOnly)
-    catch case _: UnsupportedOperationException => Files.createFile(target)
-    Files.writeString(target, content)
-
-  /** Replace `target` with `content` through a temporary file beside it, moved into place
-    * atomically where the file system allows. On POSIX file systems the new file is readable
-    * by its owner only, or with `keepPermissions` has the permissions `target` had. */
-  private[atc] def replaceFile(target: Path, content: String, keepPermissions: Boolean): Unit =
-    val dir = target.toAbsolutePath.nn.getParent.nn
-    Files.createDirectories(dir)
-    val prefix = s".${target.getFileName}."
-    val temp =
-      try Files.createTempFile(dir, prefix, ".tmp", OwnerOnly).nn
-      catch case _: UnsupportedOperationException => Files.createTempFile(dir, prefix, ".tmp").nn
-    try
-      Files.writeString(temp, content)
-      if keepPermissions then
-        try Files.setPosixFilePermissions(temp, Files.getPosixFilePermissions(target))
-        catch case _: UnsupportedOperationException => ()
-      try Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-      catch case _: AtomicMoveNotSupportedException => Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
-    finally Files.deleteIfExists(temp)
 
   /** Set one top-level key of a config file, keeping the rest of the text as
     * it is (a config is hand-formatted: blank lines, several patterns per
@@ -386,7 +405,8 @@ object Config:
       try Files.readString(path).nn
       catch case e: Exception => throw IllegalArgumentException(s"Cannot read config $path: ${Debug.message(e)}")
     val updated = update(text)
-    if updated != text then replaceFile(path.toRealPath().nn, updated, keepPermissions = true)
+    if updated != text then
+      OwnerOnlyFiles.replace(path.toRealPath().nn, TextFiles.strictUtf8(updated), keepPermissions = true)
 
   /** The starter global config written by `--init-global`, with every preset provider. */
   def globalTemplate: String = globalTemplateWith(ProviderPreset.all)
@@ -394,8 +414,10 @@ object Config:
   /** The starter global config with `providers` as its providers. */
   def globalTemplateWith(providers: List[ProviderPreset]): String =
     val template = resource("/atc/config-template.json")
+    val slot = "\"providers\": {}"
+    require(template.contains(slot), s"the starting config template has no $slot to fill in")
     val rendered = ujson.write(ujson.Obj.from(providers.map(p => p.name -> writeJs(p.config))), indent = 2)
-    template.replace("\"providers\": {}", "\"providers\": " + rendered.linesIterator.mkString("\n  "))
+    template.replace(slot, "\"providers\": " + rendered.linesIterator.mkString("\n  "))
 
   /** The starter key bindings written beside it. */
   def keysTemplate: String = resource("/atc/keys-template.properties")

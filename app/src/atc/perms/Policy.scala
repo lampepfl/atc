@@ -154,7 +154,7 @@ final class Policy(
           case Some(parent) =>
             val inherited = matchingRules(parent)
             val inheritedSet = inherited.toSet
-            inherited ::: rules.filter(r => !inheritedSet.contains(r) && r.pattern.matches(p))
+            inherited ::: rules.filter(r => !inheritedSet.contains(r) && r.pattern.matchesChild(p))
           case None => rules.filter(_.pattern.matches(p))
         matchingRulesCache.put(p, computed)
         computed
@@ -194,13 +194,16 @@ final class Policy(
         s"Access denied: the sandbox is in ${mode.label} mode; writing '$shown' cannot be granted"
       )
     val current = effective(parentId, p)
-    if !(current.access >= access) then
+    // A grant on `p` would also raise every stricter unlocked rule below it, so
+    // a request that needs no approval opens its scope without one.
+    if current.access >= access then openScope(parent)
+    else
       if current.locked then
         throw SecurityException(s"Access denied: '$shown' is locked to ${current.access.label} by the configuration")
       decide(FileRequest(p, access, current, reason), s"${access.label} on '$shown'") {
         base.synchronized(base.fileGrants ::= (p -> access))
       }
-    openScope(parent, fileGrants = List(p -> access))
+      openScope(parent, fileGrants = List(p -> access))
 
   // ── commands ──────────────────────────────────────────────────────
 
@@ -216,17 +219,21 @@ final class Policy(
     mode.allowsExec && commandDenied(commandLine).isEmpty &&
       commandPatterns(scope(scopeId)).exists(GlobMatcher.matchesCommand(commandLine, _))
 
-  def requestExec(parentId: ScopeId, commands: List[String], reason: String): ScopeId =
+  def requestExec(parentId: ScopeId, requested: List[String], reason: String): ScopeId =
+    val commands = normalized(requested)
     val parent = scope(parentId)
     if !mode.allowsExec then
       throw SecurityException(s"Access denied: the sandbox is in ${mode.label} mode; commands cannot be run")
-    refuseDenied("command", commands, denyCommands, GlobMatcher.matchesCommand)
+    refuseDenied("command", commands, denyCommands, GlobMatcher.commandsOverlap)
+    // A pattern counts as held when its own spelling is permitted, which does not make
+    // it a subset: `./run.sh` is held under `*.sh` yet would also permit `./run.sh -x`.
+    // The scope therefore holds only the patterns the user approved.
     val missing = commands.filterNot(command => commandPatterns(parent).exists(GlobMatcher.matchesCommand(command, _)))
     if missing.nonEmpty then
       decide(ExecRequest(missing, reason), s"commands ${missing.mkString(", ")}") {
         base.synchronized(base.commands ++= missing)
       }
-    openScope(parent, commands = commands)
+    openScope(parent, commands = missing)
 
   // ── network ───────────────────────────────────────────────────────
 
@@ -239,11 +246,12 @@ final class Policy(
     mode.allowsNetwork && hostDenied(host).isEmpty &&
       hostPatterns(scope(scopeId)).exists(GlobMatcher.matchesHost(host, _))
 
-  def requestNet(parentId: ScopeId, hosts: List[String], reason: String): ScopeId =
+  def requestNet(parentId: ScopeId, requested: List[String], reason: String): ScopeId =
+    val hosts = normalized(requested)
     val parent = scope(parentId)
     if !mode.allowsNetwork then
       throw SecurityException(s"Access denied: the sandbox is in ${mode.label} mode; the network is not reachable")
-    refuseDenied("host", hosts, denyHosts, GlobMatcher.matchesHost)
+    refuseDenied("host", hosts, denyHosts, GlobMatcher.hostsOverlap)
     // Coverage is by glob/canonical-host matching, not textual equality. In
     // particular, a standing `*` grant needs no prompt for a concrete host and
     // an exact `::1` grant covers the equivalent expanded IPv6 spelling.
@@ -252,26 +260,29 @@ final class Policy(
       decide(NetRequest(missing, reason), s"hosts ${missing.mkString(", ")}") {
         base.synchronized(base.hosts ++= missing)
       }
-    openScope(parent, hosts = hosts)
+    openScope(parent, hosts = missing)
+
+  /** Requested patterns trimmed, without blanks or duplicates, and sorted, so that the
+    * prompt and the decision notes list them in the same order. */
+  private def normalized(patterns: List[String]): List[String] = patterns.map(_.trim).filter(_.nonEmpty).distinct.sorted
 
   /** Refuse a `request*` whose patterns collide with the deny list, before the
     * user is asked: a request is a widening, and the deny list is exactly what
-    * may not be widened into. Two patterns collide when either one, read as a
-    * concrete command line or host name, matches the other. With
-    * `denyCommands: ["rm *"]` that refuses `requestExec(Set("rm -rf build"))`,
-    * which the deny pattern covers, and `requestExec(Set("rm*"))`, which would
-    * cover the deny pattern. */
+    * may not be widened into. Two patterns collide when some command line or
+    * host name matches both. With `denyCommands: ["git push*"]` that refuses
+    * `git push origin`, `git*` and `git * --force`, since each permits a command
+    * line the deny pattern refuses. */
   private def refuseDenied(
     what: String,
     requested: List[String],
     denied: List[String],
-    matches: (String, String) => Boolean
+    overlap: (String, String) => Boolean
   ): Unit =
     val hits =
       for
         requestedPattern <- requested
         deniedPattern <- denied
-        if matches(requestedPattern, deniedPattern) || matches(deniedPattern, requestedPattern)
+        if overlap(requestedPattern, deniedPattern)
       yield s"'$requestedPattern' (deny pattern '$deniedPattern')"
     if hits.nonEmpty then
       throw SecurityException(
@@ -301,8 +312,8 @@ final class Policy(
     * reads what was added during a tool call and tells the model in that
     * call's result, since the model cannot see the pop-ups: it would otherwise
     * take an "allow once" for a standing grant, or a later "no" for a
-    * revocation. The prompt itself never changes with a decision, so every
-    * request keeps its prefix. */
+    * revocation. The system prompt never changes with a decision, so every
+    * request keeps its cached prefix. */
   private val decisionLog = mutable.ListBuffer[(Decision, String)]()
   def decisionCount: Int = decisionLog.synchronized:
     decisionLog.length
@@ -347,6 +358,10 @@ final class Policy(
     base.fileGrants.reverse.map((path, access) => SessionGrant.File(path, access)) ++
       base.commands.distinct.map(SessionGrant.Command(_)) ++ base.hosts.distinct.map(SessionGrant.Host(_))
 
+  /** The session file grants. Every change replaces the list, so a caller can
+    * tell by reference whether they changed. */
+  private[perms] def sessionFileGrants: List[(Path, Access)] = base.fileGrants
+
   /** Remove a session grant from future permission checks. Existing processes are managed by /kill. */
   def revoke(grant: SessionGrant): Unit = base.synchronized:
     grant match
@@ -382,7 +397,7 @@ final class Policy(
       lines += s"  classified patterns: ${classifiedOnly.map(_.pattern).mkString(", ")}"
     if withSession && base.fileGrants.nonEmpty then
       lines += "Session file grants:"
-      lines ++= base.fileGrants.reverse.map((p, a) => s"  $p: ${a.label}")
+      lines ++= base.fileGrants.reverse.map((p, a) => s"  ${PlatformPath.portable(p)}: ${a.label}")
     lines += s"Commands: ${listOf(baseCommands)}${session(base.commands)}"
     if denyCommands.nonEmpty then lines += s"  always refused: ${denyCommands.mkString(", ")}"
     lines += s"Hosts:    ${listOf(baseHosts)}${session(base.hosts)}"

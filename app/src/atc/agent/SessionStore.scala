@@ -3,15 +3,12 @@ package atc.agent
 import atc.host.HostInteraction
 import atc.lib.{TaskNotes, Todo, TodoStatus}
 import atc.llm.{Msg, ToolCall, ToolResult}
+import atc.platform.OwnerOnlyFiles
 
-import java.nio.ByteBuffer
-import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets.UTF_8
-import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption, StandardOpenOption}
-import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.{Files, Path}
 import java.security.MessageDigest
-import java.util.{HexFormat, UUID}
-import scala.jdk.CollectionConverters.*
+import java.util.HexFormat
 import scala.util.Using
 
 /** Portable conversation state. Runtime capabilities, permissions and native provider payloads are excluded. */
@@ -36,53 +33,45 @@ private[atc] object SessionStore:
 
   /** Publish a complete checkpoint. A failed write leaves the previous save available. */
   def checkpoint(path: Path, session: SessionSnapshot): Unit =
-    val target = path.toAbsolutePath.nn.normalize.nn
-    val temporary = target.resolveSibling(s".${target.getFileName}.${UUID.randomUUID()}.tmp").nn
-    try
-      write(temporary, session)
-      try Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-      catch
-        case _: AtomicMoveNotSupportedException =>
-          Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING)
-    finally Files.deleteIfExists(temporary)
+    OwnerOnlyFiles.replace(path.toAbsolutePath.nn.normalize.nn, encodeWithinLimit(session), keepPermissions = false)
 
+  /** Save to a new file; throws `FileAlreadyExistsException` when `path` exists. */
   def write(path: Path, session: SessionSnapshot): Unit =
-    val bytes = encode(session).getBytes(UTF_8)
-    if bytes.length > MaxBytes then throw IllegalArgumentException("Saved session exceeds the 8 MiB limit")
+    val bytes = encodeWithinLimit(session)
     val target = path.toAbsolutePath.nn.normalize.nn
     Files.createDirectories(target.getParent)
-    val permissions = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
-    val channel =
-      try FileChannel.open(target, Set(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).asJava, permissions).nn
-      catch
-        case _: UnsupportedOperationException =>
-          FileChannel.open(target, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).nn
-    Using.resource(channel): out =>
-      val buffer = ByteBuffer.wrap(bytes)
-      while buffer.hasRemaining do out.write(buffer)
+    OwnerOnlyFiles.create(target, bytes)
+
+  private def encodeWithinLimit(session: SessionSnapshot): Array[Byte] =
+    val bytes = encode(session).getBytes(UTF_8)
+    if bytes.length > MaxBytes then throw IllegalArgumentException("Saved session exceeds the 8 MiB limit")
+    bytes
 
   def read(path: Path): SessionSnapshot =
     val bytes = Using.resource(Files.newInputStream(path).nn)(_.readNBytes(MaxBytes + 1).nn)
     if bytes.length > MaxBytes then throw IllegalArgumentException("Saved session exceeds the 8 MiB limit")
     decode(String(bytes, UTF_8))
 
+  /** A neutral message as saved sessions and the compaction transcript write it, without
+    * native replay payloads or the internal `needsReplan` flag. */
+  private[agent] def messageJson(message: Msg): ujson.Obj = message match
+    case Msg.User(text) => ujson.Obj("role" -> "user", "text" -> text)
+    case Msg.Continuation(text) => ujson.Obj("role" -> "continuation", "text" -> text)
+    case Msg.Assistant(text, calls, _) =>
+      val entries = calls.map(call => ujson.Obj("id" -> call.id, "name" -> call.name, "arguments" -> call.arguments))
+      ujson.Obj("role" -> "assistant", "text" -> text, "calls" -> ujson.Arr.from(entries))
+    case Msg.ToolResults(results) =>
+      val entries =
+        results.map(result => ujson.Obj("id" -> result.callId, "output" -> result.output, "error" -> result.isError))
+      ujson.Obj("role" -> "tools", "results" -> ujson.Arr.from(entries))
+
   private[atc] def encode(session: SessionSnapshot): String =
     def strings(values: List[String]): ujson.Arr = ujson.Arr.from(values)
-    val messages = session.history.map:
-      case Msg.User(text) => ujson.Obj("role" -> "user", "text" -> text)
-      case Msg.Continuation(text) => ujson.Obj("role" -> "continuation", "text" -> text)
-      case Msg.Assistant(text, calls, _) =>
-        val entries = calls.map(call => ujson.Obj("id" -> call.id, "name" -> call.name, "arguments" -> call.arguments))
-        ujson.Obj("role" -> "assistant", "text" -> text, "calls" -> ujson.Arr.from(entries))
-      case Msg.ToolResults(results) =>
-        val entries =
-          results.map(result => ujson.Obj("id" -> result.callId, "output" -> result.output, "error" -> result.isError))
-        ujson.Obj("role" -> "tools", "results" -> ujson.Arr.from(entries))
     ujson.write(
       ujson.Obj(
         "version" -> 1,
         "model" -> session.model,
-        "history" -> ujson.Arr.from(messages),
+        "history" -> ujson.Arr.from(session.history.map(messageJson)),
         "pendingNotes" -> strings(session.pendingNotes),
         "userRequests" -> strings(session.userRequests),
         "task" -> ujson.Obj(

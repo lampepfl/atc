@@ -3,20 +3,21 @@ package atc
 import atc.perms.*
 import atc.sandbox.*
 
+import java.nio.file.Files
+
 /** The sandbox itself: that a session starts, that agent code reaches the real
-  * host through it, that definitions persist, that the class loader hides the
-  * application, and that the last-resort safety nets (validator, fatal
-  * throwables, uncaught exceptions) behave.
+  * host through it, that the class loader hides the application, and that the
+  * last-resort safety nets (validator, fatal throwables) behave.
   *
   * What the *capabilities* allow lives in [[CapabilitySuite]], what each mode
-  * hands out in [[ModeSuite]], and the REPL's own mechanics (timeouts,
+  * hands out in [[ModeSuite]], and the REPL's own mechanics (state, timeouts,
   * interrupts, REPL commands, safe mode) in [[ReplSessionSuite]]. */
 class SandboxSuite extends munit.FunSuite, ReplAssertions:
   override val munitTimeout = scala.concurrent.duration.Duration(5, "min")
 
   private val env = TestEnv(TestEnv.withSecrets, commands = List("echo"), prefix = "atc-sandbox")
   private lazy val session: ReplSession = env.newSession()
-  private def run(code: String): ExecutionResult = { env.activate(); session.run(code) }
+  private def run(code: String): ExecutionResult = session.run(code)
 
   override def beforeAll(): Unit =
     env.file("secrets/s.txt", "secret")
@@ -46,7 +47,6 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
       val closer = Thread(() => discarded.close(), "discard")
       closer.start()
       closer.join(10000)
-      env.activate()
       assertOk(warmed.run("val warm = 1 + 1"))
       assertOk(warmed.run("warm * 2"))
       assert(!discarded.run("1").success)
@@ -57,10 +57,6 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
     assertOk(run("""write("a.txt", "content")"""))
     assertEquals(env.contents("a.txt"), "content")
     assert(assertOk(run("""read("a.txt")""")).output.contains("content"))
-
-  test("definitions persist across snippets"):
-    assertOk(run("val persisted = 41"))
-    assert(assertOk(run("persisted + 1")).output.contains("42"))
 
   test("a classified file round-trips to the classified model without reaching the agent"):
     env.clearOutput()
@@ -129,13 +125,35 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
 
   // ── Class-loader isolation ──────────────────────────────────────
 
-  test("the application is invisible to the sandbox loader, the API is shared"):
+  test("Sandbox.isShared admits the Scala library and the API, nothing of the application"):
+    assert(Sandbox.isShared("scala.collection.immutable.List"))
+    assert(Sandbox.isShared("atc.lib.Interface"))
+    assert(Sandbox.isShared("scala.runtime.BoxesRunTime"))
+    assert(!Sandbox.isShared("atc.host.Host"))
+    assert(!Sandbox.isShared("atc.sandbox.Sandbox"))
+    assert(!Sandbox.isShared("dotty.tools.repl.ReplDriver"))
+    assert(!Sandbox.isShared("scala.tools.nsc.Global"))
+    assert(!Sandbox.isShared("scala.quoted.runtime.impl.QuotesImpl"))
+    assert(!Sandbox.isShared("ujson.Value"))
+    assert(!Sandbox.isShared("java.util.List"))
+
+  test("the sandbox loader takes the JDK from the platform and the shared classes from the app, nothing else"):
     val loader = Sandbox.newLoader()
-    intercept[ClassNotFoundException](loader.loadClass("atc.host.Host"))
-    intercept[ClassNotFoundException](loader.loadClass("dotty.tools.repl.ReplDriver"))
+    assert(loader.loadClass("java.util.ArrayList") eq classOf[java.util.ArrayList[?]])
+    assert(loader.loadClass("scala.collection.immutable.List") eq classOf[List[?]])
+    assert(loader.loadClass("atc.lib.Classified") eq classOf[atc.lib.Classified[?]])
     // Shared, so the host can implement the interface the agent programs against.
     assert(loader.loadClass("atc.lib.Interface") eq classOf[atc.lib.Interface])
-    assert(loader.loadClass("scala.collection.immutable.List") eq classOf[List[?]])
+    intercept[ClassNotFoundException](loader.loadClass("atc.host.Host"))
+    intercept[ClassNotFoundException](loader.loadClass("atc.host.ClassifiedImpl"))
+    intercept[ClassNotFoundException](loader.loadClass("atc.sandbox.ReplSession"))
+    intercept[ClassNotFoundException](loader.loadClass("ujson.Value"))
+    intercept[ClassNotFoundException](loader.loadClass("com.openai.client.OpenAIClient"))
+    intercept[ClassNotFoundException](loader.loadClass("dotty.tools.repl.ReplDriver"))
+
+  test("the library classpath property points at existing entries"):
+    assert(Sandbox.libraryClasspath.nonEmpty)
+    assert(Sandbox.libraryClasspath.forall(Files.exists(_)))
 
   test("the sandbox loader hides *.class resources (only REPL classes get interrupt-instrumented)"):
     // With interrupt instrumentation on, the REPL loader would otherwise read the
@@ -147,18 +165,11 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
 
   // ── Safety nets ─────────────────────────────────────────────────
 
-  test("the validator rejects a snippet before it is compiled or run"):
-    assertFails(run("""java.io.File("/etc/passwd").exists"""), "file-io-java")
-
-  test("an uncaught exception is reported as a failure, not a result"):
-    val r = assertFails(run("""throw new RuntimeException("boom")"""))
-    assert(r.output.contains("boom"), r.output)
-
   test("a fatal-throwable oracle over classified data is rejected before it runs"):
     // A pure callback that throws only when a predicate over the secret holds is a
-    // per-bit oracle *if* the fatal throwable it raises can be caught. `Try` traps
-    // only NonFatal, so the attack needs a fatal throwable and a catch. The
-    // validator rejects both, so the code never runs.
+    // per-bit oracle if what it throws can be observed outside `map`. `map` keeps
+    // every throwable inside the classified value except the stop signals, and
+    // agent code may not name those, so the validator rejects this before it runs.
     val attack =
       """val c = readClassified("secrets/s.txt")
         |def bit(i: Int, mid: Char): Boolean =
@@ -176,15 +187,64 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
         |println(bit(0, 'm'))""".stripMargin
     assertFails(run(attack), "catch-fatal")
 
+  /** Run an attack whose `bit(ch)` should reveal whether the secret starts with `ch`,
+    * and check that it gives the same answer for a right and a wrong guess. */
+  private def assertNoOracle(attack: String)(using munit.Location): Unit =
+    val r = assertOk(run(attack + "\nprintln(s\"bits ${bit('s')} ${bit('z')}\")"))
+    assert(r.output.contains("bits false false"), r.output)
+
+  test("a non-local return out of a map callback does not compile"):
+    // `map` would keep its control throwable too, as for the one thrown directly below.
+    val attack =
+      """val c = readClassified("secrets/s.txt")
+        |def bit(ch: Char): Boolean =
+        |  c.map(s => if s(0) == ch then return true else 0)
+        |  false
+        |println(s"bits ${bit('s')} ${bit('z')}")""".stripMargin
+    assertFails(run(attack), "Non local returns are no longer supported")
+
+  test("a finally that returns cannot observe a secret-dependent error from map"):
+    assertNoOracle(
+      """val c = readClassified("secrets/s.txt")
+        |def deep(n: Int): Int = deep(n + 1) + 1
+        |def bit(ch: Char): Boolean =
+        |  var hit = true
+        |  try { c.map(s => if s(0) == ch then deep(0) else 0); hit = false } finally { return hit }
+        |  hit""".stripMargin
+    )
+
+  test("a secret-dependent stack overflow inside map cannot be caught by agent code"):
+    // `map` keeps the error, and the validator rejects the extractor arm, which
+    // would also catch the stop signal.
+    val attack =
+      """val c = readClassified("secrets/s.txt")
+        |object CatchIt { def unapply(t: Throwable): Boolean = true }
+        |def deep(n: Int): Int = deep(n + 1) + 1
+        |def bit(ch: Char): Boolean =
+        |  try { c.map(s => if s(0) == ch then deep(0) else 0); false }
+        |  catch case CatchIt() => true
+        |println(s"bits ${bit('s')} ${bit('z')}")""".stripMargin
+    assertFails(run(attack), "catch-extractor")
+
+  test("a NonLocalReturnControl thrown directly inside map is kept inside the classified value"):
+    assertNoOracle(
+      """val c = readClassified("secrets/s.txt")
+        |def bit(ch: Char): Boolean =
+        |  val key = new Object
+        |  try
+        |    c.map(s => if s(0) == ch then throw new scala.runtime.NonLocalReturnControl(key, true) else 0)
+        |    false
+        |  catch case e: scala.runtime.NonLocalReturnControl[?] if e.key eq key => true""".stripMargin
+    )
+
   test("the ThreadDeath stop signal cannot be swallowed by a catch-all"):
     // Interrupts and timeouts stop REPL loops by raising ThreadDeath at back-edges;
     // a loop that caught everything would defeat them.
     assertFails(run("""while true do try { val x = 1 } catch case _ => ()"""), "catch-all")
 
   test("a catch-all in a LATER arm is rejected too (it catches fatal errors)"):
-    // The catch-all used to slip through as a non-first arm. A recursion needs no
-    // forbidden type name to raise a StackOverflowError, so this WAS a live
-    // per-bit oracle over classified data.
+    // A recursion needs no forbidden type name to raise a StackOverflowError, so a
+    // catch-all in any arm would be a per-bit oracle over classified data.
     val attack =
       """val c = readClassified("secrets/s.txt")
         |def bit(ch: Char): Boolean =
@@ -207,8 +267,7 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
 
   test("a catch of an erased type cannot swallow a StackOverflowError"):
     // A type parameter and an abstract type member both erase to their bound, so
-    // `case _: T` catches fatal throwables. Both forms ran and printed "SWALLOWED"
-    // before the validator scanned the whole ascription rather than its first token.
+    // `case _: T` catches fatal throwables, inside parentheses or a union as well.
     val attacks = List(
       """def viaParen[T](b: => Int): String = try b.toString catch case _: (T) => "SWALLOWED"
         |def deep(n: Int): Int = deep(n + 1) + 1

@@ -2,6 +2,8 @@ package atc.host
 
 import atc.platform.Platform
 
+import scala.collection.mutable
+
 /** The small command language accepted by `exec`.
   *
   * It supports words with quoting, pipelines, file redirection, and `2>&1`.
@@ -37,11 +39,13 @@ private[atc] object CommandLine:
     /** One program, no redirection: what `exec(command, args)` accepts as `command`. */
     def isSimple: Boolean = stages.lengthIs == 1 && stdinFile.isEmpty && stdoutFile.isEmpty && !stages.head.mergeErr
 
-    /** How the user sees it (re-joined; quoting is not reconstructed). */
+    /** How the user sees it: each stage as [[Stage.line]] renders it, with the redirections where
+      * the parser accepts them and their file names quoted the same way. */
     def line: String =
-      stages.map(stage => stage.line + (if stage.mergeErr then " 2>&1" else "")).mkString(" | ") +
-        stdinFile.fold("")(file => s" < $file") +
-        stdoutFile.fold("")(file => (if append then " >> " else " > ") + file)
+      val shown = stages.map(stage => stage.line + (if stage.mergeErr then " 2>&1" else ""))
+      val input = stdinFile.fold("")(file => " < " + renderArg(file))
+      (shown.head + input :: shown.tail).mkString(" | ") +
+        stdoutFile.fold("")(file => (if append then " >> " else " > ") + renderArg(file))
 
   private enum Token:
     case Word(text: String)
@@ -177,21 +181,17 @@ private[atc] object CommandLine:
   /** Parse a command line into a [[Pipeline]]. */
   def parsePipeline(line: String): Pipeline =
     val tokens = tokenize(line)
-    val stages = List.newBuilder[Stage]
-    val arguments = List.newBuilder[String]
-    var wordCount = 0
+    val stages = mutable.ListBuffer[Stage]()
+    val arguments = mutable.ListBuffer[String]()
     var mergeErr = false
     var stdinFile: Option[String] = None
     var stdoutFile: Option[String] = None
     var append = false
-    var stageCount = 0
 
     def endStage(why: String): Unit =
-      if wordCount == 0 then throw IllegalArgumentException(s"exec: empty command $why in: $line")
-      stages += Stage(arguments.result(), mergeErr)
-      stageCount += 1
+      if arguments.isEmpty then throw IllegalArgumentException(s"exec: empty command $why in: $line")
+      stages += Stage(arguments.toList, mergeErr)
       arguments.clear()
-      wordCount = 0
       mergeErr = false
 
     def fileAfter(operator: String, rest: List[Token]): (String, List[Token]) = rest match
@@ -202,7 +202,6 @@ private[atc] object CommandLine:
       case Nil => ()
       case Token.Word(word) :: more =>
         arguments += word
-        wordCount += 1
         parse(more)
       case Token.Pipe :: more =>
         if stdoutFile.isDefined then
@@ -215,7 +214,7 @@ private[atc] object CommandLine:
       case Token.In :: more =>
         val (file, remaining) = fileAfter("<", more)
         if stdinFile.isDefined then throw IllegalArgumentException(s"exec: more than one '<' in: $line")
-        if stageCount > 0 then
+        if stages.nonEmpty then
           throw IllegalArgumentException(s"exec: '<' must be on the first command of the pipeline in: $line")
         stdinFile = Some(file)
         parse(remaining)
@@ -228,14 +227,13 @@ private[atc] object CommandLine:
         parse(remaining)
 
     parse(tokens)
-    if wordCount == 0 && stageCount == 0 then throw IllegalArgumentException("exec: empty command line")
+    if arguments.isEmpty && stages.isEmpty then throw IllegalArgumentException("exec: empty command line")
     endStage("after '|'")
-    val parsedStages = stages.result()
-    if parsedStages.lengthIs > MaxPipelineStages then
+    if stages.lengthIs > MaxPipelineStages then
       throw IllegalArgumentException(
-        s"exec: a pipeline may have at most $MaxPipelineStages stages (got ${parsedStages.size})"
+        s"exec: a pipeline may have at most $MaxPipelineStages stages (got ${stages.size})"
       )
-    Pipeline(parsedStages, stdinFile, stdoutFile, append)
+    Pipeline(stages.toList, stdinFile, stdoutFile, append)
 
   /** Parse one program with no redirection (the form accepted with separate arguments). */
   def parseCommandLine(line: String): List[String] =

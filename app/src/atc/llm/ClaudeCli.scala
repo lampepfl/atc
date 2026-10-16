@@ -1,6 +1,6 @@
 package atc.llm
 
-import atc.{Debug, Main}
+import atc.{Debug, Main, Threads}
 import atc.host.WindowsExecutable
 
 import java.io.{BufferedReader, IOException, InputStream, InputStreamReader, OutputStream}
@@ -26,10 +26,7 @@ private[atc] final class ClaudeCli private (process: ClaudeCli.Process, tools: L
   private val replies = mutable.Map[String, CompletableFuture[ujson.Value]]()
   @volatile private var ended = false
 
-  private def begin(): Unit =
-    val reader = Thread(() => readAll(), "atc-claude-code")
-    reader.setDaemon(true)
-    reader.start()
+  private def begin(): Unit = Threads.daemon("atc-claude-code")(() => readAll()).start()
 
   /** Send the `initialize` request with the system prompt; returns the CLI's answer (its models and account). */
   def initialize(system: String): ujson.Value =
@@ -92,13 +89,9 @@ private[atc] final class ClaudeCli private (process: ClaudeCli.Process, tools: L
   private def readAll(): Unit =
     try
       val in = BufferedReader(InputStreamReader(process.output, UTF_8))
-      var line = in.readLine()
-      while line != null do
-        val text = line.nn
-        if text.trim.nonEmpty then
-          try receive(ujson.read(text))
-          catch case NonFatal(e) => Debug.log(s"claude-code: unreadable message ${text.take(200)}: ${Debug.message(e)}")
-        line = in.readLine()
+      Iterator.continually(in.readLine()).takeWhile(_ != null).map(_.nn).filter(_.trim.nonEmpty).foreach: text =>
+        try receive(ujson.read(text))
+        catch case NonFatal(e) => Debug.log(s"claude-code: unreadable message ${text.take(200)}: ${Debug.message(e)}")
     catch case NonFatal(e) => if !ended then Debug.log(s"claude-code: reading failed: ${Debug.message(e)}")
     finally
       events.put(ujson.Null)
@@ -245,20 +238,14 @@ private[atc] object ClaudeCli:
           )
     process.onExit().nn.thenRun(() => deleteQuietly(dir))
     val errors = StringBuilder()
-    val drain = Thread(
-      () =>
-        try
-          val in = BufferedReader(InputStreamReader(process.getErrorStream.nn, UTF_8))
-          var line = in.readLine()
-          while line != null do
-            errors.synchronized:
-              errors.append(line.nn).append('\n')
-              if errors.length > 8000 then errors.delete(0, errors.length - 8000)
-            line = in.readLine()
-        catch case NonFatal(_) => (),
-      "atc-claude-code-stderr",
-    )
-    drain.setDaemon(true)
+    val drain = Threads.daemon("atc-claude-code-stderr"): () =>
+      try
+        val in = BufferedReader(InputStreamReader(process.getErrorStream.nn, UTF_8))
+        Iterator.continually(in.readLine()).takeWhile(_ != null).foreach: line =>
+          errors.synchronized:
+            errors.append(line.nn).append('\n')
+            if errors.length > 8000 then errors.delete(0, errors.length - 8000)
+      catch case NonFatal(_) => ()
     drain.start()
     Process(
       process.getOutputStream.nn,

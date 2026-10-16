@@ -2,8 +2,7 @@ package atc
 
 import atc.sandbox.{CodeValidator, Violation}
 
-/** Static validation of agent code (migrated from TACIT's CodeValidatorSuite
-  * and CodeValidatorEvasionSuite, plus the ATC-specific rules). */
+/** Static validation of agent code: the rules, and attempts to evade them. */
 class CodeValidatorSuite extends munit.FunSuite:
   private def ids(code: String): List[String] = CodeValidator.validate(code).map(_.ruleId)
   private def assertRejected(code: String, rule: String)(using munit.Location): Unit =
@@ -464,7 +463,7 @@ class CodeValidatorSuite extends munit.FunSuite:
       "catch-type-param"
     )
   test("reject catching a parenthesised or union type parameter"):
-    // Demonstrated to swallow a real StackOverflowError in the sandbox: the arm's
+    // Either form swallows a StackOverflowError in the sandbox, so the arm's
     // ascription is scanned as a whole, not only its leading identifier.
     assertRejected("def g[T](b: => Int): String = try b.toString catch case _: (T) => \"x\"", "catch-type-param")
     assertRejected(
@@ -506,14 +505,40 @@ class CodeValidatorSuite extends munit.FunSuite:
   test("allow an @-binder over a typed (non-fatal) pattern"):
     assertAllowed("try read(\"x\") catch case e @ (_: RuntimeException) => e.getMessage")
   test("no-fp: an arm typed inside an enclosing pattern does not pull in later code"):
-    // The ascription scan used to run past the arm's closing `)` to the end of the
-    // snippet, so any later mention of a fatal type name was reported on this arm.
-    assertAllowed(
-      "case class Wrapped(e: Exception)\n" +
-        "try f() catch { case Wrapped(e: Exception) => 1 }\n" +
-        "val noted = List.empty[Throwable]"
-    )
+    // The ascription scan stops at the arm's closing `)`, so a later mention of a
+    // fatal type name is not reported on this arm.
     assertAllowed("try f() catch { case e @ (_: Exception) => 1 }\nval noted = List.empty[Throwable]")
+    assertAllowed("try f() catch { case (e: Exception) => 1 }\nval noted = List.empty[Throwable]")
+
+  // ── Extractor and identifier arms ───────────────────────────────
+
+  test("reject an extractor arm: its unapply can match fatal errors and the stop signal"):
+    val catchIt = "object CatchIt { def unapply(t: Throwable): Boolean = true }\n"
+    assertRejected(catchIt + "try f() catch case CatchIt() => true", "catch-extractor")
+    assertRejected(
+      catchIt + "try f() catch { case _: IllegalStateException => 1; case CatchIt() => 2 }",
+      "catch-extractor"
+    )
+    assertRejected(catchIt + "try f() catch case e @ CatchIt() => true", "catch-extractor")
+    assertRejected("try f() catch case Wrapped(e: Exception) => 1", "catch-extractor")
+    assertRejected("try f() catch case x.Wrapped(e) => 1", "catch-extractor")
+    assertRejected("try f()\ncatch\n  case CatchIt() =>\n    true", "catch-extractor")
+  test("reject an extractor arm that follows a typed alternative"):
+    // `case _: A | B() =>` is two alternatives, not an ascription of `A | B()`.
+    assertRejected("try f() catch case _: IllegalStateException | CatchIt() => 2", "catch-extractor")
+  test("reject an infix extractor and a stable identifier arm"):
+    assertRejected("try f() catch case a &&& b => 6", "catch-extractor")
+    assertRejected("try f() catch case a :+: b => 6", "catch-extractor")
+    assertRejected("try f() catch case Stop => 5", "catch-extractor")
+  test("reject NonFatal(e) in a catch arm: agent code can define its own NonFatal"):
+    assertRejected("try read(\"x\") catch case NonFatal(e) => \"d\"", "catch-extractor")
+  test("allow typed alternatives, parenthesised and qualified typed arms"):
+    assertAllowed("try read(\"x\") catch case _: IllegalStateException | _: IllegalArgumentException => \"d\"")
+    assertAllowed("try read(\"x\") catch case e @ (_: IllegalStateException | _: RuntimeException) => \"d\"")
+    assertAllowed("try read(\"x\") catch case _: (IllegalStateException | IllegalArgumentException) => \"d\"")
+    assertAllowed("try read(\"x\") catch case e: java.util.NoSuchElementException => \"d\"")
+    assertAllowed("try read(\"x\") catch case e: Exception if e.getMessage != null => \"d\"")
+    assertAllowed("try read(\"x\") catch { case e: Exception => List(1) match { case Some(x) => x } }")
 
   test("reject backquoted getClass") { assertRejected("x.`getClass`", "reflect-getclass") }
   test("allow getClass inside a string") { assertAllowed("""val s = "x.getClass"""") }
@@ -524,13 +549,32 @@ class CodeValidatorSuite extends munit.FunSuite:
   test("reject catching InterruptedException"):
     assertRejected("try f() catch case _: InterruptedException => ()", "throwable-interrupted")
   test("reject any use of ThreadDeath") { assertRejected("throw new ThreadDeath()", "throwable-threaddeath") }
+  test("reject @nowarn, which would silence the non-local return error"):
+    assertRejected("@annotation.nowarn def f(xs: List[Int]): Int = 0", "nowarn")
+    assertRejected("import scala.annotation.nowarn\n@nowarn(\"msg=Non local\") def f() = 0", "nowarn")
+    assertAllowed("val nowarnings = 1; val s = \"@nowarn\"")
+  test("reject the library catch helpers of scala.util.control"):
+    assertRejected("import scala.util.control.Exception.*", "catch-helper")
+    assertRejected("scala.util.control.Exception.allCatch.opt(f())", "catch-helper")
+    assertRejected("import scala.util.control.Exception.{allCatch, catching}", "catch-helper")
+    assertRejected("import scala.util.control.Breaks.*", "catch-helper")
+    assertRejected("import scala.util.control.NonLocalReturns.*", "catch-helper")
+    assertRejected("import scala.util.control.{NonFatal, Breaks}", "catch-helper")
+    assertRejected("import scala.util.control.*", "catch-helper")
+    assertRejected("import scala.util.control._", "catch-helper")
+    assertRejected("import scala.util\nutil.control\n  .Exception.allCatch.opt(f())", "catch-helper")
+  test("no-fp: the other members of scala.util.control and Exception itself stay allowed"):
+    assertAllowed("import scala.util.control.NonFatal")
+    assertAllowed("import scala.util.control.NoStackTrace")
+    assertAllowed("import scala.util.control.{NonFatal, NoStackTrace}")
+    assertAllowed("class Oops extends Exception(\"x\")\nval e = new Exception(\"y\")")
 
   test("allow catch of a specific non-fatal exception"):
     assertAllowed("try read(\"x\") catch case _: RuntimeException => \"d\"")
   test("allow catch of Exception (InterruptedException is banned separately)"):
     assertAllowed("try read(\"x\") catch case _: Exception => \"d\"")
-  test("validator does not flag NonFatal (though safe mode rejects it; prefer case _: Exception)"):
-    assertAllowed("try read(\"x\") catch case NonFatal(e) => \"d\"")
+  test("allow NonFatal outside a catch arm"):
+    assertAllowed("scala.util.Try(read(\"x\")).recover { case NonFatal(e) => \"d\" }")
   test("allow a typed catch with a binder"):
     assertAllowed("try read(\"x\") catch case e: IllegalStateException => e.getMessage")
   test("allow a match with a wildcard arm (not a catch)"):

@@ -1,5 +1,6 @@
 package atc.sandbox
 
+import atc.Threads
 import atc.lib.{Derivations, Interface}
 import atc.perms.Mode
 import atc.platform.Platform
@@ -80,6 +81,9 @@ object ReplSession:
     // Every top-level `val` bound to a Java-returning call (`s.replace(...)`)
     // would warn that it "exposes a flexible type": noise for agent code.
     "-Wconf:msg=exposes a flexible type:s",
+    // A `return` inside a lambda is a deprecated non-local return: it throws a control
+    // throwable through the code that called the lambda, which is easy to misuse.
+    "-Wconf:msg=Non local returns are no longer supported:e",
   )
 
   /** Definitions in scope before any agent code runs, for `mode`.
@@ -187,9 +191,10 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
 
   /** Load the preamble; errors here are programmer bugs and are thrown. Each
     * chunk is a separate REPL round so that every given lands in its own
-    * line-wrapper (see `preambleChunks`); a `preambleOverride` runs as one round. */
+    * line-wrapper (see `preambleChunks`); a `preambleOverride` runs as one round.
+    * Each round installs this session's host under the evaluation lock; installing it
+    * before would replace the host of a session that holds the lock. */
   def init(): this.type =
-    Sandbox.installHost(host)
     val chunks = preambleOverride.map(List(_)).getOrElse(preambleChunks(config.mode))
     chunks.foreach(setUp("Sandbox preamble", _))
     if config.safeMode then setUp("Safe mode import", SafeModeImport)
@@ -303,7 +308,7 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
       ExecutionResult.failed(InterruptedMessage)
     else
       thrown match
-        case Some(e) => ExecutionResult(false, output, Option(e.getMessage).orElse(Some(e.toString)))
+        case Some(e) => ExecutionResult(false, output, Some(Option(e.getMessage).getOrElse(e.toString)))
         case None =>
           val compileFailed = res match
             case p: Parsed => p.reporter.hasErrors
@@ -323,9 +328,7 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
     val previousIndex = state.objectIndex
     val resultRef = AtomicReference[Evaluated]()
     val started = CountDownLatch(1)
-    val worker = Thread(() => resultRef.set(evaluate(res, started)))
-    worker.setName("atc-repl-eval")
-    worker.setDaemon(true)
+    val worker = Threads.daemon("atc-repl-eval")(() => resultRef.set(evaluate(res, started)))
     evalThread = worker
     worker.start()
     try

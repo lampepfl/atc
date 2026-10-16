@@ -1,6 +1,6 @@
 package atc.agent
 
-import atc.Debug
+import atc.{Debug, TextFiles, Threads}
 import atc.llm.{ChatModel, Msg, TokenUsage}
 
 import java.util.concurrent.atomic.AtomicLong
@@ -53,8 +53,7 @@ final class InputPredictor(
         Option(worker).filter(_.isAlive) match
           case Some(current) => current.interrupt()
           case None =>
-            val next = Thread(() => work(), "atc-predict")
-            next.setDaemon(true)
+            val next = Threads.daemon("atc-predict")(() => work())
             worker = next
             next.start()
 
@@ -137,7 +136,7 @@ object InputPredictor:
   private def cut(text: String): String =
     val t = text.trim
     if t.length <= MessageChars then t
-    else AgentMessages.takeChars(t, MessageChars / 2) + " […] " + AgentMessages.takeRightChars(t, MessageChars / 2)
+    else TextFiles.takeChars(t, MessageChars / 2) + " […] " + TextFiles.takeRightChars(t, MessageChars / 2)
 
   /** The first non-empty line, unquoted and capped; empty answers and no-prediction markers are hidden. */
   def clean(answer: String): Option[String] =

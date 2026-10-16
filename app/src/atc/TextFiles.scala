@@ -1,12 +1,27 @@
 package atc
 
+import java.nio.CharBuffer
+import java.nio.charset.StandardCharsets.UTF_8
 import scala.collection.mutable
 
-/** Small, platform-independent text-file conventions used at file-format
-  * boundaries. Line splitting accepts LF, CRLF, and bare CR; rewriting uses
-  * the first ending found so mixed files have a stable convention. */
-private[atc] object TextFiles:
+/** Small, platform-independent text conventions. Line splitting accepts LF, CRLF,
+  * and bare CR; rewriting uses the first ending found so mixed files have a stable
+  * convention. Character cuts keep surrogate pairs whole. Public because the REPL
+  * rendering in `dotty.tools.repl` uses it. */
+object TextFiles:
   val DefaultLineEnding = "\n"
+
+  /** The first `n` characters of `text`, one fewer where the cut would split a surrogate pair:
+    * a lone surrogate kept in history can make a provider reject every later request. */
+  def takeChars(text: String, n: Int): String =
+    if n > 0 && n < text.length && Character.isHighSurrogate(text.charAt(n - 1)) then text.take(n - 1)
+    else text.take(n)
+
+  /** The last `n` characters of `text`, likewise without half a surrogate pair. */
+  def takeRightChars(text: String, n: Int): String =
+    val tail = text.takeRight(n)
+    if tail.length < text.length && tail.nonEmpty && Character.isLowSurrogate(tail.charAt(0)) then tail.drop(1)
+    else tail
 
   /** Number of characters occupied by a leading Unicode byte-order mark. */
   def bomLength(text: String): Int =
@@ -15,11 +30,22 @@ private[atc] object TextFiles:
   /** Drop one leading Unicode byte-order mark, leaving embedded marks alone. */
   def stripBom(text: String): String = text.substring(bomLength(text))
 
+  /** `text` as UTF-8. A lone surrogate throws `MalformedInputException`, as in `Files.writeString`,
+    * where `getBytes` would write `?` in its place. */
+  def strictUtf8(text: String): Array[Byte] =
+    val encoded = UTF_8.newEncoder().nn.encode(CharBuffer.wrap(text)).nn
+    val bytes = new Array[Byte](encoded.remaining)
+    encoded.get(bytes)
+    bytes
+
   /** One line ending and its position in the containing string. */
   final case class LineEnding(index: Int, text: String)
 
   def firstLineEnding(text: String): Option[LineEnding] =
     text.indices.iterator.flatMap(lineEndingAt(text, _)).nextOption()
+
+  /** The text of the first line ending, or [[DefaultLineEnding]] when there is none. */
+  def lineEnding(text: String): String = firstLineEnding(text).fold(DefaultLineEnding)(_.text)
 
   def lastLineEnding(text: String): Option[LineEnding] =
     text.indices.reverseIterator.flatMap { index =>
@@ -56,14 +82,14 @@ private[atc] object TextFiles:
     * ending. A missing final ending is supplied; an existing one is replaced
     * only when a mixed-ending file ends differently from its first ending. */
   def appendLine(text: String, line: String): String =
-    val lineEnding = firstLineEnding(text).fold(DefaultLineEnding)(_.text)
+    val ending = lineEnding(text)
     val prefix =
       if text.isEmpty then ""
       else
         lastLineEnding(text).filter(e => e.index + e.text.length == text.length) match
-          case Some(ending) => text.substring(0, ending.index) + lineEnding
-          case None => text + lineEnding
-    prefix + line + lineEnding
+          case Some(last) => text.substring(0, last.index) + ending
+          case None => text + ending
+    prefix + line + ending
 
   private def lineEndingAt(text: String, index: Int): Option[LineEnding] =
     if index < 0 then None

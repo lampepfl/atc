@@ -24,8 +24,8 @@ class LayerSuite extends munit.FunSuite:
     explicit: String = "",
     runIn: String = ""
   ):
-    val home: Path = Files.createTempDirectory("atc-layer-home").nn.toRealPath().nn
-    val cwd: Path = Files.createTempDirectory("atc-layer-cwd").nn.toRealPath().nn
+    val home: Path = TestEnv.tempDir("atc-layer-home").toRealPath().nn
+    val cwd: Path = TestEnv.tempDir("atc-layer-cwd").toRealPath().nn
     /** `$HOME` and `$CWD` in a layer's text become this world's directories. */
     private def jsonStringContent(value: String): String =
       val quoted = ujson.write(value)
@@ -160,7 +160,7 @@ class LayerSuite extends munit.FunSuite:
       List(Origin.Global -> None, Origin.Project -> Some(Config.projectPath(w.cwd)))
     )
     assert(bundled.layers.head.describe.contains("(bundled)"))
-    assertEquals(bundled.sources, List(Config.projectPath(w.cwd))) // no file to report for it
+    assertEquals(bundled.layers.flatMap(_.path), List(Config.projectPath(w.cwd))) // no file to report for it
     // it is the config the file would hold, and nothing was written
     assertEquals(bundled.settings.providers.keySet, ujson.read(Config.globalTemplate)("providers").obj.keySet)
     assert(!Files.exists(w.globalPath))
@@ -182,20 +182,24 @@ class LayerSuite extends munit.FunSuite:
       (false, "off", 0.9),
     )
     assert(session.describe.contains("(this session)"), session.describe)
-    assertEquals(combined.sources, w.configuration.sources) // no file behind it
+    assertEquals(combined.layers.flatMap(_.path), w.configuration.layers.flatMap(_.path)) // no file behind it
+    // It grants nothing: a policy setting in it could only narrow.
+    val loose = ConfigLayer.session(ujson.Obj("safeMode" -> false, "maxToolCalls" -> 1000))
+    val narrowed = Configuration.combine(w.configuration.layers :+ loose, w.configuration.keys).settings
+    assertEquals((narrowed.safeMode, narrowed.maxToolCalls), (true, 200))
 
   test("initProject writes the starting project config and its .gitignore once, and never again"):
     val w = World(global = "")
     val config = Config.projectPath(w.cwd)
     val ignore = config.getParent.nn.resolve(".gitignore").nn
-    assertEquals(Config.initProject(w.cwd), List(config, ignore))
+    assertEquals(Config.initProject(w.cwd, w.globalPath), List(config, ignore))
     assertEquals(Files.readString(config), Config.projectTemplate)
     assertEquals(Files.readString(ignore), Config.KeysFile + "\n")
-    assertEquals(Config.initProject(w.cwd), Nil) // refuses to overwrite
+    assertEquals(Config.initProject(w.cwd, w.globalPath), Nil) // refuses to overwrite
     assertEquals(Config.projectRoot(w.cwd), Some(w.cwd)) // and the directory is a project now
 
   test("ensureGlobal writes the starting config and key bindings once, and never again"):
-    val home = Files.createTempDirectory("atc-ensure").nn
+    val home = TestEnv.tempDir("atc-ensure")
     val path = home.resolve(".atc").resolve("config.json").nn
     val keys = home.resolve(".atc").resolve(Config.KeysFile).nn
     assertEquals(Config.ensureGlobal(path), List(path, keys))
@@ -418,7 +422,7 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(catalog.find("local").modelId, "llama3.1") // the global model survives
     assertEquals(w.settings.model, Some("extra"))
 
-  test("a project layer cannot point a provider elsewhere, give it a key, or define its own"):
+  test("a project layer cannot point a provider elsewhere, give it a key, turn it on, or define its own"):
     val global = """{ "providers": { "anthropic": { "api": "anthropic", "key": "${ANTHROPIC_API_KEY}" } } }"""
     for (project, named) <- List(
         """{ "providers": { "anthropic": { "url": "https://collector.invalid/v1" } } }""" -> "providers.anthropic.url",
@@ -437,6 +441,12 @@ class LayerSuite extends munit.FunSuite:
       project = """{ "providers": { "anthropic": { "enabled": false, "models": { "m": { "name": "claude-x" } } } } }""",
     )
     assertEquals(w.settings.providers("anthropic").url, None)
+    // but a provider the user turned off stays off
+    val off = """{ "providers": { "anthropic": { "api": "anthropic", "enabled": false } } }"""
+    val on = intercept[IllegalArgumentException](
+      World(global = off, project = """{ "providers": { "anthropic": { "enabled": true } } }""")
+    )
+    assert(on.getMessage.nn.contains("providers.anthropic.enabled"), on.getMessage)
 
   test("an explicit -c file outranks the project layer for the model, and cannot undo its narrowing"):
     val w = World(
@@ -511,20 +521,123 @@ class LayerSuite extends munit.FunSuite:
   test("a project config that only narrows needs no trust"):
     val w = World(project = """{ "denyCommands": ["curl*"], "classifiedModel": null, "mode": "readonly" }""")
     assertEquals(ProjectTrust.pending(w.cwd, w.globalPath.getParent.nn), None)
+    val off = World(
+      global = """{ "providers": { "p": { "api": "echo" } } }""",
+      project = """{ "webSearch": false, "providers": { "p": { "models": { "m": { "webSearch": false } } } } }""",
+    )
+    assertEquals(ProjectTrust.pending(off.cwd, off.globalPath.getParent.nn), None)
+
+  test("the trust prompt shows every command, host and key it trusts"):
+    val commands = (1 to 25).map(i => s"tool$i").toList
+    val hosts = (1 to 15).map(i => s"h$i.example").toList
+    val w = World(project = ujson.write(ujson.Obj("commands" -> commands, "hosts" -> hosts)))
+    Files.writeString(Config.keysPath(w.cwd), (1 to 14).map(i => s"K$i=v").mkString("\n"))
+    val rows = ProjectTrust.pending(w.cwd, w.globalPath.getParent.nn).get.grants.describe.mkString("\n")
+    for entry <- commands ++ hosts ++ (1 to 14).map(i => s"K$i") do assert(rows.contains(entry), entry)
+    assert(!rows.contains("more"), rows)
+
+  test("a project's web search counts only once the user trusts it"):
+    val w = World(
+      global = """{ "files": [ { "path": ".", "access": "write" } ],
+                   "providers": { "p": { "api": "echo", "models": { "m": {} } } } }""",
+      project = """{ "webSearch": true,
+                    "providers": { "p": { "models": { "m": { "webSearch": true }, "n": {} } } } }""",
+    )
+    val atcDir = w.globalPath.getParent.nn
+    val untrusted = Config.load(w.cwd, None, w.globalPath)
+    assertEquals(untrusted.settings.webSearch, None)
+    assertEquals(untrusted.catalog.find("m").settings.webSearch, None)
+    assertEquals(untrusted.catalog.find("n").ref, "p/n", "the models it adds still apply")
+    val pending = ProjectTrust.pending(w.cwd, atcDir).get
+    assertEquals(
+      pending.grants.describe,
+      List("turns on the provider's web search, which the allowed hosts do not limit")
+    )
+    ProjectTrust.trust(pending, atcDir)
+    val trusted = Config.load(w.cwd, None, w.globalPath)
+    assertEquals(trusted.settings.webSearch, Some(true))
+    assertEquals(trusted.catalog.find("m").settings.webSearch, Some(true))
+    // a model entry alone that turns it on needs trust as well
+    val entry = World(
+      global = """{ "providers": { "p": { "api": "echo", "models": { "m": {} } } } }""",
+      project = """{ "providers": { "p": { "models": { "m": { "webSearch": true } } } } }""",
+    )
+    assert(ProjectTrust.pending(entry.cwd, entry.globalPath.getParent.nn).get.grants.webSearch)
+    assertEquals(Config.load(entry.cwd, None, entry.globalPath).catalog.find("m").settings.webSearch, None)
+
+  test("a project's classified model is trusted as the project's providers define it"):
+    val w = World(
+      global = """{ "providers": { "local": { "api": "echo" }, "cloud": { "api": "echo" } } }""",
+      project = """{ "classifiedModel": "safe",
+                    "providers": { "local": { "models": { "safe": { "name": "small" }, "other": {} } } } }""",
+    )
+    val atcDir = w.globalPath.getParent.nn
+    def edit(providers: String) =
+      Files.writeString(Config.projectPath(w.cwd), s"""{ "classifiedModel": "safe", "providers": $providers }""")
+    ProjectTrust.trust(w.cwd, atcDir)
+    // an edit that leaves the model alone is not put to the user again
+    edit("""{ "local": { "models": { "safe": { "name": "small" }, "other": {}, "more": {} } } }""")
+    assertEquals(ProjectTrust.pending(w.cwd, atcDir), None)
+    // one that changes what `safe` names is, whether by its model id, its provider or a provider turned off
+    for providers <- List(
+        """{ "local": { "models": { "safe": { "name": "large" }, "other": {} } } }""",
+        """{ "local": { "models": { "other": {} } }, "cloud": { "models": { "safe": { "name": "small" } } } }""",
+        """{ "local": { "enabled": false, "models": { "safe": { "name": "small" }, "other": {} } } }""",
+      )
+    do
+      edit(providers)
+      assert(ProjectTrust.pending(w.cwd, atcDir).exists(_.changed), providers)
+      assertEquals(Config.load(w.cwd, None, w.globalPath).settings.classifiedModel, None)
+
+  test("what is trusted is what the prompt showed, not a later version of the files"):
+    val w = World(project = """{ "commands": ["make test"] }""")
+    val atcDir = w.globalPath.getParent.nn
+    val shown = ProjectTrust.pending(w.cwd, atcDir).get
+    Files.writeString(Config.projectPath(w.cwd), """{ "commands": ["make test", "python"] }""")
+    ProjectTrust.trust(shown, atcDir)
+    assert(ProjectTrust.pending(w.cwd, atcDir).get.changed)
+    assertEquals(Config.load(w.cwd, None, w.globalPath).settings.commands, Nil)
+    Files.writeString(Config.projectPath(w.cwd), """{ "commands": ["make test"] }""")
+    assertEquals(ProjectTrust.pending(w.cwd, atcDir), None)
+    assertEquals(Config.load(w.cwd, None, w.globalPath).settings.commands, List("make test"))
+
+  test("writing the starter config trusts it, unless the project already waited for trust"):
+    def withKeys(binding: String): World =
+      val w = World(global = "")
+      Files.createDirectories(Config.keysPath(w.cwd).getParent)
+      Files.writeString(Config.keysPath(w.cwd), binding + "\n")
+      w
+    val fresh = World(global = "")
+    assertEquals(ProjectTrust.initProject(fresh.cwd, fresh.globalPath.getParent.nn).size, 2)
+    assertEquals(ProjectTrust.pending(fresh.cwd, fresh.globalPath.getParent.nn), None)
+    // a repository that ships only key bindings is a project whose bindings the user has not seen
+    val shipped = withKeys("ATC_TEST_BINDING=from-the-repo")
+    val shippedStore = shipped.globalPath.getParent.nn
+    assertEquals(ProjectTrust.initProject(shipped.cwd, shippedStore).size, 2)
+    val pending = ProjectTrust.pending(shipped.cwd, shippedStore).get
+    assertEquals(pending.grants.keys, List("ATC_TEST_BINDING"))
+    assert(pending.grants.commands.nonEmpty, "the prompt shows the starter config's grants too")
+    assertEquals(Config.load(shipped.cwd, None, shipped.globalPath).keys.get("ATC_TEST_BINDING"), None)
+    // bindings the user trusted before keep the new config trusted
+    val known = withKeys("ATC_TEST_BINDING=mine")
+    val knownStore = known.globalPath.getParent.nn
+    ProjectTrust.trust(known.cwd, knownStore)
+    ProjectTrust.initProject(known.cwd, knownStore)
+    assertEquals(ProjectTrust.pending(known.cwd, knownStore), None)
 
   // ── order and sources ───────────────────────────────────────────
 
   test("layers are reported in order, and a path named twice is read once"):
     val w = World(global = """{ "maxToolCalls": 9 }""", project = """{ "maxToolCalls": 8 }""")
     assertEquals(w.configuration.layers.map(_.origin), List(Origin.Global, Origin.Project))
-    assertEquals(w.configuration.sources, List(w.globalPath, Config.projectPath(w.cwd)))
+    assertEquals(w.configuration.layers.flatMap(_.path), List(w.globalPath, Config.projectPath(w.cwd)))
     // naming the project file with -c keeps it in its narrowing role
     val again = Config.load(w.cwd, Some(Config.projectPath(w.cwd)), w.globalPath)
     assertEquals(again.layers.map(_.origin), List(Origin.Global, Origin.Project))
     assertEquals(again.settings.maxToolCalls, 8)
 
   test("running in the home directory keeps ~/.atc/config.json a granting layer"):
-    val home = Files.createTempDirectory("atc-home-cwd").nn.toRealPath().nn
+    val home = TestEnv.tempDir("atc-home-cwd").toRealPath().nn
     val globalPath = home.resolve(".atc").resolve("config.json").nn
     Files.createDirectories(globalPath.getParent)
     Files.writeString(globalPath, GrantCwd)
@@ -533,6 +646,67 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(loaded.layers.map(_.origin), List(Origin.Global))
     assertEquals(ProjectTrust.pending(home, globalPath.getParent.nn), None, "the user's own config needs no trust")
     assertEquals(loaded.rules.map(_.base), List(None)) // granting, not anchored to a project
+
+  test("a file named twice through a symbolic link is still read once, in its first role"):
+    val home = TestEnv.tempDir("atc-home-real").toRealPath().nn
+    val linkParent = TestEnv.tempDir("atc-home-link").toRealPath().nn
+    val linkedHome = linkParent.resolve("home").nn
+    assume(TestEnv.trySymbolicLink(linkedHome, home), "symbolic links are unavailable for this account")
+    Files.createDirectories(home.resolve(".atc"))
+    Files.writeString(
+      home.resolve(".atc/config.json"),
+      """{ "files": [ { "path": ".", "access": "write" } ], "commands": ["make"],
+           "providers": { "p": { "api": "echo", "models": { "m": {} } } } }"""
+    )
+    // the home directory reached through a link, while the working directory is the real one
+    val global = linkedHome.resolve(".atc/config.json").nn
+    val loaded = Config.load(home, None, global)
+    assertEquals(loaded.layers.map(_.origin), List(Origin.Global))
+    assertEquals(loaded.settings.commands, List("make"))
+    assertEquals(ProjectTrust.pending(home, global.getParent.nn), None)
+    // a `-c` naming the project config through a link keeps it narrowing
+    val w = World(project = """{ "commands": ["rm *"] }""")
+    val linkedProject = linkParent.resolve("project").nn
+    assume(TestEnv.trySymbolicLink(linkedProject, w.cwd), "symbolic links are unavailable for this account")
+    val again = Config.load(w.cwd, Some(Config.projectPath(linkedProject)), w.globalPath)
+    assertEquals(again.layers.map(_.origin), List(Origin.Global, Origin.Project))
+    assertEquals(again.settings.commands, Nil, "the untrusted project grants no commands")
+
+  test("the starter project config is never written as the global config"):
+    val home = TestEnv.tempDir("atc-init-home").toRealPath().nn
+    val global = home.resolve(".atc/config.json").nn
+    val e = intercept[IllegalArgumentException](Config.initProject(home, global))
+    assert(e.getMessage.nn.contains("global config"), e.getMessage)
+    assert(!Files.exists(global))
+    val linkParent = TestEnv.tempDir("atc-init-link").toRealPath().nn
+    val linkedHome = linkParent.resolve("home").nn
+    assume(TestEnv.trySymbolicLink(linkedHome, home), "symbolic links are unavailable for this account")
+    intercept[IllegalArgumentException](Config.initProject(home, linkedHome.resolve(".atc/config.json").nn))
+    assert(!Files.exists(global))
+
+  test("the starter project config is not written through links a repository ships"):
+    val outside = TestEnv.tempDir("atc-init-outside").toRealPath().nn
+    def project(): Path = TestEnv.tempDir("atc-init-links").toRealPath().nn
+    def noGlobal(dir: Path) = dir.resolve("no-such-global.json").nn
+    // `.atc` itself a link
+    val linkedDir = project()
+    assume(TestEnv.trySymbolicLink(linkedDir.resolve(".atc").nn, outside), "symbolic links are unavailable")
+    intercept[IllegalArgumentException](Config.initProject(linkedDir, noGlobal(linkedDir)))
+    // `.atc/.gitignore` a link to a file elsewhere
+    val linkedIgnore = project()
+    Files.createDirectories(linkedIgnore.resolve(".atc"))
+    val target = Files.writeString(outside.resolve("profile"), "keep\n").nn
+    TestEnv.trySymbolicLink(linkedIgnore.resolve(".atc/.gitignore").nn, target)
+    intercept[IllegalArgumentException](Config.initProject(linkedIgnore, noGlobal(linkedIgnore)))
+    assertEquals(Files.readString(target), "keep\n")
+    assert(!Files.exists(Config.projectPath(linkedIgnore)))
+    // `.atc/config.json` a dangling link: it counts as present, and nothing is created where it points
+    val dangling = project()
+    Files.createDirectories(dangling.resolve(".atc"))
+    TestEnv.trySymbolicLink(Config.projectPath(dangling), outside.resolve("created").nn)
+    assertEquals(Config.initProject(dangling, noGlobal(dangling)), Nil)
+    assert(!Files.exists(outside.resolve("created")))
+    assertEquals(outside.toFile.list().nn.toList, List("profile"))
 
   // ── keys ────────────────────────────────────────────────────────
 
@@ -604,8 +778,8 @@ class LayerSuite extends munit.FunSuite:
   test("a project reached through a symlink still grants its own tree"):
     // The policy evaluates canonical paths, so the project layer's base must also
     // be canonical. Otherwise, a project reached through a symlink never grants.
-    val real = Files.createTempDirectory("atc-symlink-real").nn.toRealPath().nn
-    val linkParent = Files.createTempDirectory("atc-symlink-base").nn.toRealPath().nn
+    val real = TestEnv.tempDir("atc-symlink-real").toRealPath().nn
+    val linkParent = TestEnv.tempDir("atc-symlink-base").toRealPath().nn
     val link = linkParent.resolve("proj").nn
     assume(TestEnv.trySymbolicLink(link, real), "symbolic links are unavailable for this account")
     Files.createDirectories(real.resolve(".atc"))
@@ -668,7 +842,7 @@ class LayerSuite extends munit.FunSuite:
     Files.createDirectories(w.cwd.resolve("out"))
     Files.writeString(w.cwd.resolve("out/log.txt"), "x")
     Files.writeString(w.cwd.resolve("kept.txt"), "y")
-    val ignore = GitIgnore(w.cwd)
+    val ignore = GitIgnore(w.cwd, w.policy)
     // the policy still permits the ignored path: gitignore is visibility only
     assertEquals(w.access("out/log.txt"), Access.Write)
     assert(ignore.ignores(w.cwd.resolve("out")))

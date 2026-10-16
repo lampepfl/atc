@@ -1,6 +1,6 @@
 package atc
 
-import atc.config.{Config, KeyBindings, ModelCatalog, ModelSpec, ProviderPreset}
+import atc.config.{KeyBindings, ModelCatalog, ModelSpec, ProviderConfig, ProviderPreset}
 import atc.llm.ChatGPTAuth
 import atc.ui.Menus
 
@@ -67,16 +67,16 @@ object FirstRun:
     keys: KeyBindings,
     list: ModelSpec => List[ModelSpec],
     signIn: Ui => Boolean,
-  ): Option[Outcome] =
+  ): Option[Outcome.Ready] =
     def ask(): Option[String] =
       preset.keyUrl.foreach(url => ui.info(s"Create a key at $url"))
       ui.askSecret(s"Paste your ${preset.label} API key (saved in ~/.atc/keys.properties, readable only by you)")
 
-    @tailrec def attempt(typed: Option[String]): Option[Outcome] =
+    @tailrec def attempt(typed: Option[String]): Option[Outcome.Ready] =
       val bindings = (preset.keyVariable, typed) match
         case (Some(name), Some(key)) => KeyBindings((Path.of("(typed)"), Map(name -> key)) :: keys.files)
         case _ => keys
-      endpoint(preset, bindings) match
+      ModelCatalog.endpoint(preset.name, preset.config, bindings) match
         case None =>
           ask() match
             case None => None
@@ -91,7 +91,7 @@ object FirstRun:
             case Right(Nil) =>
               ui.error(s"${preset.label} lists no models.")
               None
-            case Right(models) => chooseModel(ui, models).map(Outcome.Ready(preset, typed, spec, models, _))
+            case Right(models) => chooseModel(ui, models).map(new Outcome.Ready(preset, typed, spec, models, _))
             case Left(why) =>
               ui.error(s"Could not list the models of ${preset.label}: $why")
               // Without a key there is nothing to correct (a local server that is not running).
@@ -101,7 +101,7 @@ object FirstRun:
                   case None => None
                   case Some(key) => attempt(Some(key))
 
-    if preset.api == "chatgpt" && !signIn(ui) then None else attempt(None)
+    if ProviderConfig.canonicalApi(preset.api).contains("chatgpt") && !signIn(ui) then None else attempt(None)
 
   /** Sign in with a ChatGPT plan in the browser, unless already signed in and not `again`. */
   def signIn(ui: Ui, auth: ChatGPTAuth, openBrowser: String => Boolean, again: Boolean): Boolean =
@@ -150,11 +150,6 @@ object FirstRun:
     ui.choose("Choose a model", labels :+ Menus.BackLabel).flatMap: label =>
       models.zip(labels).collectFirst { case (m, l) if l == label => m }
 
-  /** The provider as the catalog resolves it; `None` when its key is not bound. */
-  private def endpoint(preset: ProviderPreset, keys: KeyBindings): Option[ModelSpec] =
-    ModelCatalog.from(Config(providers = Map(preset.name -> preset.config)), keys).discoverable.headOption
-
   /** The messages of `e` and its causes: an SDK's "Request failed" alone does not say why. */
   private def reasons(e: Throwable): String =
-    Iterator.iterate[Throwable | Null](e)(_.nn.getCause).takeWhile(_ != null).take(8)
-      .flatMap(t => Option(t.nn.getMessage)).filter(_.nonEmpty).distinct.mkString(": ")
+    Debug.causes(e).flatMap(t => Option(t.getMessage)).filter(_.nonEmpty).distinct.mkString(": ")

@@ -20,34 +20,17 @@ final class CappedRendering(parent: Option[ClassLoader], maxChars: Int) extends 
   @volatile var threw: Boolean = false
   def resetThrew(): Unit = threw = false
 
+  /** The trace of an exception the snippet threw, without the frames in the host or the
+    * runtime. Only this trace is trimmed: what the snippet printed reaches the model as is. */
   override def renderError(thr: Throwable, d: Denotation)(using Context): Diagnostic =
     threw = true
-    super.renderError(thr, d)
-
-  /** Values of the capture-checked API types echo with an explicit empty capture
-    * set (`val r: ProcessResult^{} = ...`). The agent may copy that into its own
-    * annotations, so the echoed signatures drop it. */
-  private def withoutEmptyCaptureSets(diag: Diagnostic)(using Context): Diagnostic =
-    val text = diag.message
-    if !text.contains("^{}") then diag
-    else Diagnostic(NoExplanation(text.replace("^{}", "")), diag.pos, diag.level)
-
-  override def renderVal(d: Denotation)(using Context): Either[ReflectiveOperationException, Option[Diagnostic]] =
-    super.renderVal(d).map(_.map(withoutEmptyCaptureSets))
-
-  override def renderMethod(d: Denotation)(using Context): Diagnostic = withoutEmptyCaptureSets(super.renderMethod(d))
-
-  override def renderTypeDef(d: Denotation)(using Context): Diagnostic =
-    withoutEmptyCaptureSets(super.renderTypeDef(d))
-
-  override def renderTypeAlias(d: Denotation)(using Context): Diagnostic =
-    withoutEmptyCaptureSets(super.renderTypeAlias(d))
+    val diag = super.renderError(thr, d)
+    Diagnostic(NoExplanation(atc.sandbox.ExecutionResult.trimStackFrames(diag.message)), diag.pos, diag.level)
 
   override def replStringOf(value: Object, prefixLength: Int)(using Context): fansi.Str =
     val full = super.replStringOf(value, prefixLength)
     if full.length <= maxChars then full
     else
       val text = full.plainText // same length as `full`
-      // Do not cut in the middle of a surrogate pair, as an emoji has.
-      val cut = if maxChars > 0 && Character.isHighSurrogate(text.charAt(maxChars - 1)) then maxChars - 1 else maxChars
-      fansi.Str(text.take(cut) + s"… [${text.length - cut} more characters not shown; println the value to see all]")
+      val kept = atc.TextFiles.takeChars(text, maxChars)
+      fansi.Str(kept + s"… [${text.length - kept.length} more characters not shown; println the value to see all]")

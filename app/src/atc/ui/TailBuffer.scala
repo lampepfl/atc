@@ -5,7 +5,7 @@ package atc.ui
   * possible, or within a line when necessary to enforce the character limit.
   * The buffer grows to half as much again before it is cut back to `cap`, so a
   * stream of small appends does not move the whole text on each one. */
-private[atc] final class TailBuffer(cap: Int):
+private[ui] final class TailBuffer(cap: Int):
   private val sb = StringBuilder()
   private var newlines = 0L
   def append(text: String): Unit =
@@ -34,6 +34,6 @@ private[atc] final class TailBuffer(cap: Int):
         case ls => ls
   def clear(): Unit = { sb.clear(); newlines = 0 }
 
-private[atc] object TailBuffer:
+private[ui] object TailBuffer:
   /** Cap on the text a live view retains (the front is dropped whole lines). */
   val MaxChars: Int = 1024 * 1024

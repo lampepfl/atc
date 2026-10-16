@@ -108,7 +108,7 @@ class FirstRunSuite extends munit.FunSuite:
   // ── what setup writes ───────────────────────────────────────────
 
   test("the global config written for one provider keeps the protections and names only that provider"):
-    val path = Files.createTempDirectory("atc-first").nn.resolve("config.json").nn
+    val path = TestEnv.tempDir("atc-first").resolve("config.json").nn
     assertEquals(Config.writeGlobalConfig(path, List(preset("deepseek"))), Some(path))
     val c = upickle.default.read[Config](Files.readString(path).nn)
     assertEquals(c.providers.keySet, Set("deepseek"))
@@ -121,7 +121,7 @@ class FirstRunSuite extends munit.FunSuite:
     assertEquals(Config.writeGlobalConfig(path, presets), None, "an existing config is left alone")
 
   test("a preset's headers reach the written config and the listing request"):
-    val path = Files.createTempDirectory("atc-first").nn.resolve("config.json").nn
+    val path = TestEnv.tempDir("atc-first").resolve("config.json").nn
     Config.writeGlobalConfig(path, List(preset("opencode-go")))
     val written = upickle.default.read[Config](Files.readString(path).nn).providers("opencode-go")
     assertEquals(written.headers, Map("x-opencode-session" -> ProviderConfig.SessionRef))
@@ -138,7 +138,7 @@ class FirstRunSuite extends munit.FunSuite:
     assertEquals(seen.map(_.headers).toList, List(Map("x-opencode-session" -> ProviderConfig.SessionRef)))
 
   test("binding a key keeps the other lines of the keys file and replaces the old binding"):
-    val path = Files.createTempDirectory("atc-first").nn.resolve("keys.properties").nn
+    val path = TestEnv.tempDir("atc-first").resolve("keys.properties").nn
     KeyBindings.bind(path, "A_KEY", "one")
     if !Platform.isWindows then
       assertEquals(PosixFilePermissions.toString(Files.getPosixFilePermissions(path)), "rw-------")

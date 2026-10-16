@@ -70,9 +70,14 @@ private[ui] final class Screen(val terminal: Terminal, val plain: Boolean, val g
 
   /** What goes before clearing the window: the footer's scroll region lifted and its row
     * erased. VS Code moves a cleared window into the scrollback instead of erasing it, and
-    * only the rows inside the scroll region, so the old footer stayed below the cleared rows
-    * and the redrawn footer scrolled it up into view: the footer showed twice. */
+    * only the rows inside the scroll region; without this the old footer would stay below
+    * the cleared rows, and the footer drawn again would scroll it into view a second time. */
   def beforeClear: String = s"${Ansi.Esc}[r${Ansi.Esc}[$height;1H${Ansi.Esc}[2K"
+
+  /** Clear the window and its scrollback; what follows starts at the top. */
+  def clear(): Unit =
+    writeStyle(s"$beforeClear${Ansi.Esc}[H${Ansi.Esc}[2J${Ansi.Esc}[3J")
+    tail = "\n\n"
 
   def atLineStart: Boolean = tail.endsWith("\n")
   def ensureNewline(): Unit = if !atLineStart then write("\n")
@@ -198,7 +203,7 @@ private[ui] final class Screen(val terminal: Terminal, val plain: Boolean, val g
 object Screen:
   /** Replace owned rows with the cursor initially just below them. Leave everything below
     * that region intact and finish immediately below the replacement. */
-  private[atc] def replaceRows(before: List[String], after: List[String], force: Boolean = false): String =
+  private[ui] def replaceRows(before: List[String], after: List[String], force: Boolean = false): String =
     val prefix = if force then 0 else before.zip(after).takeWhile((a, b) => a == b).size
     val update = StringBuilder()
     if before.size > prefix then update.append(s"\r${Ansi.Esc}[${before.size - prefix}A")
@@ -210,20 +215,6 @@ object Screen:
     if removed > 1 then update.append(s"${Ansi.Esc}[${removed - 1}A")
     update.toString
 
-  /** Where a chunk of text lands on screen: the number of terminal rows it
-    * adds to a section whose last row already holds `column` characters, and
-    * the column it ends at (0 when it ended the line). A fresh row starts with
-    * a gutter, hence `indent`; a line always takes at least one row. */
-  def place(column: Int, text: String, width: Int, indent: Int): (rows: Int, column: Int) =
-    val body = text.stripSuffix("\n")
-    val start = if column == 0 then indent else column
-    val end = start + displayWidth(body)
-    val rows = math.max(1, (end + width - 1) / width)
-    (
-      rows = if column == 0 then rows else rows - 1, // the row we started on was already counted
-      column = if text.endsWith("\n") then 0 else { val c = end % width; if c == 0 then width else c },
-    )
-
   /** Width in terminal cells of one code point placed at column `col`: a tab
     * advances to the next multiple of 8, wide (CJK) code points count 2, other
     * controls 0. `String.length` counts UTF-16 units and undercounts all of these,
@@ -234,8 +225,9 @@ object Screen:
   /** `text` with a line break wherever it would pass `room` cells, for a row that already
     * holds `column` cells, and the column it ends at. Output is shown verbatim, so it breaks
     * where the row ends rather than between words; left to the terminal, the rest of a long
-    * line would continue at column 0, outside its block's gutter. */
-  def breakLines(text: String, column: Int, room: Int): (String, Int) =
+    * line would continue at column 0, outside its block's gutter. Rows are written from
+    * screen column `origin`, which tab stops count from. */
+  def breakLines(text: String, column: Int, room: Int, origin: Int = 0): (String, Int) =
     val out = StringBuilder()
     var col = column
     var i = 0
@@ -248,17 +240,20 @@ object Screen:
         val cp = text.codePointAt(i)
         if cp == '\n' then col = 0
         else
-          val w = cellWidth(cp, col)
+          val w = cellWidth(cp, origin + col)
           if col > 0 && col + w > room then
             out.append('\n')
             col = 0
-          col += cellWidth(cp, col)
+          col += cellWidth(cp, origin + col)
         out.appendAll(Character.toChars(cp))
         i += Character.charCount(cp)
     (out.toString, col)
 
   /** Display width in terminal cells of `s` starting at column 0; SGR sequences take none. */
-  def displayWidth(s: String): Int =
+  def displayWidth(s: String): Int = displayWidth(s, 0)
+
+  /** As [[displayWidth]] for text written from screen column `origin`, which tab stops count from. */
+  def displayWidth(s: String, origin: Int): Int =
     var w = 0
     var i = 0
     while i < s.length do
@@ -266,12 +261,12 @@ object Screen:
       if styleEnd > 0 then i = styleEnd
       else
         val cp = s.codePointAt(i)
-        w += cellWidth(cp, w)
+        w += cellWidth(cp, origin + w)
         i += Character.charCount(cp)
     w
 
   /** The end of the SGR sequence (`ESC [ … m`) starting at `i`, or -1 when there is none. */
-  private[atc] def sgrEnd(s: String, i: Int): Int =
+  private[ui] def sgrEnd(s: String, i: Int): Int =
     if i + 1 < s.length && s.charAt(i) == '\u001b' && s.charAt(i + 1) == '[' then
       var k = i + 2
       while k < s.length && (s.charAt(k).isDigit || s.charAt(k) == ';') do k += 1
