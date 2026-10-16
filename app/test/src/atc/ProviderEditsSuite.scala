@@ -67,7 +67,7 @@ class ProviderEditsSuite extends munit.FunSuite:
       id,
       None,
       None,
-      ModelConfig(contextWindow = Some(Tokens(200000)), efforts = Some(List("low")))
+      ModelConfig(contextWindow = Some(Tokens(200000)), efforts = Some(List("low")), reasoning = Some("low"))
     )
   )
 
@@ -85,12 +85,18 @@ class ProviderEditsSuite extends munit.FunSuite:
         Edit(List("providers", "p", "models", "b", "enabled"), Some(ujson.False)),
         Edit(
           List("providers", "p", "models", "big"),
-          Some(ujson.Obj("name" -> "vendor/big", "contextWindow" -> "200k", "efforts" -> ujson.Arr("low")))
+          Some(ujson.Obj(
+            "name" -> "vendor/big",
+            "contextWindow" -> "200k",
+            "efforts" -> ujson.Arr("low"),
+            "reasoning" -> "low"
+          ))
         ),
       )
     )
-    val written = upickle.default.read[Config](apply(text, edits*))
+    val written = ConfigValidation.validate(upickle.default.read[Config](apply(text, edits*)))
     assertEquals(ModelCatalog.from(written).configured.map(_.ref), List("p/a", "p/big"))
+    assertEquals(ModelCatalog.from(written).find("big").settings.reasoning, Some("low"), "it keeps the listed effort")
 
   test("a listed id gets an alias without a slash that no entry uses"):
     assertEquals(ProviderEdits.aliasFor("vendor/big", Set.empty), "big")

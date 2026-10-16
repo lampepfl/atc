@@ -67,6 +67,9 @@ object ProviderEdits:
           "contextWindow" -> short.toIntOption.fold[ujson.Value](ujson.Str(short))(ujson.Num(_))
         } ++
         s.efforts.map(e => "efforts" -> ujson.Arr.from(e.map(ujson.Str(_)))) ++
+        // The default effort the list reported, which the listed model starts with; validation
+        // refuses a level the config does not know.
+        s.reasoning.filter(ModelConfig.ReasoningEfforts.contains).map("reasoning" -> ujson.Str(_)) ++
         s.thinking.map("thinking" -> ujson.Bool(_))
     )
 

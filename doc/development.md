@@ -793,8 +793,9 @@ menus never ask.
 **Turning providers and models on and off.** `"enabled": false` on a provider or a model
 hides it; a disabled provider is never listed. `/providers` edits these switches and the
 model entries in place (`ObjectText.withMember` keeps the file's formatting). Choosing models
-for a provider that lists its own writes the ticked ones as entries with the context
-window, efforts and display name the list reported, which makes them its shortlist;
+for a provider that lists its own writes the ticked ones as entries with the display name,
+context window, efforts, default effort (`reasoning`) and `thinking` support the list
+reported, which makes them its shortlist;
 *Offer every model it lists* drops the entries again. A listed id with `/` gets an alias
 without one (`ProviderEdits.aliasFor`). Each edit goes to the last layer holding the
 longest part of its path (`ProviderEdits.owner`), because layers merge a model entry as a
