@@ -163,6 +163,14 @@ object CodeValidator:
       raw"\bThreadDeath\b".r,
       "ThreadDeath is the sandbox stop signal and may not be used in agent code"
     ),
+    // Library catch helpers catch inside trusted code, where no catch rule can see them:
+    // `Exception.allCatch` catches every throwable, the stop signal included. Safe mode
+    // rejects them; without it this rule covers a qualified use, a selector and a wildcard import.
+    Forbidden(
+      "catch-helper",
+      raw"\bcontrol\.(?:(?:\{[^}]*\b)?(?:Breaks|Exception|NonLocalReturns)\b|\*|_\b|\{\s*[*_]\s*\})".r,
+      "scala.util.control.Exception, Breaks and NonLocalReturns are forbidden: they catch fatal errors, the stop signal or control throwables inside the library; use try/catch with a typed arm"
+    ),
     // Directives
     Forbidden("directive-using", raw"//>\s*using".r, "//> using directives are forbidden"),
     Forbidden("directive-import", """import\s+\$""".r, "import $ directives are forbidden"),

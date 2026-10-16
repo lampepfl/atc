@@ -377,7 +377,10 @@ compiler's API restrictions.
 Every catch arm must be a typed pattern (`case e: IllegalStateException =>`) of a type that
 is not fatal. A bare catch-all, a catch of `Throwable` or `Error`, and an extractor or
 identifier arm (`case NonFatal(e) =>`, whose `unapply` agent code can define) could catch
-the `ThreadDeath` stop signal, so a loop could outlast an interrupt or a timeout.
+the `ThreadDeath` stop signal, so a loop could outlast an interrupt or a timeout. The
+library catch helpers `scala.util.control.Exception`, `Breaks` and `NonLocalReturns` catch
+inside trusted code, where these rules cannot see the catch. Safe mode rejects them, and the
+validator rejects them too for sessions without safe mode.
 
 `SandboxLoader` shares `scala.*` and `atc.lib.*` with the application, excluding compiler
 implementation packages. Other classes resolve through the JDK platform loader. Class

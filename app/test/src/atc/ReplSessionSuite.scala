@@ -266,6 +266,11 @@ class ReplSessionSuite extends munit.FunSuite:
     assertFails(nosafe.run("""val hiddenRuntime = Runtime; hiddenRuntime.rootIO"""), "atc-runtime")
     assertFails(nosafe.run("""import java.{io as jio}; new jio.File("/etc/passwd").exists"""), "import-alias")
     assertFails(nosafe.run("""Runtime.`rootIO`"""), "atc-runtime")
+  test("no safe mode: the library catch helpers are rejected before they run"):
+    // allCatch would swallow the stop signal, and Breaks a control throwable from a callback.
+    assertFails(nosafe.run("import scala.util.control.Exception.allCatch\nallCatch.opt(1)"), "catch-helper")
+    assertFails(nosafe.run("scala.util.control.Breaks.breakable { 1 }"), "catch-helper")
+    assertFails(nosafe.run("import scala.util.control.NonLocalReturns.*\nreturning { 1 }"), "catch-helper")
   test("no safe mode: :imports lacks the safe import"):
     assert(!assertOk(nosafe.run(":imports")).output.contains("experimental.safe"))
   test("no safe mode: capture checking still prevents leaks"):

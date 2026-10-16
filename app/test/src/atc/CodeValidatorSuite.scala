@@ -550,6 +550,21 @@ class CodeValidatorSuite extends munit.FunSuite:
   test("reject catching InterruptedException"):
     assertRejected("try f() catch case _: InterruptedException => ()", "throwable-interrupted")
   test("reject any use of ThreadDeath") { assertRejected("throw new ThreadDeath()", "throwable-threaddeath") }
+  test("reject the library catch helpers of scala.util.control"):
+    assertRejected("import scala.util.control.Exception.*", "catch-helper")
+    assertRejected("scala.util.control.Exception.allCatch.opt(f())", "catch-helper")
+    assertRejected("import scala.util.control.Exception.{allCatch, catching}", "catch-helper")
+    assertRejected("import scala.util.control.Breaks.*", "catch-helper")
+    assertRejected("import scala.util.control.NonLocalReturns.*", "catch-helper")
+    assertRejected("import scala.util.control.{NonFatal, Breaks}", "catch-helper")
+    assertRejected("import scala.util.control.*", "catch-helper")
+    assertRejected("import scala.util.control._", "catch-helper")
+    assertRejected("import scala.util\nutil.control\n  .Exception.allCatch.opt(f())", "catch-helper")
+  test("no-fp: the other members of scala.util.control and Exception itself stay allowed"):
+    assertAllowed("import scala.util.control.NonFatal")
+    assertAllowed("import scala.util.control.NoStackTrace")
+    assertAllowed("import scala.util.control.{NonFatal, NoStackTrace}")
+    assertAllowed("class Oops extends Exception(\"x\")\nval e = new Exception(\"y\")")
 
   test("allow catch of a specific non-fatal exception"):
     assertAllowed("try read(\"x\") catch case _: RuntimeException => \"d\"")
