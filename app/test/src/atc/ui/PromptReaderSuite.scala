@@ -57,3 +57,12 @@ class PromptReaderSuite extends munit.FunSuite:
       assertEquals(prompt.read("> ", ""), "hello")
       assertEquals(prompt.reader.getHistory.asScala.map(_.line).toList, List("hello"))
     finally terminal.close()
+
+  test("answer and secret fields show no ghost text, and → or Tab does not insert it"):
+    val (prompt, terminal, out) = promptOn("\u001b[C\r\t\r")
+    prompt.suggestion = Some("rename word_count")
+    try
+      assertEquals(prompt.readSecret("key> "), None)
+      assertEquals(prompt.readAnswer("answer> "), None)
+      assert(!out.toString(UTF_8).contains("rename word_count"), out.toString(UTF_8).replace("\u001b", "ESC"))
+    finally terminal.close()

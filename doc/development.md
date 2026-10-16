@@ -1378,8 +1378,9 @@ explicitly configured to auto-approve requests.
 
 ### Sessions, inspection and compaction
 
-After each interactive turn the model predicts the next request and the prompt shows it as
-ghost text (Tab or → accepts it; `"predictInput": false` disables it). The redraw a read
+After each interactive turn the model predicts the next request and the main prompt shows it
+as ghost text (Tab or → accepts it; `"predictInput": false` disables it). Answer and key
+fields show none, so Tab or → cannot insert the prediction there. The redraw a read
 leaves on screen has no ghost text, so a suggestion never looks sent after Ctrl-D or Enter. When there is no useful
 suggestion, the model is asked to return `[NO_PREDICTION]`. This marker and empty responses
 are suppressed before reaching the prompt. A summary line

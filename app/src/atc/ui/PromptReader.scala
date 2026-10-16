@@ -36,13 +36,14 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
   private val plain = screen.plain
 
   /** The predicted next message (`suggest`), drawn as ghost text after what
-    * is typed as long as that is a prefix of it. */
+    * is typed as long as that is a prefix of it, at the main prompt only. */
   @volatile var suggestion: Option[String] = None
   /** Set while a read ends: its final redraw is what stays on screen, without a list or ghost text. */
   @volatile private var closing = false
-  /** What the ghost text would add to `typed`: the rest of the suggestion. */
+  /** What the ghost text would add to `typed`: the rest of the suggestion. Answers and
+    * secrets get none, so Tab or → cannot put the prediction into an API key. */
   private def ghost(typed: String): Option[String] =
-    suggestion.filter(s => s.length > typed.length && s.startsWith(typed)).map(_.drop(typed.length))
+    suggestion.filter(s => mainPrompt && s.length > typed.length && s.startsWith(typed)).map(_.drop(typed.length))
 
   /** The line reader's highlighter, with the ghost text appended in faint
     * style. The cursor is positioned from the buffer, not from this string,
@@ -88,8 +89,8 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
     * are listed under it with one selected: ↑/↓ move the selection, Tab fills
     * it in and Enter runs it. */
   @volatile var commandList: List[(String, String)] = Nil
-  /** The list is offered in this read (the main prompt, not answers or blocks). */
-  private var listing = false
+  /** The main prompt is reading, not an answer, a secret or a block: it lists commands and shows ghost text. */
+  private var mainPrompt = false
   /** The buffer the selection was made for; typing resets the selection. */
   private var listedFor = ""
   private var selected = 0
@@ -99,7 +100,7 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
   /** The listed commands for the current buffer, and the selected index. */
   private def listState(): (List[(String, String)], Int) =
     val buffer = reader.getBuffer.toString
-    val rows = if listing then PromptReader.matchingCommands(buffer, commandList) else Nil
+    val rows = if mainPrompt then PromptReader.matchingCommands(buffer, commandList) else Nil
     if buffer != listedFor then
       listedFor = buffer
       recalled = false
@@ -276,10 +277,10 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
 
   private def read(prompt: String, typed: String, commands: Boolean): String =
     ghostHighlighter.seen = typed
-    listing = commands && !plain
+    mainPrompt = commands && !plain
     try reader.readLine(prompt, null: String | Null, null: MaskingCallback | Null, typed)
     finally
-      listing = false
+      mainPrompt = false
       alerts.reportFocus(false) // Ctrl-C and Ctrl-D leave without `callback-finish`
 
   /** Read a typed answer, kept out of the prompt history; `None` when it is empty or cancelled. */
