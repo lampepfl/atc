@@ -478,6 +478,17 @@ class ProviderRequestSuite extends munit.FunSuite:
   private def searching(url: String) =
     endpoint("openai", url).copy(alias = "m", modelId = "m", settings = ModelConfig(webSearch = Some(true)))
 
+  test("a header HTTP does not allow fails the request it was for"):
+    withServer((_, _, _) => (200, "text/event-stream", streamedDone)): (url, requests) =>
+      val spec = endpoint("openai", url).copy(alias = "m", modelId = "m", headers = Map("x-test" -> "two\nlines"))
+      val model = ChatModel.create(spec)
+      try
+        val e = intercept[Exception](model.complete("s", List(Msg.User("hi")), Nil, StreamSink(_ => ()), () => false))
+        val messages = atc.Debug.causes(e).map(c => String.valueOf(c.getMessage)).toList
+        assert(messages.exists(_.contains("The provider header x-test is not valid HTTP")), messages.toString)
+        assertEquals(requests(), Nil)
+      finally model.close()
+
   test("a provider that rejects web search gets the request again without it, and never again with it"):
     val rejection =
       """{"error":{"message":"Unrecognized request argument supplied: web_search_options","type":"invalid_request_error"}}"""

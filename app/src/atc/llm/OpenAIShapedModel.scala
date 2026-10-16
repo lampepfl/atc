@@ -6,6 +6,7 @@ import com.openai.client.OpenAIClient
 import com.openai.core.{JsonValue, RequestOptions, Timeout}
 import com.openai.errors.BadRequestException
 
+import java.io.IOException
 import java.util.Locale
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
@@ -21,9 +22,13 @@ private[llm] abstract class OpenAIShapedModel(spec: ModelSpec) extends SpecModel
       val timeout = Timeout.builder().request(Providers.RequestTimeout).build()
       val plain = Providers.httpClient(timeout.connect(), timeout.read(), timeout.write(), timeout.request())
       // The provider's headers go on every request, model lists included, before the authorization.
+      // One OkHttp refuses fails the call as an `IOException`: any other exception from an
+      // asynchronous call is thrown again on OkHttp's dispatcher thread.
       val headers: okhttp3.Interceptor = chain =>
         val request = chain.request().newBuilder()
-        Providers.headers(spec).foreach((name, value) => request.header(name, value))
+        for (name, value) <- Providers.headers(spec) do
+          try request.header(name, value)
+          catch case _: IllegalArgumentException => throw IOException(s"The provider header $name is not valid HTTP")
         chain.proceed(request.build())
       val http = (headers :: authorization.toList).foldLeft(plain.newBuilder())(_.addInterceptor(_)).build()
       val created = Connection(Providers.openAiClient(spec, com.openai.client.okhttp.OkHttpClient(http)), http)
