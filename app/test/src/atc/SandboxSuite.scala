@@ -3,13 +3,14 @@ package atc
 import atc.perms.*
 import atc.sandbox.*
 
+import java.nio.file.Files
+
 /** The sandbox itself: that a session starts, that agent code reaches the real
-  * host through it, that definitions persist, that the class loader hides the
-  * application, and that the last-resort safety nets (validator, fatal
-  * throwables, uncaught exceptions) behave.
+  * host through it, that the class loader hides the application, and that the
+  * last-resort safety nets (validator, fatal throwables) behave.
   *
   * What the *capabilities* allow lives in [[CapabilitySuite]], what each mode
-  * hands out in [[ModeSuite]], and the REPL's own mechanics (timeouts,
+  * hands out in [[ModeSuite]], and the REPL's own mechanics (state, timeouts,
   * interrupts, REPL commands, safe mode) in [[ReplSessionSuite]]. */
 class SandboxSuite extends munit.FunSuite, ReplAssertions:
   override val munitTimeout = scala.concurrent.duration.Duration(5, "min")
@@ -56,10 +57,6 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
     assertOk(run("""write("a.txt", "content")"""))
     assertEquals(env.contents("a.txt"), "content")
     assert(assertOk(run("""read("a.txt")""")).output.contains("content"))
-
-  test("definitions persist across snippets"):
-    assertOk(run("val persisted = 41"))
-    assert(assertOk(run("persisted + 1")).output.contains("42"))
 
   test("a classified file round-trips to the classified model without reaching the agent"):
     env.clearOutput()
@@ -128,13 +125,35 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
 
   // ── Class-loader isolation ──────────────────────────────────────
 
-  test("the application is invisible to the sandbox loader, the API is shared"):
+  test("Sandbox.isShared admits the Scala library and the API, nothing of the application"):
+    assert(Sandbox.isShared("scala.collection.immutable.List"))
+    assert(Sandbox.isShared("atc.lib.Interface"))
+    assert(Sandbox.isShared("scala.runtime.BoxesRunTime"))
+    assert(!Sandbox.isShared("atc.host.Host"))
+    assert(!Sandbox.isShared("atc.sandbox.Sandbox"))
+    assert(!Sandbox.isShared("dotty.tools.repl.ReplDriver"))
+    assert(!Sandbox.isShared("scala.tools.nsc.Global"))
+    assert(!Sandbox.isShared("scala.quoted.runtime.impl.QuotesImpl"))
+    assert(!Sandbox.isShared("ujson.Value"))
+    assert(!Sandbox.isShared("java.util.List"))
+
+  test("the sandbox loader takes the JDK from the platform and the shared classes from the app, nothing else"):
     val loader = Sandbox.newLoader()
-    intercept[ClassNotFoundException](loader.loadClass("atc.host.Host"))
-    intercept[ClassNotFoundException](loader.loadClass("dotty.tools.repl.ReplDriver"))
+    assert(loader.loadClass("java.util.ArrayList") eq classOf[java.util.ArrayList[?]])
+    assert(loader.loadClass("scala.collection.immutable.List") eq classOf[List[?]])
+    assert(loader.loadClass("atc.lib.Classified") eq classOf[atc.lib.Classified[?]])
     // Shared, so the host can implement the interface the agent programs against.
     assert(loader.loadClass("atc.lib.Interface") eq classOf[atc.lib.Interface])
-    assert(loader.loadClass("scala.collection.immutable.List") eq classOf[List[?]])
+    intercept[ClassNotFoundException](loader.loadClass("atc.host.Host"))
+    intercept[ClassNotFoundException](loader.loadClass("atc.host.ClassifiedImpl"))
+    intercept[ClassNotFoundException](loader.loadClass("atc.sandbox.ReplSession"))
+    intercept[ClassNotFoundException](loader.loadClass("ujson.Value"))
+    intercept[ClassNotFoundException](loader.loadClass("com.openai.client.OpenAIClient"))
+    intercept[ClassNotFoundException](loader.loadClass("dotty.tools.repl.ReplDriver"))
+
+  test("the library classpath property points at existing entries"):
+    assert(Sandbox.libraryClasspath.nonEmpty)
+    assert(Sandbox.libraryClasspath.forall(Files.exists(_)))
 
   test("the sandbox loader hides *.class resources (only REPL classes get interrupt-instrumented)"):
     // With interrupt instrumentation on, the REPL loader would otherwise read the
@@ -145,13 +164,6 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
     assertEquals(loader.getResource("scala/collection/immutable/List.class"), null)
 
   // ── Safety nets ─────────────────────────────────────────────────
-
-  test("the validator rejects a snippet before it is compiled or run"):
-    assertFails(run("""java.io.File("/etc/passwd").exists"""), "file-io-java")
-
-  test("an uncaught exception is reported as a failure, not a result"):
-    val r = assertFails(run("""throw new RuntimeException("boom")"""))
-    assert(r.output.contains("boom"), r.output)
 
   test("a fatal-throwable oracle over classified data is rejected before it runs"):
     // A pure callback that throws only when a predicate over the secret holds is a

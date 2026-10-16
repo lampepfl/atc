@@ -3,13 +3,11 @@ package atc
 import atc.perms.Decision
 import atc.sandbox.*
 
-import java.nio.file.Files
-
 /** The sandbox REPL executor: language coverage, error reporting, REPL
   * command allow-list, validator integration, timeouts, output capture,
   * safe-mode on/off and session isolation (migrated from TACIT's
   * ScalaExecutorSuite / SessionManagerSuite / CodeValidatorEvasionSuite e2e). */
-class ReplSessionSuite extends munit.FunSuite:
+class ReplSessionSuite extends munit.FunSuite, ReplAssertions:
   override val munitTimeout = scala.concurrent.duration.Duration(5, "min")
 
   // Each session gets its own host so that per-session routing can be checked.
@@ -21,31 +19,23 @@ class ReplSessionSuite extends munit.FunSuite:
   lazy val quick: ReplSession = envQuick.newSession(timeoutMs = Some(1000L))
 
   private def run(code: String): ExecutionResult = safe.run(code)
-  private def assertOk(r: ExecutionResult)(using munit.Location): ExecutionResult =
-    assert(r.success, s"expected success, got: ${r.error.getOrElse("")}\n${r.output}")
-    r
-  private def assertFails(r: ExecutionResult, pattern: String = "")(using munit.Location): ExecutionResult =
-    assert(!r.success, s"expected failure, got success with: ${r.output}")
-    val text = (r.output + "\n" + r.error.getOrElse("")).toLowerCase
-    assert(text.contains(pattern.toLowerCase), s"expected '$pattern' in:\n${r.output}\n${r.error}")
-    r
+
+  /** Run `code` on another thread, `stop` the session once the evaluation is under way,
+    * and return the result; the evaluation must end within ten seconds. */
+  private def stopped(session: ReplSession, code: String)(stop: ReplSession => Unit)(using
+    munit.Location
+  ): ExecutionResult =
+    @volatile var result: Option[ExecutionResult] = None
+    val thread = Thread(() => result = Some(session.run(code)))
+    thread.setDaemon(true)
+    thread.start()
+    Thread.sleep(700)
+    stop(session)
+    thread.join(10000)
+    assert(!thread.isAlive, "the evaluation did not stop")
+    result.getOrElse(fail("the evaluation gave no result"))
 
   // ── Basic execution ─────────────────────────────────────────────
-
-  test("ExecutionClock pauses nest: the clock runs again only when the outermost pause ends"):
-    val clock = atc.sandbox.ExecutionClock()
-    clock.pause()
-    clock.pause()
-    clock.resume()
-    val open = clock.paused
-    Thread.sleep(5)
-    assert(clock.paused > open, "still paused after the inner resume")
-    clock.resume()
-    val closed = clock.paused
-    Thread.sleep(5)
-    assertEquals(clock.paused, closed) // running again: no more paused time accrues
-    clock.reset()
-    assertEquals(clock.paused, 0L)
 
   test("simple expression") { assert(assertOk(run("1 + 1")).output.contains("2")) }
   test("println goes through the host and into the tool output"):
@@ -326,15 +316,7 @@ class ReplSessionSuite extends munit.FunSuite:
     val env = TestEnv(prefix = "atc-repl-interrupt")
     val s = env.newSession(timeoutMs = Some(60000L))
     assertOk(s.run("val beforeInterrupt = 40"))
-    @volatile var result: Option[ExecutionResult] = None
-    val t = Thread(() => result = Some(s.run("while true do ()")))
-    t.setDaemon(true)
-    t.start()
-    Thread.sleep(700)
-    s.interrupt()
-    t.join(10000)
-    assert(!t.isAlive, "evaluation did not stop after interrupt")
-    assert(result.exists(!_.success), result.toString)
+    assertFails(stopped(s, "while true do ()")(_.interrupt()))
     assert(assertOk(s.run("2 + 2")).output.contains("4"))
     assertOk(s.run("val afterInterrupt = beforeInterrupt + 2"))
     assert(assertOk(s.run("afterInterrupt")).output.contains("42"))
@@ -343,15 +325,7 @@ class ReplSessionSuite extends munit.FunSuite:
     val busy = "parallel(List(1, 2).map(i => () => { var n = 0L; while true do n += i; n }))"
     val env = TestEnv(prefix = "atc-repl-parallel")
     val s = env.newSession(timeoutMs = Some(60000L))
-    @volatile var result: Option[ExecutionResult] = None
-    val t = Thread(() => result = Some(s.run(busy)))
-    t.setDaemon(true)
-    t.start()
-    Thread.sleep(700)
-    s.interrupt()
-    t.join(10000)
-    assert(!t.isAlive, "evaluation did not stop after interrupt")
-    assert(result.exists(!_.success), result.toString)
+    assertFails(stopped(s, busy)(_.interrupt()))
     assert(assertOk(s.run("2 + 2")).output.contains("4"))
     val timedOut = quick.run(busy)
     assert(timedOut.error.exists(_.contains("timed out")), timedOut.toString)
@@ -360,15 +334,8 @@ class ReplSessionSuite extends munit.FunSuite:
   test("interrupt() and the timeout stop a loop inside Classified.map"):
     // `map` keeps what its callback throws, except the stop signal.
     val loop = "classify(1L).map(n => { var i = 0L; while true do i += n; i })"
-    @volatile var result: Option[ExecutionResult] = None
-    val t = Thread(() => result = Some(safe.run(loop)))
-    t.setDaemon(true)
-    t.start()
-    Thread.sleep(700)
-    safe.interrupt()
-    t.join(10000)
-    assert(!t.isAlive, "evaluation did not stop after interrupt")
-    assert(result.exists(_.error.exists(_.contains("interrupted"))), result.toString)
+    val interrupted = stopped(safe, loop)(_.interrupt())
+    assert(interrupted.error.exists(_.contains("interrupted")), interrupted.toString)
     assert(assertOk(run("2 + 2")).output.contains("4"))
     val timedOut = quick.run(loop)
     assert(timedOut.error.exists(_.contains("timed out")), timedOut.toString)
@@ -377,15 +344,7 @@ class ReplSessionSuite extends munit.FunSuite:
   test("close() interrupts a running evaluation and refuses later runs"):
     val env = TestEnv(prefix = "atc-repl-close")
     val s = env.newSession(timeoutMs = Some(60000L))
-    @volatile var result: Option[ExecutionResult] = None
-    val t = Thread(() => result = Some(s.run("while true do ()")))
-    t.setDaemon(true)
-    t.start()
-    Thread.sleep(700)
-    s.close()
-    t.join(10000)
-    assert(!t.isAlive, "evaluation did not stop after close()")
-    assert(result.exists(!_.success), result.toString)
+    assertFails(stopped(s, "while true do ()")(_.close()))
     val after = s.run("1 + 1")
     assert(!after.success)
     assert(after.error.exists(_.contains("closed")), after.error.toString)
@@ -502,46 +461,28 @@ class ReplSessionSuite extends munit.FunSuite:
     assert(quick.clock.paused > 0)
     assertFails(quick.run("java.io.File"), "forbidden")
     assertEquals(quick.clock.paused, 0L)
-  test("ExecutionClock accounts paused time"):
-    val c = ExecutionClock()
-    assertEquals(c.paused, 0L)
-    c.pause()
+  test("ExecutionClock accounts paused time; pauses nest, and a resume without a pause changes nothing"):
+    val clock = ExecutionClock()
+    assertEquals(clock.paused, 0L)
+    clock.pause()
     Thread.sleep(50)
-    assert(c.paused >= 40_000_000L, c.paused.toString)
-    c.resume()
-    val after = c.paused
+    assert(clock.paused >= 40_000_000L, clock.paused.toString)
+    clock.resume()
+    val after = clock.paused
     Thread.sleep(20)
-    assertEquals(c.paused, after) // not counting while resumed
-    c.resume() // idempotent
-    c.pause(); c.pause() // idempotent
-    c.resume()
-    c.reset()
-    assertEquals(c.paused, 0L)
-
-  // ── Class-loader isolation (unit) ───────────────────────────────
-
-  test("Sandbox.isShared"):
-    assert(Sandbox.isShared("scala.collection.immutable.List"))
-    assert(Sandbox.isShared("atc.lib.Interface"))
-    assert(Sandbox.isShared("scala.runtime.BoxesRunTime"))
-    assert(!Sandbox.isShared("atc.host.Host"))
-    assert(!Sandbox.isShared("atc.sandbox.Sandbox"))
-    assert(!Sandbox.isShared("dotty.tools.repl.ReplDriver"))
-    assert(!Sandbox.isShared("scala.tools.nsc.Global"))
-    assert(!Sandbox.isShared("scala.quoted.runtime.impl.QuotesImpl"))
-    assert(!Sandbox.isShared("ujson.Value"))
-    assert(!Sandbox.isShared("java.util.List"))
-  test("sandbox loader: JDK from the platform, shared classes from the app, nothing else"):
-    val loader = Sandbox.newLoader()
-    assert(loader.loadClass("java.util.ArrayList") eq classOf[java.util.ArrayList[?]])
-    assert(loader.loadClass("scala.collection.immutable.List") eq classOf[List[?]])
-    assert(loader.loadClass("atc.lib.Classified") eq classOf[atc.lib.Classified[?]])
-    intercept[ClassNotFoundException](loader.loadClass("atc.host.Host"))
-    intercept[ClassNotFoundException](loader.loadClass("atc.host.ClassifiedImpl"))
-    intercept[ClassNotFoundException](loader.loadClass("atc.sandbox.ReplSession"))
-    intercept[ClassNotFoundException](loader.loadClass("ujson.Value"))
-    intercept[ClassNotFoundException](loader.loadClass("com.openai.client.OpenAIClient"))
-    intercept[ClassNotFoundException](loader.loadClass("dotty.tools.repl.ReplDriver"))
-  test("library classpath property points at existing entries"):
-    assert(Sandbox.libraryClasspath.nonEmpty)
-    assert(Sandbox.libraryClasspath.forall(Files.exists(_)))
+    assertEquals(clock.paused, after) // not counting while running
+    clock.resume()
+    assertEquals(clock.paused, after)
+    // The clock runs again only when the outermost pause ends.
+    clock.pause()
+    clock.pause()
+    clock.resume()
+    val open = clock.paused
+    Thread.sleep(5)
+    assert(clock.paused > open, "still paused after the inner resume")
+    clock.resume()
+    val closed = clock.paused
+    Thread.sleep(5)
+    assertEquals(clock.paused, closed)
+    clock.reset()
+    assertEquals(clock.paused, 0L)
