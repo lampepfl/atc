@@ -877,7 +877,8 @@ newline and encoding conventions (commonly CRLF, sometimes BOM-marked UTF-16 on 
 `ModelCatalog` resolves `provider/alias` or an unambiguous bare alias, ignoring case.
 `displayName` affects presentation only. A provider without configured models is listed
 through `ChatModel.listModels` (the adapter's own client, with `Providers.ListTimeout`), at
-most once per catalog and in parallel across providers: `App` starts `refresh()` after the
+most once per catalog and in parallel across providers, on daemon threads of their own rather
+than the common pool, since a listing blocks on HTTP or a CLI: `App` starts `refresh()` after the
 banner, and `models` waits for it at most 30 seconds (`ModelCatalog.ListWait`), since a Claude
 Code listing can take minutes; a provider whose fetch has not finished keeps its stored list
 until it does. Lookups and Tab completion (`labels`) never wait: they use this session's list

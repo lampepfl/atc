@@ -7,7 +7,7 @@ import upickle.default.*
 import java.nio.file.{Files, Path}
 import java.time.Duration
 import java.util.Locale
-import java.util.concurrent.{CompletableFuture, TimeUnit, TimeoutException}
+import java.util.concurrent.{CompletableFuture, Executors, TimeUnit, TimeoutException}
 import scala.collection.mutable
 import scala.util.control.NonFatal
 
@@ -90,20 +90,17 @@ final class ModelCatalog(
 
   private def fetching(provider: ModelSpec): Option[CompletableFuture[Option[List[ModelSpec]]]] =
     discover.map: list =>
+      def fetch(): Option[List[ModelSpec]] =
+        try
+          val models = list(provider)
+          store.foreach(_.save(provider, models))
+          Some(models)
+        catch
+          case NonFatal(e) =>
+            Debug.log(s"could not list the models of ${provider.provider}: ${Debug.describe(e)}")
+            None
       synchronized:
-        fetches.getOrElseUpdate(
-          provider.provider,
-          CompletableFuture.supplyAsync(() =>
-            try
-              val models = list(provider)
-              store.foreach(_.save(provider, models))
-              Some(models)
-            catch
-              case NonFatal(e) =>
-                Debug.log(s"could not list the models of ${provider.provider}: ${Debug.describe(e)}")
-                None
-          )
-        )
+        fetches.getOrElseUpdate(provider.provider, CompletableFuture.supplyAsync(() => fetch(), ModelCatalog.Listing))
 
   /** The finished fetch of `provider`, if any. */
   private def fetched(provider: ModelSpec): Option[Option[List[ModelSpec]]] =
@@ -190,12 +187,19 @@ final class ModelCatalog(
   /** The model used when the config and the command line name none. */
   def default: ModelSpec =
     available.headOption.orElse(models.headOption).getOrElse(
-        throw IllegalArgumentException("No models configured (see \"providers\" in the config)")
-      )
+      throw IllegalArgumentException("No models configured (see \"providers\" in the config)")
+    )
 
 object ModelCatalog:
   /** Long enough for an HTTP listing (`Providers.ListTimeout`); Claude Code's can take minutes. */
   val ListWait: Duration = Duration.ofSeconds(30)
+
+  /** Where the fetches run: a listing blocks on HTTP or on a CLI, which the common pool, sized
+    * for computation, does not compensate for, so one slow provider would hold back the others. */
+  private val Listing = Executors.newCachedThreadPool: task =>
+    val thread = Thread(task, "atc-model-list")
+    thread.setDaemon(true)
+    thread
 
   /** Resolve every model of every provider. A provider's `${VAR}` key is
     * resolved through `keys` (a project's `.atc/keys.properties`, then the global one)
