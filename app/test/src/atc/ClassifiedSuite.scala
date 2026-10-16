@@ -1,7 +1,7 @@
 package atc
 
 import atc.host.*
-import atc.lib.{Classified, FileEntry, FileSystem}
+import atc.lib.{Classified, FileEntry}
 import atc.perms.*
 
 import java.nio.file.{Files, Path}
@@ -17,7 +17,6 @@ class ClassifiedSuite extends munit.FunSuite:
   val env = TestEnv(mkRules = TestEnv.withSecrets, prefix = "atc-classified")
   import env.given
   import env.host.*
-  given fs: FileSystem = env.host.fileSystem
 
   env.file("public.txt", "public data")
   env.file("secrets/data.txt", "TOP SECRET DATA")

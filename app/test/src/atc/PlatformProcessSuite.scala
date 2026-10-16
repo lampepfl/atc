@@ -1,7 +1,6 @@
 package atc
 
 import atc.host.{CommandLine, WindowsExecutable}
-import atc.lib.{Exec, FileSystem}
 import atc.platform.Platform
 
 import java.nio.file.{Files, Path}
@@ -13,8 +12,6 @@ class UnixProcessIntegrationSuite extends munit.FunSuite:
     assume(!Platform.isWindows)
     val env = TestEnv(commands = List("printf", "tr", "cat", "false"))
     import env.given
-    given Exec = env.host.processes
-    given FileSystem = env.host.fileSystem
     assertEquals(env.host.exec("printf hello | tr a-z A-Z | cat").stdout, "HELLO")
     assertEquals(env.host.exec("false | cat").exitCode, 1)
 
@@ -60,8 +57,6 @@ class WindowsProcessIntegrationSuite extends munit.FunSuite:
     val command = ProcessFixture.line(script.toString)
     val allowed = TestEnv(commands = List(CommandLine.parsePipeline(command).stages.head.line))
     import allowed.given
-    given Exec = allowed.host.processes
-    given FileSystem = allowed.host.fileSystem
     val result = allowed.host.exec(command, List("two words"))
     assertEquals(result.exitCode, 0, result.stderr)
     assertEquals(result.stdout.trim, "cmd-ok")
@@ -78,8 +73,6 @@ class WindowsProcessIntegrationSuite extends munit.FunSuite:
     val command = ProcessFixture.line(powershell)
     val env = TestEnv(commands = List(CommandLine.parsePipeline(command).stages.head.line))
     import env.given
-    given Exec = env.host.processes
-    given FileSystem = env.host.fileSystem
     val script =
       "$b=[byte[]](255,254,104,0,233,0,108,0,108,0,111,0);[Console]::OpenStandardOutput().Write($b,0,$b.Length)"
     val result = env.host.exec(command, List("-NoProfile", "-Command", script))

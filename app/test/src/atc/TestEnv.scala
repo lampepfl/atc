@@ -1,7 +1,7 @@
 package atc
 
 import atc.host.*
-import atc.lib.{IOCap, Todo, UserIO}
+import atc.lib.{Exec, FileSystem, IOCap, Network, Todo, UserIO}
 import atc.perms.*
 import atc.platform.PlatformPath
 import atc.sandbox.{ReplSession, SandboxConfig}
@@ -61,6 +61,8 @@ final class TestEnv(
   var commandsWrapped: Int = 0
   /** What the user was shown about spawned processes (started / input / exited). */
   val processEvents: ListBuffer[String] = ListBuffer()
+  /** The previews of the file changes the host reported. */
+  val fileChanges: ListBuffer[FileChange] = ListBuffer()
 
   val output: HostOutput = new HostOutput:
     def print(agentText: String, userText: String): Unit = agentOut.synchronized:
@@ -85,6 +87,7 @@ final class TestEnv(
     override def processExited(id: Int, exitCode: Int): Unit =
       processEvents.synchronized(processEvents += s"p$id exited $exitCode")
     override def commandOutput(text: String): Unit = liveCommandOut.synchronized(liveCommandOut.append(text))
+    override def fileChanged(change: FileChange): Unit = fileChanges.synchronized(fileChanges += change)
 
   val llm: HostLlm = new HostLlm:
     def chat(m: String): String =
@@ -109,6 +112,9 @@ final class TestEnv(
   /** Root capabilities for calling the host directly from tests. */
   given io: IOCap = new IOCap()
   given user: UserIO = new UserIO()
+  given fs: FileSystem = host.fileSystem
+  given ex: Exec = host.processes
+  given net: Network = host.network
 
   // ── helpers ──
   def file(rel: String, content: String): Path =

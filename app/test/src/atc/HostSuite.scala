@@ -786,7 +786,6 @@ class HostSuite extends munit.FunSuite:
     // way (it used to carry the link's path and be judged at the link's location).
     val env = TestEnv(TestEnv.withSecrets)
     import env.given
-    given fs: FileSystem = env.host.fileSystem
     env.file("secrets/key.txt", "THE-SECRET")
     env.dir("pub")
     assume(
