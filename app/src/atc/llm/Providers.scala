@@ -240,15 +240,15 @@ private[atc] object Providers:
     else if configuredEffort then Some("low")
     else None
 
-  /** A client for the two OpenAI-shaped providers. The key is the configured
-    * one, else the SDK's own environment resolution. Against a custom `url`
-    * (Ollama, vLLM, LM Studio, ...) a placeholder stands in for the key, which
-    * such servers ignore. */
+  /** The key a client is built with: the configured one, else, against a custom `url` (Ollama,
+    * vLLM, LM Studio, ...), a placeholder that such servers ignore. The environment's
+    * credentials are for the provider's own API, so the SDK reads them (`None`) only for its
+    * default endpoint. `KeyBindings.variables` follows the same rule. */
+  def key(spec: ModelSpec): Option[String] = spec.apiKey.orElse(spec.baseUrl.map(_ => "none"))
+
+  /** A client for the two OpenAI-shaped providers, with the [[key]] of `spec`. */
   private[llm] def openAiClient(spec: ModelSpec, transport: HttpClient): OpenAIClient =
     val b = ClientOptions.builder().httpClient(transport).timeout(RequestTimeout)
-    spec.apiKey match
-      case Some(key) => b.apiKey(key)
-      case None if spec.baseUrl.isDefined => b.apiKey("none")
-      case None => b.fromEnv()
+    key(spec).fold(b.fromEnv())(b.apiKey)
     spec.baseUrl.foreach(b.baseUrl)
     OpenAIClientImpl(b.build())

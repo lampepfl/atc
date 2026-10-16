@@ -29,12 +29,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
   private def connection: Connection = synchronized:
     opened.getOrElse:
       val backendBuilder = AnthropicBackend.builder()
-      // As in `Providers.openAiClient`: the environment's credentials are for Anthropic's API,
-      // so a custom `url` without a configured key gets a placeholder instead of them.
-      spec.apiKey match
-        case Some(key) => backendBuilder.apiKey(key)
-        case None if spec.baseUrl.isDefined => backendBuilder.apiKey("none")
-        case None => backendBuilder.fromEnv()
+      Providers.key(spec).fold(backendBuilder.fromEnv())(backendBuilder.apiKey)
       spec.baseUrl.foreach(backendBuilder.baseUrl)
       val backend = backendBuilder.build()
       val timeout = Timeout.builder().request(Providers.RequestTimeout).build()

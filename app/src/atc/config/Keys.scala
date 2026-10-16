@@ -59,8 +59,9 @@ object KeyBindings:
 
   /** The environment variables a provider's credentials may come from: the `${VAR}`s of
     * its key and headers, its `keyEnv`, and, for the default endpoint, the secrets its SDK
-    * reads from the environment. The adapters let the SDK read them whenever no key resolves,
-    * which includes a configured `key` or `keyEnv` whose variable is unset. */
+    * reads from the environment. The adapters let the SDK read them whenever no key resolves
+    * and no `url` is set (`Providers.key`), which includes a configured `key` or `keyEnv`
+    * whose variable is unset. */
   def variables(p: ProviderConfig): Set[String] =
     val named = (p.key.toList ++ p.headers.values).flatMap(envRefName) ++ p.keyEnv
     val sdkDefaults =
