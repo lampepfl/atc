@@ -37,11 +37,13 @@ private[atc] object CommandLine:
     /** One program, no redirection: what `exec(command, args)` accepts as `command`. */
     def isSimple: Boolean = stages.lengthIs == 1 && stdinFile.isEmpty && stdoutFile.isEmpty && !stages.head.mergeErr
 
-    /** How the user sees it (re-joined; quoting is not reconstructed). */
+    /** How the user sees it: each stage as [[Stage.line]] renders it, with the redirections where
+      * the parser accepts them and their file names quoted the same way. */
     def line: String =
-      stages.map(stage => stage.line + (if stage.mergeErr then " 2>&1" else "")).mkString(" | ") +
-        stdinFile.fold("")(file => s" < $file") +
-        stdoutFile.fold("")(file => (if append then " >> " else " > ") + file)
+      val shown = stages.map(stage => stage.line + (if stage.mergeErr then " 2>&1" else ""))
+      val input = stdinFile.fold("")(file => " < " + renderArg(file))
+      (shown.head + input :: shown.tail).mkString(" | ") +
+        stdoutFile.fold("")(file => (if append then " >> " else " > ") + renderArg(file))
 
   private enum Token:
     case Word(text: String)

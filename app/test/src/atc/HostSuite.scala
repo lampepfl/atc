@@ -381,7 +381,8 @@ class HostSuite extends munit.FunSuite:
     assertEquals(p.stages.map(_.argv), List(List("cat"), List("sort", "-u"), List("head", "-3")))
     assertEquals(p.stages.map(_.mergeErr), List(false, true, false))
     assertEquals((p.stdinFile, p.stdoutFile, p.append), (Some("in.txt"), Some("out.txt"), true))
-    assertEquals(p.line, "cat | sort -u 2>&1 | head -3 < in.txt >> out.txt")
+    assertEquals(p.line, "cat < in.txt | sort -u 2>&1 | head -3 >> out.txt")
+    assertEquals(CommandLine.parsePipeline("cat < 'in file' > 'a b'").line, """cat < "in file" > "a b"""")
     val q = CommandLine.parsePipeline("echo 'a | b' >out.txt")
     assertEquals((q.stages.head.argv, q.stdoutFile, q.append), (List("echo", "a | b"), Some("out.txt"), false))
     assertEquals(
