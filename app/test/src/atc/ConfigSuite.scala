@@ -850,7 +850,7 @@ class ConfigSuite extends munit.FunSuite:
       List("open"),
       "echo and a provider with an unset key are not asked"
     )
-    assertEquals(catalog.labels, List("a", "open/vendor/big", "open/small"))
+    assertEquals(catalog.models.map(catalog.label), List("a", "open/vendor/big", "open/small"))
     assertEquals(catalog.find("open/vendor/big").modelId, "vendor/big")
     assertEquals(catalog.find("SMALL").ref, "open/small")
     assertEquals(catalog.find("open/small").baseUrl, Some("http://localhost:1"))
@@ -871,7 +871,9 @@ class ConfigSuite extends munit.FunSuite:
     // a bare id that no list has named yet is unknown, without fetching a list for it
     intercept[IllegalArgumentException](catalog.find("small"))
     assert(asked.isEmpty, asked.toString)
-    catalog.labels // the lists arrive
+    assertEquals(catalog.labels, List("a"), "completion offers what is known without fetching a list")
+    assert(asked.isEmpty, asked.toString)
+    catalog.models // the lists arrive
     assertEquals(catalog.find("small").ref, "open/small")
     assertEquals(catalog.find("open/fixed/b").ref, "open/fixed/b")
     // these name models of the providers `fixed`, `off` and `keyed`, which have none of that name
@@ -882,7 +884,7 @@ class ConfigSuite extends munit.FunSuite:
   test("a failed listing is ignored and a provider/model-id reference is taken as given"):
     val (catalog, _) = listingCatalog(_ => throw RuntimeException("connection refused"))
     assertEquals(catalog.find("open/anything").modelId, "anything")
-    assertEquals(catalog.labels, List("a"))
+    assertEquals(catalog.models.map(catalog.label), List("a"))
     intercept[IllegalArgumentException](catalog.find("anything"))
 
   test("validation leaves model names to the start, which warns about one that names no model"):
@@ -925,7 +927,7 @@ class ConfigSuite extends munit.FunSuite:
     catalog.refresh() // returns at once, the fetch is still blocked
     assertEquals(catalog.find("old").ref, "open/old")
     release.countDown()
-    assertEquals(catalog.labels, List("a", "open/new"))
+    assertEquals(catalog.models.map(catalog.label), List("a", "open/new"))
     intercept[IllegalArgumentException](catalog.find("open/old"))
     assertEquals(store.load(open).map(_.map(_.modelId)), Some(List("new")), "the fetched list is stored")
     assertEquals(store.load(open.copy(baseUrl = Some("http://elsewhere"))), None, "only for the same endpoint")

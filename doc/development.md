@@ -880,9 +880,10 @@ through `ChatModel.listModels` (the adapter's own client, with `Providers.ListTi
 most once per catalog and in parallel across providers: `App` starts `refresh()` after the
 banner, and `models` waits for it at most 30 seconds (`ModelCatalog.ListWait`), since a Claude
 Code listing can take minutes; a provider whose fetch has not finished keeps its stored list
-until it does. Lookups never wait: they use this session's list when
-it has arrived, else the one `ModelListStore` kept (`~/.atc/model-lists.json`, reused only
-for the same provider name, api and url), else take `provider/model-id` as given. A bare id
+until it does. Lookups and Tab completion (`labels`) never wait: they use this session's list
+when it has arrived, else the one `ModelListStore` kept (`~/.atc/model-lists.json`, reused
+only for the same provider name, api and url), and a lookup else takes `provider/model-id` as
+given. A bare id
 that no list has named yet is unknown. A reference that starts with the name of a configured
 provider, turned off or not, and `/` names a model of that provider only, never a listed id
 of another provider such as OpenRouter's `anthropic/...`. A model

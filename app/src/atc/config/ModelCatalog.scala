@@ -124,14 +124,17 @@ final class ModelCatalog(
     catch
       case _: TimeoutException => Debug.log(s"model lists still loading after ${listWait.toSeconds} s")
       case _: InterruptedException => Thread.currentThread().interrupt()
-    configured ++ discoverable.flatMap(known(_).getOrElse(Nil))
+    available
+
+  /** Every model known without waiting: the configured ones, then each provider's newest list. */
+  private def available: List[ModelSpec] = configured ++ discoverable.flatMap(known(_).getOrElse(Nil))
 
   /** The shortest name that identifies `m` on its own. */
   def label(m: ModelSpec): String =
     if !configured.exists(_.ref == m.ref) || aliasCount.getOrElse(lower(m.alias), 0) > 1 then m.ref else m.alias
 
-  /** All models' labels, for messages and menus. */
-  def labels: List[String] = models.map(label)
+  /** The labels of every model known without waiting for a list, for Tab completion. */
+  def labels: List[String] = available.map(label)
 
   /** The model a reference names, without waiting for a list. Throws `IllegalArgumentException`
     * naming the configured models when it matches none, or both candidates when a name is
@@ -186,8 +189,7 @@ final class ModelCatalog(
 
   /** The model used when the config and the command line name none. */
   def default: ModelSpec =
-    configured.headOption.orElse(discoverable.flatMap(known(_).getOrElse(Nil)).headOption)
-      .orElse(models.headOption).getOrElse(
+    available.headOption.orElse(models.headOption).getOrElse(
         throw IllegalArgumentException("No models configured (see \"providers\" in the config)")
       )
 
