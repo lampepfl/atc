@@ -11,7 +11,7 @@ class ContextManagerSuite extends munit.FunSuite:
     val history = List(Msg.User("original goal"), Msg.Assistant("x" * 6000, Nil, None), Msg.User("continue"))
     val notes = "Goal: finish the change. Constraint: preserve the public API. Remaining: run tests."
     val result = manager.prepare(10, history, model, notes)
-    assertEquals(result.dropped, 2)
+    assertEquals(result.history.size, 1)
     val text = result.history.head.asInstanceOf[Msg.User].text
     assert(text.contains(notes), text)
     assert(text.endsWith("continue"), text)
@@ -55,16 +55,13 @@ class ContextManagerSuite extends munit.FunSuite:
     assertEquals(ContextManager.fitToContext(withoutUser, 0, tenEach), (withoutUser, 0))
     assertEquals(ContextManager.fitToContext(Nil, 0, tenEach), (Nil, 0))
 
-  test("prepare leaves an unbounded model unchanged and reports both estimates"):
+  test("prepare leaves an unbounded model unchanged and reports its estimate"):
     val manager = ContextManager()
     val model = ModelContext("m", "p", "p/m")
     val history = List(user("abcd"), assistant("abcdefgh"))
     val prepared = manager.prepare(10, history, model, "")
     assertEquals(prepared.history, history)
     assertEquals(prepared.estimatedInput, 21L)
-    assertEquals(prepared.calibratedInput, 21L)
-    assertEquals(prepared.dropped, 0)
-    assertEquals(prepared.totalDropped, 0)
     assertEquals(prepared.warnings, Nil)
     assertEquals(manager.contextUsage(10, history, model), ContextManager.ContextUsage(21, None))
 
@@ -74,8 +71,6 @@ class ContextManagerSuite extends munit.FunSuite:
     val history = List(user("q1"), assistant("x" * 1600), user("q2"), assistant("done"))
 
     val first = manager.prepare(0, history, model, "")
-    assertEquals(first.dropped, 2)
-    assertEquals(first.totalDropped, 2)
     assertEquals(first.history.tail, history.drop(3))
     assertEquals(
       first.history.head,
@@ -85,8 +80,6 @@ class ContextManagerSuite extends munit.FunSuite:
 
     // A later cut reports the conversation-wide total, not merely this round's count.
     val second = manager.prepare(0, history, model, "")
-    assertEquals(second.dropped, 2)
-    assertEquals(second.totalDropped, 4)
     assertEquals(second.history.head, Msg.User(s"${AgentMessages.contextCutNotice(4)}\n\nq2"))
 
   test("a cut leaves room below the budget, so the next rounds keep the same prefix"):
@@ -95,9 +88,9 @@ class ContextManagerSuite extends munit.FunSuite:
     val model = ModelContext("m", "p", "p/m", contextWindow = Some(1000))
     val exchanges = (1 to 5).toList.flatMap(i => List(user(s"q$i"), assistant("x" * 700)))
     val cut = manager.prepare(0, exchanges, model, "")
-    assertEquals(cut.dropped, 4, "down to three quarters of the budget, not just under it")
+    assertEquals(cut.history.tail, exchanges.drop(5), "down to three quarters of the budget, not just under it")
     val next = cut.history ++ List(user("q6"), assistant("x" * 700))
-    assertEquals(manager.prepare(0, next, model, "").dropped, 0)
+    assertEquals(manager.prepare(0, next, model, "").history, next)
 
   test("an unavoidable overflow warns at most once per user turn"):
     val manager = ContextManager()
@@ -144,7 +137,6 @@ class ContextManagerSuite extends munit.FunSuite:
 
     manager.reset()
     assertEquals(manager.calibration, 1.0)
-    assertEquals(manager.droppedMessages, 0)
 
   test("compaction keeps the largest recent suffix within its token budget"):
     val first = List(user("old"), assistant("x" * 4000))

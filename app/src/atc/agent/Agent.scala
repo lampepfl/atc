@@ -198,7 +198,7 @@ final class Agent(
     // The transcript goes to the same model as one message. Refuse before paying for a
     // request the provider would reject, and name the way out in the message.
     current.contextWindow.foreach: window =>
-      val allowance = window.toLong - ContextManager.outputReserve(window, current.maxOutputTokens)
+      val allowance = ContextManager.inputAllowance(window, current.maxOutputTokens)
       val needed = ((ContextManager.estimateTokens(ContextCompaction.prompt) + size(input)) * context.calibration).round
       if needed > allowance then
         throw IllegalStateException(
@@ -334,7 +334,7 @@ final class Agent(
         // Trimming fits every request into the window less the output reserve; a threshold
         // above that allowance would never be reached, and history would be cut, not summarized.
         val due = usage.window.exists: window =>
-          val allowance = window - ContextManager.outputReserve(window, model.maxOutputTokens)
+          val allowance = ContextManager.inputAllowance(window, model.maxOutputTokens)
           usage.tokens.toDouble >= (window.toDouble * config.autoCompactThreshold).min(allowance.toDouble)
         if due && usage.tokens >= compactRetryAt then
           def retryLater(): Unit = compactRetryAt = usage.tokens + usage.window.getOrElse(0) / 10

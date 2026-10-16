@@ -26,12 +26,9 @@ final class ContextManager:
     * remains valid, but calibration learned from the old model does not. */
   def modelChanged(): Unit = tokenCalibration = 1.0
 
-  /** Current provider-token / estimated-token ratio. Exposed for diagnostics
-    * and focused unit tests; callers normally use [[contextUsage]]. */
+  /** The ratio of the provider's token count to the estimate for the last calibrated
+    * request; multiplying an estimate by it predicts the provider's count. */
   def calibration: Double = tokenCalibration
-
-  /** Messages dropped over the lifetime of the current conversation. */
-  def droppedMessages: Int = contextDropped
 
   /** Correct the character-based estimate with the prompt count reported by a
     * completed provider request. Small counts are too noisy to be useful. */
@@ -44,23 +41,16 @@ final class ContextManager:
     val raw = fixedTokens + history.map(estimateFor(_, model)).sum
     ContextUsage((raw * tokenCalibration).round, model.contextWindow)
 
-  /** Fit history to the model's input allowance and return all effects as
-    * values for the loop to apply.
-    *
-    * `estimatedInput` is the uncalibrated estimate of the prepared request; it
-    * is the denominator to pass to [[calibrate]] after completion.
-    * `calibratedInput` is the estimate shown to users and used for overflow
-    * checks. `dropped` counts this preparation, while `totalDropped` is the
-    * cumulative count written into the context notice. When anything is dropped,
-    * the `retained` task context follows the cut notice, and room for it is
-    * reserved. */
+  /** Fit history to the model's input allowance. The result holds the history to send,
+    * the uncalibrated estimate of that request, to pass to [[calibrate]] once the provider
+    * has counted it, and warnings for the user. When messages are dropped, the first one
+    * left starts with a cut notice giving the conversation's total of dropped messages,
+    * followed by the `retained` task context, for which room is reserved. */
   def prepare(fixedTokens: Long, history: List[Msg], model: ModelContext, retained: String): Preparation =
-    // Leave both estimation slack and, when configured, the full output
-    // allowance. A maxTokens larger than the window leaves no room at all and
-    // raises the warning below, which names both settings.
+    // A maxTokens larger than the window leaves no room at all and raises the
+    // warning below, which names both settings.
     val allowance = model.contextWindow.map: window =>
-      val reserve = outputReserve(window, model.maxOutputTokens)
-      Allowance(window, reserve, window.toLong - reserve)
+      Allowance(window, outputReserve(window, model.maxOutputTokens), inputAllowance(window, model.maxOutputTokens))
     val (fitted, dropped) = allowance match
       case Some(a) =>
         val budget = (a.input / tokenCalibration).toLong - fixedTokens
@@ -80,7 +70,7 @@ final class ContextManager:
         Msg.User(s"${AgentMessages.contextCutNotice(contextDropped)}$notes\n\n$text") :: rest
       case other => other
 
-    // The estimate of what will actually be sent, for the overflow check and `contextUsage`.
+    // The estimate of what will actually be sent, for the overflow check and calibration.
     val estimatedInput = fixedTokens + preparedHistory.map(estimateFor(_, model)).sum
     val calibratedInput = (estimatedInput * tokenCalibration).round
 
@@ -102,14 +92,7 @@ final class ContextManager:
           model.maxOutputTokens,
         )
 
-    Preparation(
-      history = preparedHistory,
-      estimatedInput = estimatedInput,
-      calibratedInput = calibratedInput,
-      dropped = dropped,
-      totalDropped = contextDropped,
-      warnings = droppedWarning.toList ++ overflowWarning,
-    )
+    Preparation(preparedHistory, estimatedInput, droppedWarning.toList ++ overflowWarning)
 
 object ContextManager:
   /** Leave room for the configured answer and at least one eighth of the window. */
@@ -117,6 +100,11 @@ object ContextManager:
     window: Int,
     maxOutputTokens: Option[Int]
   ): Long = (window.toLong / 8).max(maxOutputTokens.fold(0L)(_.toLong))
+
+  /** What a request may use of the window: everything but the [[outputReserve]]. Every
+    * request, compaction included, is measured against it. */
+  def inputAllowance(window: Int, maxOutputTokens: Option[Int]): Long =
+    window.toLong - outputReserve(window, maxOutputTokens)
 
   /** The share of the history budget a cut leaves, so that cuts are rare and caches last. */
   val CutTarget = 0.75
@@ -141,14 +129,7 @@ object ContextManager:
   /** A model's window, the part reserved for the answer, and what is left for the request. */
   private final case class Allowance(window: Int, reserve: Long, input: Long)
 
-  final case class Preparation(
-    history: List[Msg],
-    estimatedInput: Long,
-    calibratedInput: Long,
-    dropped: Int,
-    totalDropped: Int,
-    warnings: List[String],
-  )
+  final case class Preparation(history: List[Msg], estimatedInput: Long, warnings: List[String])
 
   /** A rough token count: about four characters per token, corrected at run
     * time by [[ContextManager]]'s calibration against provider counts. */
