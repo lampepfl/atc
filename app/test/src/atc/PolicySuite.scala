@@ -242,6 +242,20 @@ class PolicySuite extends munit.FunSuite:
     assertEquals(prompter.asked.size, 2)
     p.closeScope(e2)
 
+  test("a request scope holds only what the prompt asked for, so revoking a session grant reaches into it"):
+    val p =
+      Policy(Nil, Nil, Nil, ScriptedPrompter(List.fill(2)(Decision.AllowSession) ++ List.fill(2)(Decision.AllowOnce)))
+    p.closeScope(p.requestExec(ScopeId.Base, List("npm test"), ""))
+    p.closeScope(p.requestNet(ScopeId.Base, List("example.com"), ""))
+    val exec = p.requestExec(ScopeId.Base, List("npm test", "sbt test"), "")
+    val net = p.requestNet(ScopeId.Base, List("example.com", "scala-lang.org"), "")
+    p.revoke(SessionGrant.Command("npm test"))
+    p.revoke(SessionGrant.Host("example.com"))
+    assert(!p.commandAllowed(exec, "npm test"))
+    assert(p.commandAllowed(exec, "sbt test"))
+    assert(!p.hostAllowed(net, "example.com"))
+    assert(p.hostAllowed(net, "scala-lang.org"))
+
   test("resetSession forgets session grants and open scopes but keeps the rules and the mode"):
     val prompter = ScriptedPrompter(List.fill(4)(Decision.AllowSession))
     val p = Policy(rules((".", Some(Access.Read), None, false)), List("ls"), Nil, prompter)

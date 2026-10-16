@@ -258,7 +258,7 @@ final class Policy(
       decide(NetRequest(missing, reason), s"hosts ${missing.mkString(", ")}") {
         base.synchronized(base.hosts ++= missing)
       }
-    openScope(parent, hosts = hosts)
+    openScope(parent, hosts = missing)
 
   /** Refuse a `request*` whose patterns collide with the deny list, before the
     * user is asked: a request is a widening, and the deny list is exactly what
