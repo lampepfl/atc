@@ -1,7 +1,7 @@
 package atc
 
 import atc.host.*
-import atc.lib.{FileSystem, IOCap}
+import atc.lib.{FileSystem, IOCap, UserIO}
 import atc.perms.*
 import atc.platform.Platform
 
@@ -22,8 +22,12 @@ class GitIgnoreSuite extends munit.FunSuite:
       Files.writeString(p, content)
     root
 
+  /** The tree under `root` is writable; `extra` rules come after that one. */
+  private def policyOn(root: Path, extra: FileRule*): Policy =
+    Policy(FileRule(PathPattern(".", root), Some(Access.Write), None) :: extra.toList, Nil, Nil, _ => Decision.Deny)
+
   private def ignoredIn(root: Path, rels: String*): List[Boolean] =
-    val gi = GitIgnore(root)
+    val gi = GitIgnore(root, policyOn(root))
     rels.toList.map(r => gi.ignores(root.resolve(r).nn))
 
   // ── pattern semantics ──
@@ -84,13 +88,13 @@ class GitIgnoreSuite extends munit.FunSuite:
 
   test("paths outside the repository, and the root itself, are never ignored"):
     val root = repo("*.log\n", "a.log" -> "")
-    val gi = GitIgnore(root)
+    val gi = GitIgnore(root, policyOn(root))
     assert(!gi.ignores(root))
     assert(!gi.ignores(root.getParent.nn.resolve("elsewhere.log")))
 
   test("the enclosing repository's .gitignore applies to a sub-directory cwd"):
     val root = repo("*.log\n", "sub/a.log" -> "", "sub/b.txt" -> "")
-    val gi = GitIgnore(root.resolve("sub").nn)
+    val gi = GitIgnore(root.resolve("sub").nn, policyOn(root))
     assert(gi.ignores(root.resolve("sub/a.log")))
     assert(!gi.ignores(root.resolve("sub/b.txt")))
 
@@ -98,7 +102,7 @@ class GitIgnoreSuite extends munit.FunSuite:
     val root = Files.createTempDirectory("atc-gitignore-none").nn.toRealPath().nn
     Files.createDirectories(root.resolve(".git"))
     Files.writeString(root.resolve("a.log"), "")
-    val gi = GitIgnore(root)
+    val gi = GitIgnore(root, policyOn(root))
     assert(!gi.ignores(root.resolve("a.log")))
     assert(gi.ignores(root.resolve(".git")))
 
@@ -109,7 +113,7 @@ class GitIgnoreSuite extends munit.FunSuite:
 
   // ── the host's listings ──
 
-  private def hostOn(root: Path, gitIgnore: GitIgnore): Host =
+  private def hostOn(root: Path, gitIgnore: GitIgnore, policy: Policy): Host =
     val output = new HostOutput:
       def print(agentText: String, userText: String): Unit = ()
     val llm = new HostLlm:
@@ -118,13 +122,13 @@ class GitIgnoreSuite extends munit.FunSuite:
     val ui = new HostUi:
       def askUser(question: String, options: List[String], multiple: Boolean): Option[String] = None
       def showTodos(items: List[atc.lib.Todo]): Unit = ()
-    val policy = Policy(List(FileRule(PathPattern(".", root), Some(Access.Write), None)), Nil, Nil, _ => Decision.Deny)
     Host(policy, root, output, llm, ui, gitIgnore)
 
   test("ls/walk/find/grepRecursive skip ignored paths; read and write still work"):
     val root =
       repo("out/\n*.log\n", "src/A.scala" -> "object A // needle", "out/A.class" -> "needle", "a.log" -> "needle")
-    val host = hostOn(root, GitIgnore(root))
+    val policy = policyOn(root)
+    val host = hostOn(root, GitIgnore(root, policy), policy)
     given IOCap = atc.lib.Runtime.rootIO
     given fs: FileSystem = host.fileSystem
     import host.*
@@ -143,7 +147,7 @@ class GitIgnoreSuite extends munit.FunSuite:
 
   test("without the setting nothing is hidden"):
     val root = repo("out/\n", "src/A.scala" -> "a", "out/A.class" -> "c")
-    val host = hostOn(root, GitIgnore.Disabled)
+    val host = hostOn(root, GitIgnore.Disabled, policyOn(root))
     given IOCap = atc.lib.Runtime.rootIO
     given fs: FileSystem = host.fileSystem
     import host.*
@@ -151,6 +155,52 @@ class GitIgnoreSuite extends munit.FunSuite:
       ls(root.toString).sorted,
       List(".git", ".gitignore", "out", "src")
     )
+
+  test("a .gitignore the agent may not read, directly or through a link, hides nothing"):
+    // Its rules decide which public names a listing shows, so they would reveal its content.
+    val root = repo("alpha\n", "alpha" -> "", "beta" -> "", "shared-rules" -> "beta\n")
+    val outside = Files.createTempDirectory("atc-gitignore-outside").nn.toRealPath().nn
+    Files.writeString(outside.resolve("rules"), "beta\n")
+    val policy = policyOn(root, FileRule(PathPattern(".gitignore", root), None, Some(true)))
+    val host = hostOn(root, GitIgnore(root, policy), policy)
+    given IOCap = atc.lib.Runtime.rootIO
+    given fs: FileSystem = host.fileSystem
+    import host.*
+    assertEquals(ls(root.toString).sorted, List(".gitignore", "alpha", "beta", "shared-rules"))
+
+    for dir <- List("denied", "readable") do
+      Files.createDirectories(root.resolve(dir))
+      Files.writeString(root.resolve(s"$dir/beta"), "")
+    assume(
+      TestEnv.trySymbolicLink(root.resolve("denied/.gitignore"), outside.resolve("rules")),
+      "symbolic links are unavailable"
+    )
+    assume(TestEnv.trySymbolicLink(root.resolve("readable/.gitignore"), root.resolve("shared-rules")))
+    assertEquals(ls(root.resolve("denied").toString), List("denied/beta"))
+    // A link to a file the agent may read is followed.
+    assert(!ls(root.resolve("readable").toString).contains("readable/beta"))
+
+  test("a .gitignore counts from the first listing after a session grant"):
+    // No rule grants the project. An approval for one block leaves the base scope
+    // unable to read the .gitignore; an approval for the session makes it apply.
+    val root = repo("out/\n*.log\n", "a.log" -> "", "b.txt" -> "", "out/x" -> "")
+    var decisions = List(Decision.AllowOnce, Decision.AllowSession)
+    val prompter: PermissionPrompter = _ =>
+      val decision = decisions.head
+      decisions = decisions.tail
+      decision
+    val policy = Policy(Nil, Nil, Nil, prompter)
+    val host = hostOn(root, GitIgnore(root, policy), policy)
+    given IOCap = atc.lib.Runtime.rootIO
+    given UserIO = atc.lib.Runtime.rootUser
+    given fs: FileSystem = host.fileSystem
+    import host.*
+    val out = root.resolve("out").toString
+    val once = requestFiles(root.toString, atc.lib.Access.Read, "look")((ls(root.toString).sorted, ls(out)))
+    assertEquals(once, (List(".gitignore", "a.log", "b.txt", "out"), List("out/x")))
+    requestFiles(root.toString, atc.lib.Access.Read, "look")(())
+    assertEquals(ls(out), Nil)
+    assertEquals(ls(root.toString).sorted, List(".gitignore", "b.txt"))
 
   test("config default is on and the flag round-trips"):
     assert(atc.config.Config().respectGitignore)

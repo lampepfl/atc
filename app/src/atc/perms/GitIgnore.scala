@@ -2,7 +2,7 @@ package atc.perms
 
 import atc.platform.{Platform, PlatformPath}
 
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, LinkOption, Path}
 import scala.collection.concurrent.TrieMap
 import scala.jdk.CollectionConverters.*
 import scala.util.matching.Regex
@@ -21,8 +21,10 @@ object GitIgnore:
 
   /** Reads the `.gitignore` files of the repository containing `cwd` (nested
     * ones included, deeper files taking precedence), and always ignores `.git`.
-    * Files are read on first use and then cached for the session. */
-  def apply(cwd: Path): GitIgnore = Rules(repoRoot(cwd))
+    * Files are read on first use and then cached for the session. Their rules
+    * decide which names a listing shows, so a `.gitignore` is read only when the
+    * base scope may read its canonical target and the target is not classified. */
+  def apply(cwd: Path, policy: Policy): GitIgnore = Rules(repoRoot(cwd), policy)
 
   /** The nearest ancestor of `dir` holding a `.git` entry, `dir` itself if there is none. A
     * `.gitignore` above the working directory still applies. */
@@ -32,22 +34,41 @@ object GitIgnore:
       case d: Path => if Files.exists(d.resolve(".git")) then Some(d) else up(d.getParent)
     up(dir.toAbsolutePath.nn.normalize).getOrElse(dir)
 
-  private final class Rules(root: Path) extends GitIgnore:
+  private final class Rules(root: Path, policy: Policy) extends GitIgnore:
+    /** The rules of each directory whose `.gitignore` was read or is absent. */
     private val cache = TrieMap[Path, List[Rule]]()
+    /** Directories whose `.gitignore` the policy refused. A refusal holds only while
+      * the session grants stay the same, since a new grant may admit the file. */
+    private val refused = TrieMap[Path, Unit]()
+    @volatile private var grants = policy.sessionFileGrants
 
-    private def rulesOf(dir: Path): List[Rule] = cache.getOrElseUpdate(dir, load(dir))
+    private def rulesOf(dir: Path): List[Rule] = cache.get(dir) match
+      case Some(rules) => rules
+      case None if refused.contains(dir) => Nil
+      case None =>
+        load(dir) match
+          case Some(rules) => cache.getOrElseUpdate(dir, rules)
+          case None =>
+            refused.put(dir, ())
+            Nil
 
-    private def load(dir: Path): List[Rule] =
-      val file = dir.resolve(".gitignore").nn
-      if !Files.isRegularFile(file) then Nil
+    /** The rules of `dir`'s `.gitignore`, or `None` when the policy refuses it. The
+      * canonical target is judged and read, so a symlinked `.gitignore` is never
+      * followed to a file that fails the check. */
+    private def load(dir: Path): Option[List[Rule]] =
+      val file = PlatformPath.canonical(dir.resolve(".gitignore").nn)
+      if !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) then Some(Nil)
       else
-        try
-          Files.readAllLines(file).nn.asScala.toList.flatMap: line =>
-            // A malformed pattern, such as an unbalanced character class,
-            // disables its own line and not the file, as git does.
-            try Rule.parse(line)
-            catch case _: Exception => None
-        catch case _: Exception => Nil // unreadable or not text: no rules from it
+        val permission = policy.effective(ScopeId.Base, file)
+        if !permission.canRead || permission.classified then None
+        else
+          try
+            Some(Files.readAllLines(file).nn.asScala.toList.flatMap: line =>
+              // A malformed pattern, such as an unbalanced character class,
+              // disables its own line and not the file, as git does.
+              try Rule.parse(line)
+              catch case _: Exception => None)
+          catch case _: Exception => Some(Nil) // unreadable or not text: no rules from it
 
     /** Whether each directory seen as a parent is ignored; a listing asks for all its entries. */
     private val ignoredDirs = TrieMap[Path, Boolean]()
@@ -56,7 +77,15 @@ object GitIgnore:
       * one of its ancestors is, so a negation inside an ignored directory does
       * not bring it back. For one component, the deepest `.gitignore` that
       * matches wins, and within a file the last matching rule wins. */
-    def ignores(p: Path): Boolean = ignores(p, Files.isDirectory(p))
+    def ignores(p: Path): Boolean =
+      // Rules already read stay cached. Refusals and the directory verdicts that
+      // relied on them are dropped when the session grants change.
+      val current = policy.sessionFileGrants
+      if current ne grants then
+        grants = current
+        refused.clear()
+        ignoredDirs.clear()
+      ignores(p, Files.isDirectory(p))
 
     private def ignores(p: Path, isDir: Boolean): Boolean =
       if p == root || !p.startsWith(root) then false

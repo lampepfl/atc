@@ -668,7 +668,7 @@ class LayerSuite extends munit.FunSuite:
     Files.createDirectories(w.cwd.resolve("out"))
     Files.writeString(w.cwd.resolve("out/log.txt"), "x")
     Files.writeString(w.cwd.resolve("kept.txt"), "y")
-    val ignore = GitIgnore(w.cwd)
+    val ignore = GitIgnore(w.cwd, w.policy)
     // the policy still permits the ignored path: gitignore is visibility only
     assertEquals(w.access("out/log.txt"), Access.Write)
     assert(ignore.ignores(w.cwd.resolve("out")))

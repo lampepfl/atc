@@ -352,6 +352,10 @@ final class Policy(
     base.fileGrants.reverse.map((path, access) => SessionGrant.File(path, access)) ++
       base.commands.distinct.map(SessionGrant.Command(_)) ++ base.hosts.distinct.map(SessionGrant.Host(_))
 
+  /** The session file grants. Every change replaces the list, so a caller can
+    * tell by reference whether they changed. */
+  private[perms] def sessionFileGrants: List[(Path, Access)] = base.fileGrants
+
   /** Remove a session grant from future permission checks. Existing processes are managed by /kill. */
   def revoke(grant: SessionGrant): Unit = base.synchronized:
     grant match

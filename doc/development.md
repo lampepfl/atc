@@ -519,6 +519,11 @@ would otherwise contact the server even from a read-only file system.
 `GitIgnore` controls visibility in listings and recursive searches, independently of
 permissions. It reads repository and nested `.gitignore` files, caches them for the session
 and always hides `.git`. An ignored path can still be accessed explicitly if permitted.
+Since its rules decide which names a listing shows, a `.gitignore` is read only when the
+base scope may read its canonical target and the target is not classified. The base scope
+holds the configured rules and the session grants; request scopes do not count. A symlinked
+`.gitignore` is judged by its target. A refusal lasts only until the session grants change,
+so a `.gitignore` applies from the first listing after the user grants access for the session.
 
 Commands use `*` globs; a pattern without `*` also matches a word prefix. Hosts are
 case-insensitive and normalize numeric IP literals. Deny rules are checked at use, even
