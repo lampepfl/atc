@@ -1,12 +1,10 @@
 package atc
 
+import atc.LocalServer.withServer
 import atc.config.{ModelConfig, ModelSpec, Tokens}
 import atc.llm.*
 import atc.llm.ChatGPTAuth.SignIn
 
-import com.sun.net.httpserver.HttpServer
-
-import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
 import java.util.Base64
@@ -16,43 +14,6 @@ import scala.jdk.CollectionConverters.*
 /** Signing in with a ChatGPT plan and calling its backend, against a local
   * server that plays both auth.openai.com and chatgpt.com. */
 class ChatGPTSuite extends munit.FunSuite:
-  private case class Request(method: String, path: String, query: String, headers: Map[String, String], body: String):
-    def form: Map[String, String] = body.split('&').toList.filter(_.nonEmpty).map { pair =>
-      val (k, v) = pair.span(_ != '=')
-      java.net.URLDecoder.decode(k, UTF_8).nn -> java.net.URLDecoder.decode(v.drop(1), UTF_8).nn
-    }.toMap
-    def json: ujson.Value = ujson.read(body)
-
-  private def withServer(respond: Request => (Int, String, String))(test: (String, () => List[Request]) => Unit)
-    : Unit =
-    val requests = ConcurrentLinkedQueue[Request]()
-    val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).nn
-    server.createContext(
-      "/",
-      exchange =>
-        try
-          val uri = exchange.getRequestURI.nn
-          val headers =
-            exchange.getRequestHeaders.nn.asScala.map((k, v) => k.toLowerCase -> v.asScala.mkString(",")).toMap
-          val request = Request(
-            exchange.getRequestMethod.nn,
-            uri.getPath.nn,
-            Option(uri.getRawQuery).getOrElse(""),
-            headers,
-            String(exchange.getRequestBody.nn.readAllBytes().nn, UTF_8),
-          )
-          requests.add(request)
-          val (status, contentType, reply) = respond(request)
-          val bytes = reply.getBytes(UTF_8)
-          exchange.getResponseHeaders.nn.add("Content-Type", contentType)
-          exchange.sendResponseHeaders(status, bytes.length.toLong)
-          exchange.getResponseBody.nn.write(bytes)
-        finally exchange.close()
-    )
-    server.start()
-    try test(s"http://127.0.0.1:${server.getAddress.getPort}", () => requests.asScala.toList)
-    finally server.stop(0)
-
   private def jwt(claims: ujson.Obj): String =
     def part(s: String) = Base64.getUrlEncoder.nn.withoutPadding().nn.encodeToString(s.getBytes(UTF_8))
     s"${part("""{"alg":"none"}""")}.${part(ujson.write(claims))}.signature"

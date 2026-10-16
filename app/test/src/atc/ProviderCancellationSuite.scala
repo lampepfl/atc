@@ -2,10 +2,9 @@ package atc
 
 import atc.config.{ModelConfig, ModelSpec}
 import atc.llm.*
-import com.sun.net.httpserver.HttpServer
-import java.net.InetSocketAddress
+
 import java.nio.charset.StandardCharsets.UTF_8
-import java.util.concurrent.{CountDownLatch, Executors, TimeUnit}
+import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
 
 class ProviderCancellationSuite extends munit.FunSuite:
@@ -38,42 +37,23 @@ class ProviderCancellationSuite extends munit.FunSuite:
     assertEquals(List(openai.write(), anthropic.write()), List(Providers.RequestTimeout, Providers.RequestTimeout))
     assert(!openai.connect().isZero && !anthropic.connect().isZero)
 
+  private def model(api: String, url: String): ChatModel =
+    ChatModel.create(ModelSpec("test", "test", api, "test", Some(url), Some("test"), ModelConfig()))
+
   for api <- List("openai", "openai-responses", "anthropic") do
     test(s"$api: garbage collection between streamed requests does not close the model's executor"):
-      val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).nn
-      server.createContext(
-        "/",
-        exchange =>
-          try
-            exchange.getRequestBody.nn.readAllBytes()
-            val body = events(api).getBytes(UTF_8)
-            exchange.getResponseHeaders.nn.add("Content-Type", "text/event-stream")
-            exchange.sendResponseHeaders(200, body.length.toLong)
-            exchange.getResponseBody.nn.write(body)
-          finally exchange.close()
-      )
-      server.start()
-      val model = ChatModel.create(ModelSpec(
-        "test",
-        "test",
-        api,
-        "test",
-        Some(s"http://127.0.0.1:${server.getAddress.getPort}"),
-        Some("test"),
-        ModelConfig()
-      ))
-      val request = ModelRequest()
-      try
-        for _ <- 1 to 4 do
-          val result = request.run(() => false) {
-            model.complete("test", List(Msg.User("hello")), Nil, StreamSink(_ => ()), () => false)
-          }
-          assertEquals(result.text, "done")
-          System.gc()
-          Thread.sleep(100) // allow the SDK's phantom-reference cleanup thread to run
-      finally
-        model.close()
-        server.stop(0)
+      LocalServer.withServer(_ => (200, "text/event-stream", events(api))): (url, _) =>
+        val streaming = model(api, url)
+        val request = ModelRequest()
+        try
+          for _ <- 1 to 4 do
+            val result = request.run(() => false) {
+              streaming.complete("test", List(Msg.User("hello")), Nil, StreamSink(_ => ()), () => false)
+            }
+            assertEquals(result.text, "done")
+            System.gc()
+            Thread.sleep(100) // allow the SDK's phantom-reference cleanup thread to run
+        finally streaming.close()
 
   private def events(api: String): String = api match
     case "anthropic" =>
@@ -106,84 +86,69 @@ class ProviderCancellationSuite extends munit.FunSuite:
     test(
       s"$api: cancel ${if duringStream then "between streamed events" else "before headers"} and complete a new request"
     ):
-      val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).nn
-      val executor = Executors.newCachedThreadPool()
-      server.setExecutor(executor)
       val entered = CountDownLatch(1)
       val streamed = CountDownLatch(1)
       val release = CountDownLatch(1)
       val auth = AtomicReference[String]()
       val count = AtomicInteger()
-      server.createContext(
-        "/",
-        exchange =>
-          exchange.getRequestBody.nn.readAllBytes()
-          try
-            val first = count.incrementAndGet() == 1
-            auth.set(exchange.getRequestHeaders.nn.getFirst(if api == "anthropic" then "x-api-key"
-            else "Authorization"))
-            if first && !duringStream then
-              entered.countDown()
-              release.await(5, TimeUnit.SECONDS)
-            exchange.getResponseHeaders.nn.add("Content-Type", "text/event-stream")
-            if first && duringStream then
-              exchange.sendResponseHeaders(200, 0)
-              val frames = events(api).split("\n\n").toList
-              val prefix = if api == "anthropic" then 3 else if api == "openai-responses" then 2 else 1
-              exchange.getResponseBody.nn.write((frames.take(prefix).mkString("\n\n") + "\n\n").getBytes(UTF_8))
-              exchange.getResponseBody.nn.flush()
-              entered.countDown()
-              release.await(5, TimeUnit.SECONDS)
-            else
-              val body = events(api).getBytes(UTF_8)
-              exchange.sendResponseHeaders(200, body.length.toLong)
-              exchange.getResponseBody.nn.write(body)
-          catch case _: java.io.IOException | _: InterruptedException => ()
-          finally exchange.close()
-      )
-      server.start()
-      val spec = ModelSpec(
-        "test",
-        "test",
-        api,
-        "test",
-        Some(s"http://127.0.0.1:${server.getAddress.getPort}"),
-        Some("test"),
-        ModelConfig()
-      )
-      val model = ChatModel.create(spec)
-      val request = ModelRequest()
-      val cancelled = AtomicBoolean(false)
-      val failure = AtomicReference[Throwable]()
-      def run(): Completion = model.complete(
-        "test",
-        List(Msg.User("hello")),
-        Nil,
-        StreamSink(_ => streamed.countDown(), _ => streamed.countDown()),
-        () => cancelled.get()
-      )
-      val caller = Thread(() =>
-        try request.run(() => cancelled.get())(run())
-        catch case error: Throwable => failure.set(error)
-        ()
-      )
-      caller.setDaemon(true)
-      caller.start()
-      try
-        assert(entered.await(5, TimeUnit.SECONDS))
-        assertEquals(auth.get(), if api == "anthropic" then "test" else "Bearer test")
-        if duringStream then
-          assert(streamed.await(5, TimeUnit.SECONDS))
-          Thread.sleep(50)
-        cancelled.set(true)
-        request.recheck()
-        caller.join(1500)
-        assert(!caller.isAlive, "cancellation waited for the server")
-        assert(failure.get().isInstanceOf[CancelledException])
-        cancelled.set(false)
-        assertEquals(request.run(() => false)(run()).text, "done")
-      finally
-        release.countDown()
-        model.close()
-        server.stop(0)
-        executor.shutdownNow()
+      // The first request waits, before its headers or in the middle of its stream, until released.
+      LocalServer.withHandler { exchange =>
+        exchange.getRequestBody.nn.readAllBytes()
+        try
+          val first = count.incrementAndGet() == 1
+          auth.set(exchange.getRequestHeaders.nn.getFirst(if api == "anthropic" then "x-api-key"
+          else "Authorization"))
+          if first && !duringStream then
+            entered.countDown()
+            release.await(5, TimeUnit.SECONDS)
+          exchange.getResponseHeaders.nn.add("Content-Type", "text/event-stream")
+          if first && duringStream then
+            exchange.sendResponseHeaders(200, 0)
+            val frames = events(api).split("\n\n").toList
+            val prefix = if api == "anthropic" then 3 else if api == "openai-responses" then 2 else 1
+            exchange.getResponseBody.nn.write((frames.take(prefix).mkString("\n\n") + "\n\n").getBytes(UTF_8))
+            exchange.getResponseBody.nn.flush()
+            entered.countDown()
+            release.await(5, TimeUnit.SECONDS)
+          else
+            val body = events(api).getBytes(UTF_8)
+            exchange.sendResponseHeaders(200, body.length.toLong)
+            exchange.getResponseBody.nn.write(body)
+        catch case _: java.io.IOException | _: InterruptedException => ()
+        finally exchange.close()
+      } { url =>
+        val streaming = model(api, url)
+        val request = ModelRequest()
+        val cancelled = AtomicBoolean(false)
+        val failure = AtomicReference[Throwable]()
+        def run(): Completion = streaming.complete(
+          "test",
+          List(Msg.User("hello")),
+          Nil,
+          StreamSink(_ => streamed.countDown(), _ => streamed.countDown()),
+          () => cancelled.get()
+        )
+        val caller = Thread(() =>
+          try request.run(() => cancelled.get())(run())
+          catch case error: Throwable => failure.set(error)
+          ()
+        )
+        caller.setDaemon(true)
+        caller.start()
+        try
+          assert(entered.await(5, TimeUnit.SECONDS))
+          assertEquals(auth.get(), if api == "anthropic" then "test" else "Bearer test")
+          if duringStream then
+            assert(streamed.await(5, TimeUnit.SECONDS))
+            Thread.sleep(50)
+          cancelled.set(true)
+          request.recheck()
+          caller.join(1500)
+          assert(!caller.isAlive, "cancellation waited for the server")
+          assert(failure.get().isInstanceOf[CancelledException])
+          cancelled.set(false)
+          assertEquals(request.run(() => false)(run()).text, "done")
+        finally
+          release.countDown()
+          streaming.close()
+      }
