@@ -19,9 +19,10 @@ enum Origin(val label: String):
   /** What `/config` set for the running session, over every file. */
   case Session extends Origin("session")
 
-  /** Whether this layer may grant anything anywhere (the project layer may
-    * grant only within its own project, and its scalar settings only narrow). */
-  def grants: Boolean = this != Origin.Project
+  /** Whether this layer may grant anything anywhere: the global and explicit layers. The
+    * project layer grants only within its own project and its scalar settings only narrow;
+    * the session layer narrows like it, and its settings that are not policy still win. */
+  def grants: Boolean = this == Origin.Global || this == Origin.Explicit
 
 /** One configuration file, as read. `json` says which settings it actually
   * [[defines]], so a narrowing layer only narrows what it mentions (a setting

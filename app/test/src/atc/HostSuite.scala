@@ -654,7 +654,7 @@ class HostSuite extends munit.FunSuite:
     assertEquals(keyed.exec(printPath).stdout.trim, "<unset>")
 
   test("provider key variables: named references, keyEnv, headers and the SDK defaults"):
-    import atc.config.{ConfigLayer, Configuration, KeyBindings, ProviderConfig}
+    import atc.config.{Config, ConfigLayer, Configuration, KeyBindings, Origin, ProviderConfig}
     val anthropic = Set("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
     val openai =
       Set("OPENAI_API_KEY", "AZURE_OPENAI_KEY", "OPENAI_ADMIN_KEY", "OPENAI_WEBHOOK_SECRET", "OPENAI_CUSTOM_HEADERS")
@@ -677,7 +677,8 @@ class HostSuite extends munit.FunSuite:
     for api <- List("responses", "openai-chat", "chat", "OpenAI") do
       assertEquals(KeyBindings.variables(ProviderConfig(Some(api))), openai)
     val config = ujson.read("""{ "providers": { "c": { "api": "Claude", "models": { "m": {} } } } }""").obj
-    assertEquals(Configuration.combine(List(ConfigLayer.session(config))).keyVariables, anthropic)
+    val global = ConfigLayer(Origin.Global, None, config, upickle.default.read[Config](config))
+    assertEquals(Configuration.combine(List(global)).keyVariables, anthropic)
 
   test("a denied executable path gets a copyable requestExec hint"):
     val executable = if Platform.isWindows then "C:\\Program Files\\Example\\tool.exe" else "/opt/Example Tools/tool"

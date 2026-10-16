@@ -183,6 +183,10 @@ class LayerSuite extends munit.FunSuite:
     )
     assert(session.describe.contains("(this session)"), session.describe)
     assertEquals(combined.sources, w.configuration.sources) // no file behind it
+    // It grants nothing: a policy setting in it could only narrow.
+    val loose = ConfigLayer.session(ujson.Obj("safeMode" -> false, "maxToolCalls" -> 1000))
+    val narrowed = Configuration.combine(w.configuration.layers :+ loose, w.configuration.keys).settings
+    assertEquals((narrowed.safeMode, narrowed.maxToolCalls), (true, 200))
 
   test("initProject writes the starting project config and its .gitignore once, and never again"):
     val w = World(global = "")
