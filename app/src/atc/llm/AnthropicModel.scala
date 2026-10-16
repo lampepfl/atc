@@ -6,7 +6,7 @@ import atc.config.{ModelSpec, Tokens}
 import com.anthropic.backends.AnthropicBackend
 import com.anthropic.client.{AnthropicClient, AnthropicClientImpl}
 import com.anthropic.core.{ClientOptions, JsonValue, RequestOptions, Timeout}
-import com.anthropic.core.http.HttpClient
+import com.anthropic.core.http.{HttpClient, HttpRequest}
 import com.anthropic.helpers.MessageAccumulator
 import com.anthropic.models.messages.*
 import com.anthropic.models.models.ModelListParams
@@ -40,7 +40,8 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
       val timeout = Timeout.builder().request(Providers.RequestTimeout).build()
       // The SDK builds and owns the OkHttp client (since 2.63 its transport takes no outside one);
       // cancellation goes through `ModelRequest.scopedTransport` instead of an OkHttp event listener.
-      val transport = com.anthropic.client.okhttp.OkHttpClient.builder().timeout(timeout).backend(backend).build()
+      val transport =
+        withHeaders(com.anthropic.client.okhttp.OkHttpClient.builder().timeout(timeout).backend(backend).build())
       val options = ClientOptions.builder().httpClient(transport)
         .baseUrl(backend.baseUrl()).timeout(Providers.RequestTimeout)
       backend.applyCredentials(transport, options)
@@ -57,6 +58,17 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
   override def close(): Unit = synchronized:
     opened.foreach(_.client.close())
     opened = None
+
+  /** `base` with the provider's headers on every request, model lists included. */
+  private def withHeaders(base: HttpClient): HttpClient =
+    def headed(request: HttpRequest): HttpRequest =
+      val b = request.toBuilder()
+      Providers.headers(spec).foreach((name, value) => b.replaceHeaders(name, value))
+      b.build()
+    new HttpClient:
+      def execute(request: HttpRequest, options: RequestOptions) = base.execute(headed(request), options)
+      def executeAsync(request: HttpRequest, options: RequestOptions) = base.executeAsync(headed(request), options)
+      def close(): Unit = base.close()
 
   private def toolUnion(t: ToolSpec): Tool =
     val schema = ujson.read(t.parametersJson)
@@ -80,7 +92,6 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
       .model(modelId)
       .maxTokens(maxOutputTokens.get.toLong)
       .systemOfTextBlockParams(List(systemBlock).asJava)
-    Providers.headers(spec).foreach((n, v) => b.putAdditionalHeader(n, v))
     configuredThinking(b)
     // `temperature` is not applied: current Anthropic models reject sampling parameters.
     tools.foreach(t => b.addTool(toolUnion(t)))
@@ -193,7 +204,6 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
   def simple(system: Option[String], prompt: String, thinking: Boolean): Reply =
     val b = MessageCreateParams.builder().model(modelId)
       .maxTokens(settings.maxTokens.getOrElse(AnthropicModel.SimpleMaxTokens).toLong).addUserMessage(prompt)
-    Providers.headers(spec).foreach((n, v) => b.putAdditionalHeader(n, v))
     system.foreach(b.system)
     if thinking then configuredThinking(b) else b.thinking(ThinkingConfigDisabled.builder().build())
     val m = client.messages().create(b.build())

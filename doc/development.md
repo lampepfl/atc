@@ -936,9 +936,10 @@ resolves `${VAR}` values through the key bindings (an unset variable drops the h
 keeps the placeholder `${ATC_SESSION}` (`ProviderConfig.SessionRef`), which `Providers.headers(spec)`
 replaces per request with the conversation id, a UUID that `Agent.clear()` renews. The same
 call adds `User-Agent: atc/<version>` unless the config sets one, regardless of header-name
-case. Every adapter applies the set to both `complete` and `simple` with the params builder's
-`putAdditionalHeader`. Provider-specific headers such as OpenCode's `x-opencode-session`
-are configured explicitly.
+case. The set goes on every request, model lists included: the OpenAI-shaped adapters add it
+with an OkHttp interceptor on the model's client, ahead of the ChatGPT authorization, and the
+Anthropic adapter with a wrapper around its SDK transport. Provider-specific headers such as
+OpenCode's `x-opencode-session` are configured explicitly.
 
 Chat Completions requests set `stream_options.include_usage` so providers can report token
 counts for `/cost` and context calibration. Providers send usage on the finish chunk,

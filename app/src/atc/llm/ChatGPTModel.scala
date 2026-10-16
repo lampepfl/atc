@@ -53,9 +53,8 @@ final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
     * the backend's order, with their context windows and efforts. */
   override private[llm] def listModels(): List[ModelSpec] =
     val base = spec.baseUrl.getOrElse(ChatGPTModel.BackendUrl).stripSuffix("/")
-    val request = okhttp3.Request.Builder().url(s"$base/models?client_version=${ChatGPTModel.ClientVersion}")
-    Providers.headers(spec).foreach((n, v) => request.header(n, v))
-    val call = http.newBuilder().callTimeout(Providers.ListTimeout).build().newCall(request.build())
+    val request = okhttp3.Request.Builder().url(s"$base/models?client_version=${ChatGPTModel.ClientVersion}").build()
+    val call = http.newBuilder().callTimeout(Providers.ListTimeout).build().newCall(request)
     val text = Using.resource(call.execute()): response =>
       val body = Option(response.body).fold("")(_.string())
       if !response.isSuccessful then throw IOException(s"HTTP ${response.code}: ${body.take(300)}")

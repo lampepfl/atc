@@ -72,7 +72,12 @@ private[llm] abstract class OpenAIShapedModel(spec: ModelSpec) extends SpecModel
     opened.getOrElse:
       val timeout = Timeout.builder().request(Providers.RequestTimeout).build()
       val plain = Providers.httpClient(timeout.connect(), timeout.read(), timeout.write(), timeout.request())
-      val http = authorization.fold(plain)(plain.newBuilder().addInterceptor(_).build())
+      // The provider's headers go on every request, model lists included, before the authorization.
+      val headers: okhttp3.Interceptor = chain =>
+        val request = chain.request().newBuilder()
+        Providers.headers(spec).foreach((name, value) => request.header(name, value))
+        chain.proceed(request.build())
+      val http = (headers :: authorization.toList).foldLeft(plain.newBuilder())(_.addInterceptor(_)).build()
       val created = Connection(Providers.openAiClient(spec, com.openai.client.okhttp.OkHttpClient(http)), http)
       opened = Some(created)
       created

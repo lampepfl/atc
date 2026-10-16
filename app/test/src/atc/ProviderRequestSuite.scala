@@ -1,6 +1,6 @@
 package atc
 
-import atc.config.{ModelConfig, ModelSpec, ReasoningStyle}
+import atc.config.{ModelConfig, ModelSpec, ProviderConfig, ReasoningStyle}
 import atc.llm.*
 import atc.agent.{Agent, AgentEnvironment, AgentMessages, ToolRunner, TurnOutcome}
 import atc.config.Config
@@ -412,6 +412,45 @@ class ProviderRequestSuite extends munit.FunSuite:
       if previous == null then System.clearProperty("anthropic.apiKey")
       else System.setProperty("anthropic.apiKey", previous)
       server.stop(0)
+
+  test("every request carries the provider's headers and the user agent, model lists included"):
+    val headers = Map("x-test" -> "v", "x-session" -> ProviderConfig.SessionRef)
+    val message =
+      """{"id":"m1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"done"}],
+         "stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}"""
+    for (api, list, reply) <- List(
+        ("openai", """{"object":"list","data":[]}""", answer),
+        ("anthropic", """{"data":[],"has_more":false}""", message),
+      )
+    do
+      val seen = java.util.concurrent.ConcurrentLinkedQueue[(String, com.sun.net.httpserver.Headers)]()
+      val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).nn
+      server.createContext(
+        "/",
+        exchange =>
+          try
+            seen.add(exchange.getRequestURI.nn.getPath.nn -> exchange.getRequestHeaders.nn)
+            val bytes = (if exchange.getRequestMethod == "GET" then list else reply).getBytes(UTF_8)
+            exchange.getResponseHeaders.nn.add("Content-Type", "application/json")
+            exchange.sendResponseHeaders(200, bytes.length.toLong)
+            exchange.getResponseBody.nn.write(bytes)
+          finally exchange.close()
+      )
+      server.start()
+      try
+        val url = s"http://127.0.0.1:${server.getAddress.getPort}"
+        val provider = endpoint(api, url).copy(headers = headers)
+        assertEquals(ChatModel.listModels(provider), Nil)
+        val model = ChatModel.create(provider.copy(alias = "m", modelId = "m"))
+        try assertEquals(model.simple(None, "hi").text, "done")
+        finally model.close()
+        assertEquals(seen.size, 2, api)
+        import scala.jdk.CollectionConverters.*
+        for (path, sent) <- seen.asScala do
+          assertEquals(sent.getFirst("x-test"), "v", s"$api $path")
+          assertEquals(sent.getFirst("x-session"), Providers.conversation, s"$api $path")
+          assertEquals(sent.getFirst("User-Agent"), Providers.UserAgent, s"$api $path")
+      finally server.stop(0)
 
   test("a switched effort applies to the next request"):
     withServer((_, _, _) => (200, "application/json", answer)): (url, requests) =>
