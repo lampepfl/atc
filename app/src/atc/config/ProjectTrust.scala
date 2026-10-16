@@ -41,11 +41,22 @@ object ProjectTrust:
   final case class Pending(root: Path, grants: Grants, changed: Boolean)
 
   /** The untrusted grants of the project `cwd` belongs to, with the store in `atcDir`; `None`
-    * when it has none or they are trusted. In the home directory the "project" is the global
-    * config itself, which is the user's own. */
+    * when it has none or they are trusted. */
   def pending(cwd: Path, atcDir: Path): Option[Pending] =
-    Config.projectRoot(cwd).filterNot(root => Config.samePath(root.resolve(".atc").nn, atcDir)).flatMap: root =>
-      val grants = of(root)
+    Config.projectRoot(cwd).flatMap(root => pending(root, readConfig(root), readKeys(root), atcDir))
+
+  /** As [[pending]], for the project at `root` whose config reads as `config` and whose key file
+    * binds `keys`. In the home directory the "project" is the global config itself, which is the
+    * user's own. */
+  private[config] def pending(
+    root: Path,
+    config: ujson.Obj,
+    keys: Map[String, String],
+    atcDir: Path,
+  ): Option[Pending] =
+    if Config.samePath(root.resolve(".atc").nn, atcDir) then None
+    else
+      val grants = of(config, keys)
       val recorded = read(atcDir).get(key(root))
       Option.when(!grants.isEmpty && !recorded.contains(grants.fingerprint))(
         Pending(root, grants, changed = recorded.isDefined)
@@ -53,10 +64,15 @@ object ProjectTrust:
 
   /** Trust what the project `cwd` belongs to grants now. */
   def trust(cwd: Path, atcDir: Path): Unit =
-    Config.projectRoot(cwd).foreach: root =>
-      val store = read(atcDir).updated(key(root), of(root).fingerprint)
-      val text = ujson.write(ujson.Obj.from(store.toList.sortBy(_._1).map((k, v) => k -> ujson.Str(v))), indent = 2)
-      Config.replaceFile(atcDir.resolve(StoreFile).nn, text + "\n", keepPermissions = false)
+    Config.projectRoot(cwd).foreach(root => record(root, of(readConfig(root), readKeys(root)).fingerprint, atcDir))
+
+  /** Trust the grants `pending` describes, and not a later version of the files. */
+  def trust(pending: Pending, atcDir: Path): Unit = record(pending.root, pending.grants.fingerprint, atcDir)
+
+  private def record(root: Path, fingerprint: String, atcDir: Path): Unit =
+    val store = read(atcDir).updated(key(root), fingerprint)
+    val text = ujson.write(ujson.Obj.from(store.toList.sortBy(_._1).map((k, v) => k -> ujson.Str(v))), indent = 2)
+    Config.replaceFile(atcDir.resolve(StoreFile).nn, text + "\n", keepPermissions = false)
 
   /** `layer` without the settings that need trust. */
   def withoutGrants(layer: ConfigLayer): ConfigLayer =
@@ -65,14 +81,18 @@ object ProjectTrust:
 
   private val Removed = Set("commands", "hosts", "classifiedModel")
 
-  private def of(root: Path): Grants =
+  private def readConfig(root: Path): ujson.Obj =
     val config = Config.projectPath(root)
-    val json =
-      if Files.isRegularFile(config) then ObjectText.parse(Files.readString(config).nn, config.toString)
-      else ujson.Obj()
-    def strings(key: String) = json.value.get(key).flatMap(_.arrOpt).fold(Nil)(_.toList.flatMap(_.strOpt))
+    if Files.isRegularFile(config) then ObjectText.parse(Files.readString(config).nn, config.toString)
+    else ujson.Obj()
+
+  private def readKeys(root: Path): Map[String, String] =
     val keyFile = Config.keysPath(root)
-    val keys = (if Files.isRegularFile(keyFile) then KeyBindings.read(keyFile).toList else Nil).sortBy(_._1)
+    if Files.isRegularFile(keyFile) then KeyBindings.read(keyFile) else Map.empty
+
+  private def of(json: ujson.Obj, bindings: Map[String, String]): Grants =
+    def strings(key: String) = json.value.get(key).flatMap(_.arrOpt).fold(Nil)(_.toList.flatMap(_.strOpt))
+    val keys = bindings.toList.sortBy(_._1)
     val classified = json.value.get("classifiedModel").flatMap(_.strOpt)
     val granted = ujson.Obj(
       "commands" -> ujson.Arr.from(strings("commands")),

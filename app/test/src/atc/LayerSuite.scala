@@ -521,6 +521,18 @@ class LayerSuite extends munit.FunSuite:
     for entry <- commands ++ hosts ++ (1 to 14).map(i => s"K$i") do assert(rows.contains(entry), entry)
     assert(!rows.contains("more"), rows)
 
+  test("what is trusted is what the prompt showed, not a later version of the files"):
+    val w = World(project = """{ "commands": ["make test"] }""")
+    val atcDir = w.globalPath.getParent.nn
+    val shown = ProjectTrust.pending(w.cwd, atcDir).get
+    Files.writeString(Config.projectPath(w.cwd), """{ "commands": ["make test", "python"] }""")
+    ProjectTrust.trust(shown, atcDir)
+    assert(ProjectTrust.pending(w.cwd, atcDir).get.changed)
+    assertEquals(Config.load(w.cwd, None, w.globalPath).settings.commands, Nil)
+    Files.writeString(Config.projectPath(w.cwd), """{ "commands": ["make test"] }""")
+    assertEquals(ProjectTrust.pending(w.cwd, atcDir), None)
+    assertEquals(Config.load(w.cwd, None, w.globalPath).settings.commands, List("make test"))
+
   // ── order and sources ───────────────────────────────────────────
 
   test("layers are reported in order, and a path named twice is read once"):

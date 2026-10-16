@@ -114,7 +114,7 @@ object Setup:
               else Some(if tui.confirm("Trust this project's config?") then trustIt else without)
             answer match
               case Some(`trustIt`) =>
-                ProjectTrust.trust(args.cwd, Config.globalDir)
+                ProjectTrust.trust(pending, Config.globalDir)
                 load()
               case Some("Quit") => throw App.Exit(0)
               case _ =>

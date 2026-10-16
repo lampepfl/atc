@@ -300,23 +300,29 @@ object Config:
       if !Files.exists(path) then throw IllegalArgumentException(s"Explicit config does not exist: $path")
       if !Files.isRegularFile(path) then throw IllegalArgumentException(s"Explicit config is not a regular file: $path")
     val root = projectRoot(cwd)
-    val untrusted = !trustProject && ProjectTrust.pending(cwd, global.getParent.nn).isDefined
+    val atcDir = global.getParent.nn
     val candidates =
       List(Origin.Global -> global) ++ root.map(Origin.Project -> projectPath(_)) ++ explicit.map(Origin.Explicit -> _)
     // A file named twice, through links or not, is read once, in the first role it appears in.
     // That keeps `~/.atc/config.json` a granting layer when atc runs in the home
     // directory, and keeps `-c ./.atc/config.json` a narrowing one.
-    val layers = candidates
+    val read = candidates
       .filter((_, p) => Files.isRegularFile(p))
       .distinctBy((_, p) => PlatformPath.canonical(p))
       .map((origin, path) => ConfigLayer.read(origin, path))
-      .map(layer => if untrusted && layer.origin == Origin.Project then ProjectTrust.withoutGrants(layer) else layer)
-    val bundled = Option.when(bundledGlobal && !layers.exists(_.origin == Origin.Global))(ConfigLayer.bundled)
     // Keys are read separately, most specific first: they are secrets, not
     // settings, so they never take part in the layer merge.
-    val projectKeys = if untrusted then Nil else root.map(keysPath).toList
-    val keys = KeyBindings.load(projectKeys :+ global.getParent.nn.resolve(KeysFile).nn)
-    Configuration.combine(bundled.toList ++ layers, keys)
+    val projectKeys = root.map(keysPath).filter(Files.isRegularFile(_))
+    val keys = KeyBindings.load(projectKeys.toList :+ atcDir.resolve(KeysFile).nn)
+    // Trust is judged on the same reading of the project's files that its layer and keys come from.
+    val untrusted = !trustProject && root.exists: r =>
+      val config = read.find(_.origin == Origin.Project).fold(ujson.Obj())(_.json)
+      val bindings = keys.files.collectFirst { case (p, b) if projectKeys.contains(p) => b }
+      ProjectTrust.pending(r, config, bindings.getOrElse(Map.empty), atcDir).isDefined
+    val layers = read.map(l => if untrusted && l.origin == Origin.Project then ProjectTrust.withoutGrants(l) else l)
+    val bundled = Option.when(bundledGlobal && !layers.exists(_.origin == Origin.Global))(ConfigLayer.bundled)
+    val trustedKeys = if untrusted then KeyBindings(keys.files.filterNot((p, _) => projectKeys.contains(p))) else keys
+    Configuration.combine(bundled.toList ++ layers, trustedKeys)
 
   /** Create the global configuration and adjacent key bindings if they are
     * missing, ensuring that narrowing layers have a base. Key bindings are
