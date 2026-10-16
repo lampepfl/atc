@@ -22,10 +22,9 @@ class DialogsSuite extends munit.FunSuite:
     terminal.setSize(Size.of(width, 24): Sized)
     val screen = Screen(terminal, plain, Glyphs.unicode)
     val alerts = Alerts(terminal, plain = false, _ => ())
-    val keys = KeyReader(terminal, plain = false, alerts, () => (), _ => (), _ => ())
     val status = StatusLine(screen, () => true, () => true, () => 0)
     val prompt = PromptReader(screen, Files.createTempDirectory("atc-dialogs").nn.resolve("history").nn, alerts)
-    (Dialogs(screen, alerts, keys, status, prompt), out)
+    (Dialogs(screen, alerts, status, prompt), out)
 
   private def written(out: ByteArrayOutputStream): String = Ansi.Sgr.replaceAllIn(out.toString(UTF_8), "")
 

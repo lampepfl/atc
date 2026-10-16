@@ -7,33 +7,23 @@ import java.util.Locale
 import Ansi.{Bold, Cyan, Dim, Green, Red, Yellow}
 
 /** What the pop-ups show and read: permission requests, questions, confirmations, secrets
-  * and choices. The TUI runs each inside `popupBlock`, which makes it a block of its own.
-  * Menus and answer fields pause the turn's key reader and show their keys in the footer;
-  * no screen lock is held while they read. */
-private[ui] final class Dialogs(
-  screen: Screen,
-  alerts: Alerts,
-  keys: KeyReader,
-  status: StatusLine,
-  prompt: PromptReader,
-):
+  * and choices. Every method must run inside `Tui.popupBlock`, which makes it a block of
+  * its own and pauses the turn's key reader for it. Menus and answer fields show their keys
+  * in the footer; no screen lock is held while they read. A menu gives indices, so duplicate
+  * labels stay apart, and `None` when left with Esc, Ctrl-C or Ctrl-D; `escape` names where
+  * Esc goes in the footer: `back` in a slash command's menus, `cancel` in the agent's pop-ups. */
+private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLine, prompt: PromptReader):
   import screen.{Indent, g, plain, styled, width, write}
 
-  private val menus = Menus(screen, alerts, status)
+  private val menus = ListMenu(screen, status, alerts)
 
-  /** A single-choice menu, its cursor on `initial` at first: the index of the chosen label.
-    * `escape` names where Esc goes. */
-  def menuIndex(message: String, labels: List[String], escape: String = "cancel", initial: Int = 0): Option[Int] =
-    keys.withPaused(menus.list(message, labels, escape, initial))
+  /** A single-choice menu, its cursor on `initial` at first: the index of the chosen label. */
+  def menuIndex(message: String, labels: List[String], escape: String, initial: Int): Option[Int] =
+    menus.run(message, labels, multi = false, initial, Set.empty, escape).flatMap(_.headOption)
 
   /** A multi-choice menu with the `checked` options ticked at first: the ticked indices. */
-  def checkboxIndices(
-    message: String,
-    labels: List[String],
-    checked: Set[Int] = Set.empty,
-    escape: String = "cancel",
-  ): Option[List[Int]] =
-    keys.withPaused(menus.checkbox(message, labels, checked, escape))
+  def checkboxIndices(message: String, labels: List[String], checked: Set[Int], escape: String): Option[List[Int]] =
+    menus.run(message, labels, multi = true, 0, checked, escape)
 
   /** Where a pop-up continues: under the text of its question or request. */
   private val Under = Indent + Indent
@@ -41,7 +31,7 @@ private[ui] final class Dialogs(
   /** A pop-up's menu, its cursor on `initial` at first: under its question, which it does
     * not repeat as a title. */
   private def menu(labels: List[String], escape: String, initial: Int = 0): Option[String] =
-    keys.withPaused(menus.list("", labels, escape, initial, Under)).flatMap(labels.lift)
+    menus.run("", labels, multi = false, initial, Set.empty, escape, Under).flatMap(_.headOption).flatMap(labels.lift)
 
   private def note(text: String): Unit = write(Under + styled(text, Dim) + "\n")
 
@@ -128,13 +118,13 @@ private[ui] final class Dialogs(
         freeText(answerPrompt)
       else if multiple then
         val labels = cleanOptions :+ Menus.AddAnswerLabel
-        keys.withPaused(menus.checkbox("", labels, Set.empty, "cancel", Under)).flatMap: ids =>
+        menus.run("", labels, multi = true, 0, Set.empty, "cancel", Under).flatMap: ids =>
           val chosen = ids.sorted.filter(_ < options.size).flatMap(options.lift)
           if ids.contains(cleanOptions.size) then freeText(answerPrompt).map(t => (chosen :+ t).mkString("; "))
           else Option.when(chosen.nonEmpty)(chosen.mkString("; "))
       else
         val labels = cleanOptions :+ Menus.OtherLabel
-        keys.withPaused(menus.list("", labels, "cancel", 0, Under)).flatMap: i =>
+        menus.run("", labels, multi = false, 0, Set.empty, "cancel", Under).flatMap(_.headOption).flatMap: i =>
           if i == cleanOptions.size then freeText(answerPrompt) else options.lift(i)
     // A single-choice menu echoes the selection itself; confirm the other outcomes.
     reply match
@@ -146,8 +136,8 @@ private[ui] final class Dialogs(
 
   private def freeText(promptText: String): Option[String] = answerField(prompt.readAnswer(promptText))
 
-  /** Read typed text with the key reader paused and the field's keys in the footer. */
-  private def answerField(read: => Option[String]): Option[String] = keys.withPaused:
+  /** Read typed text with the field's keys in the footer. */
+  private def answerField(read: => Option[String]): Option[String] =
     status.withHint(s"Enter send ${g.dot} Ctrl-C cancel"):
       screen.synchronized(screen.flush())
       try read

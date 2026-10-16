@@ -1219,7 +1219,7 @@ that track line boundaries, styles, width, live regions and the spinner; its mon
 TUI's lock), `StatusLine` (the footer and the window title), `ToolBlock` (one tool call's
 block, its live output, its summary and the `/output` history), `ThinkingView` (the
 reasoning window), `Dialogs` (what pop-ups show and read, through
-`Menus` and `ListMenu`), `KeyReader` (the key thread during a turn), `PromptReader` (the
+`ListMenu`), `KeyReader` (the key thread during a turn), `PromptReader` (the
 JLine line reader and its bindings) and `Alerts` (notifications and focus tracking).
 `Format` holds the short number, duration and plural forms of status and summary lines.
 `Ansi` removes terminal controls from external text before display. Keep model-visible

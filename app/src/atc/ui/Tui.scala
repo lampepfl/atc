@@ -90,7 +90,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     text => frame { statusLine.draft = text; statusLine.refresh() },
   )
   private val statusLine = StatusLine(screen, () => busy, () => popupDepth > 0, () => queuedInputs())
-  private val dialogs = Dialogs(screen, alerts, keys, statusLine, prompt)
+  private val dialogs = Dialogs(screen, alerts, statusLine, prompt)
 
   def fileChanged(change: FileChange): Unit = screen.synchronized(tool.fileChanged(change))
 
