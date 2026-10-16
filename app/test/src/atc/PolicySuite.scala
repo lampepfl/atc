@@ -9,6 +9,15 @@ import scala.util.matching.Regex
 class PolicySuite extends munit.FunSuite:
 
   val root: Path = Files.createTempDirectory("atc-policy").toRealPath()
+  Files.createDirectories(root.resolve("src/main"))
+  Files.createDirectories(root.resolve("build"))
+  Files.createDirectories(root.resolve("secrets/inner"))
+  Files.writeString(root.resolve("src/main/A.scala"), "a")
+  Files.writeString(root.resolve("secrets/key.txt"), "k")
+  Files.writeString(root.resolve(".env"), "X=1")
+
+  def rules(specs: (String, Option[Access], Option[Boolean], Boolean)*): List[FileRule] =
+    specs.toList.map((p, a, c, l) => FileRule(PathPattern(p, root), a, c, l))
 
   test("revoking a session grant removes only that grant and preserves configured access"):
     val policy = Policy(Nil, List("git status"), Nil, _ => Decision.AllowSession)
@@ -19,23 +28,6 @@ class PolicySuite extends munit.FunSuite:
     assert(policy.commandAllowed(ScopeId.Base, "git status"))
     assert(policy.hostAllowed(ScopeId.Base, "example.com"))
     assertEquals(policy.sessionGrants, List(SessionGrant.Host("example.com")))
-  Files.createDirectories(root.resolve("src/main"))
-  Files.createDirectories(root.resolve("build"))
-  Files.createDirectories(root.resolve("secrets/inner"))
-  Files.writeString(root.resolve("src/main/A.scala"), "a")
-  Files.writeString(root.resolve("secrets/key.txt"), "k")
-  Files.writeString(root.resolve(".env"), "X=1")
-
-  class ScriptedPrompter(var decisions: List[Decision]) extends PermissionPrompter:
-    var asked = List.empty[PermissionRequest]
-    def ask(r: PermissionRequest): Decision =
-      asked ::= r
-      decisions match
-        case d :: rest => decisions = rest; d
-        case Nil => Decision.Deny
-
-  def rules(specs: (String, Option[Access], Option[Boolean], Boolean)*): List[FileRule] =
-    specs.toList.map((p, a, c, l) => FileRule(PathPattern(p, root), a, c, l))
 
   test("meet semantics: sub-folder inherits and can only get stricter"):
     val p = Policy(
@@ -48,7 +40,7 @@ class PolicySuite extends munit.FunSuite:
       ),
       Nil,
       Nil,
-      ScriptedPrompter(Nil)
+      ScriptedPrompter()
     )
     assertEquals(p.configPerm(root.resolve("src/main/A.scala")), Perm(Access.Write, false))
     assertEquals(p.configPerm(root.resolve("build/x.jar")), Perm(Access.Read, false))
@@ -108,7 +100,7 @@ class PolicySuite extends munit.FunSuite:
     assertEquals(p.effective(ScopeId.Base, f).access, Access.Read)
     // read is already held: no prompt, scope opened
     val s0 = p.requestFile(ScopeId.Base, root.resolve("src"), Access.Read, "")
-    assert(prompter.asked.isEmpty)
+    assert(prompter.requests.isEmpty, prompter.requests.toString)
     p.closeScope(s0)
     // once
     val s1 = p.requestFile(ScopeId.Base, root.resolve("src"), Access.Write, "edit")
@@ -122,10 +114,10 @@ class PolicySuite extends munit.FunSuite:
     val s3 = p.requestFile(ScopeId.Base, root.resolve("src"), Access.Write, "third")
     p.closeScope(s3)
     assertEquals(p.effective(ScopeId.Base, f).access, Access.Write)
-    assertEquals(prompter.asked.size, 3)
+    assertEquals(prompter.requests.size, 3)
 
   test("a request that needs no prompt does not raise stricter rules below its path"):
-    val prompter = ScriptedPrompter(Nil)
+    val prompter = ScriptedPrompter()
     val p = Policy(
       rules(
         (".", Some(Access.Write), None, false),
@@ -144,7 +136,7 @@ class PolicySuite extends munit.FunSuite:
     val exec = p.requestExec(ScopeId.Base, List("./run.sh"), "")
     assert(p.commandAllowed(exec, "./run.sh"))
     assert(!p.commandAllowed(exec, "./run.sh --all"))
-    assertEquals(prompter.asked, Nil)
+    assert(prompter.requests.isEmpty, prompter.requests.toString)
 
   test("closed scopes cannot access paths covered by locked rules"):
     val p = Policy(rules((".", Some(Access.Read), None, true)), Nil, Nil, _ => Decision.Deny)
@@ -169,7 +161,7 @@ class PolicySuite extends munit.FunSuite:
     assert(commands.init.forall(policy.commandAllowed(scope, _)))
     assert(!policy.commandAllowed(scope, "five"))
     policy.closeScope(scope)
-    assertEquals(prompter.asked.size, 2)
+    assertEquals(prompter.requests.size, 2)
     assertEquals(policy.sessionGrants, Nil)
 
   test("feedback on file and network requests leaves grants and scopes unchanged"):
@@ -197,7 +189,7 @@ class PolicySuite extends munit.FunSuite:
       prompter
     )
     intercept[SecurityException](p.requestFile(ScopeId.Base, root.resolve("build"), Access.Write, ""))
-    assert(prompter.asked.isEmpty)
+    assert(prompter.requests.isEmpty, prompter.requests.toString)
     val s = p.requestFile(ScopeId.Base, root.resolve("secrets"), Access.Write, "")
     val pm = p.effective(s, root.resolve("secrets/key.txt"))
     assertEquals(pm, Perm(Access.Write, true))
@@ -224,7 +216,7 @@ class PolicySuite extends munit.FunSuite:
     assert(!p.commandAllowed(ScopeId.Base, "npm install"))
     // already-permitted patterns do not prompt
     val e2 = p.requestExec(ScopeId.Base, List("ls"), "")
-    assertEquals(prompter.asked.size, 2)
+    assertEquals(prompter.requests.size, 2)
     p.closeScope(e2)
 
   test("a request scope holds only what the prompt asked for, so revoking a session grant reaches into it"):
@@ -265,10 +257,10 @@ class PolicySuite extends munit.FunSuite:
     intercept[SecurityException](p.effective(s, root.resolve("src/main/A.scala")))
     // and the next request prompts again rather than reusing the old answer
     p.requestExec(ScopeId.Base, List("npm *"), "")
-    assertEquals(prompter.asked.size, 4)
+    assertEquals(prompter.requests.size, 4)
 
   test("deny patterns refuse commands and hosts whatever the allow list says"):
-    val prompter = ScriptedPrompter(Nil)
+    val prompter = ScriptedPrompter()
     val p = Policy(
       rules((".", Some(Access.Read), None, false)),
       List("git *", "rm *"),
@@ -288,7 +280,7 @@ class PolicySuite extends munit.FunSuite:
     assert(p.hostAllowed(ScopeId.Base, "docs.example.com"))
     assertEquals(p.commandDenied("git status"), None)
     assertEquals(p.hostDenied("docs.example.com"), None)
-    assertEquals(prompter.asked, Nil) // nothing was ever put to the user
+    assert(prompter.requests.isEmpty, prompter.requests.toString) // nothing was ever put to the user
 
   test("a request that would permit a denied command or host fails without asking"):
     // The prompter would allow everything: only the deny list stops these.
@@ -309,12 +301,12 @@ class PolicySuite extends munit.FunSuite:
     val e2 = intercept[SecurityException](p.requestNet(ScopeId.Base, List("db.internal"), "read"))
     assert(e2.getMessage.nn.contains("*.internal"), e2.getMessage)
     intercept[SecurityException](p.requestNet(ScopeId.Base, List("*"), "read"))
-    assertEquals(prompter.asked, Nil)
+    assert(prompter.requests.isEmpty, prompter.requests.toString)
     assertEquals(p.openScopeCount, 0) // no scope was opened for a refused request
     // an unrelated request still prompts and is granted
     val s = p.requestExec(ScopeId.Base, List("ls*"), "list")
     assert(p.commandAllowed(s, "ls -la"))
-    assertEquals(prompter.asked.size, 1)
+    assertEquals(prompter.requests.size, 1)
     p.closeScope(s)
 
   test("a requested pattern that shares a match with a deny pattern fails without asking"):
@@ -324,10 +316,10 @@ class PolicySuite extends munit.FunSuite:
     val e = intercept[SecurityException](p.requestExec(ScopeId.Base, List("git * --force"), "push"))
     assert(e.getMessage.nn.contains("git push*"), e.getMessage)
     intercept[SecurityException](p.requestNet(ScopeId.Base, List("api.*"), "fetch"))
-    assertEquals(prompter.asked, Nil)
+    assert(prompter.requests.isEmpty, prompter.requests.toString)
     p.closeScope(p.requestExec(ScopeId.Base, List("git status"), "status"))
     p.closeScope(p.requestNet(ScopeId.Base, List("api.example.com"), "fetch"))
-    assertEquals(prompter.asked.size, 2)
+    assertEquals(prompter.requests.size, 2)
 
   test("command and host patterns overlap when some input matches both"):
     import GlobMatcher.{commandsOverlap, hostsOverlap}
@@ -346,11 +338,11 @@ class PolicySuite extends munit.FunSuite:
     assert(!commandsOverlap("", "*"))
 
   test("the summary names the always-refused patterns"):
-    val p = Policy(Nil, List("ls"), Nil, ScriptedPrompter(Nil), List("rm *"), List("*.internal"))
+    val p = Policy(Nil, List("ls"), Nil, ScriptedPrompter(), List("rm *"), List("*.internal"))
     val summary = p.summary
     assert(summary.contains("always refused: rm *"), summary)
     assert(summary.contains("always refused: *.internal"), summary)
-    assert(!Policy(Nil, Nil, Nil, ScriptedPrompter(Nil)).summary.contains("always refused"))
+    assert(!Policy(Nil, Nil, Nil, ScriptedPrompter()).summary.contains("always refused"))
 
   test("prompt decisions are logged; session grants show in summary but not in configSummary (the prompt's view)"):
     val p =
@@ -421,7 +413,7 @@ class PolicySuite extends munit.FunSuite:
       ),
       Nil,
       Nil,
-      ScriptedPrompter(Nil)
+      ScriptedPrompter()
     )
     assertEquals(p.matchingRulesCacheSize, 0)
     assertEquals(p.configPerm(root.resolve("src/main/A.scala")), Perm(Access.Read, false))

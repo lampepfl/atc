@@ -26,19 +26,8 @@ final class TestEnv(
 ):
   val root: Path = Files.createTempDirectory(prefix).nn.toRealPath().nn
 
-  // ── permission prompter (scripted; unanswered requests are denied) ──
-  var decisions: List[Decision] = Nil
-  val requests: ListBuffer[PermissionRequest] = ListBuffer()
-  /** Called on every prompt before the scripted decision (e.g. to simulate a slow user). */
-  var onRequest: PermissionRequest => Unit = _ => ()
-  val prompter: PermissionPrompter = r =>
-    requests += r
-    onRequest(r)
-    decisions match
-      case d :: rest =>
-        decisions = rest
-        d
-      case Nil => Decision.Deny
+  val prompter: ScriptedPrompter = ScriptedPrompter()
+  export prompter.{decisions, decisions_=, onRequest, onRequest_=, requests}
 
   val policy: Policy = Policy(mkRules(root), commands, hosts, prompter, denyCommands, denyHosts)
 
@@ -148,6 +137,21 @@ final class TestEnv(
     val s = ReplSession(SandboxConfig(safeMode, mode, timeoutMs), host, preambleOverride).init()
     session = Some(s)
     s
+
+/** Answers permission requests with the scripted decisions in order and denies
+  * once they run out. Every request is recorded. */
+final class ScriptedPrompter(var decisions: List[Decision] = Nil) extends PermissionPrompter:
+  val requests: ListBuffer[PermissionRequest] = ListBuffer()
+  /** Called on every request before its decision (e.g. to simulate a slow user). */
+  var onRequest: PermissionRequest => Unit = _ => ()
+  def ask(request: PermissionRequest): Decision =
+    requests += request
+    onRequest(request)
+    decisions match
+      case d :: rest =>
+        decisions = rest
+        d
+      case Nil => Decision.Deny
 
 object TestEnv:
   /** Create a symbolic link when the platform/account permits it. Ordinary

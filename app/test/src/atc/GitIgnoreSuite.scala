@@ -184,12 +184,7 @@ class GitIgnoreSuite extends munit.FunSuite:
     // No rule grants the project. An approval for one block leaves the base scope
     // unable to read the .gitignore; an approval for the session makes it apply.
     val root = repo("out/\n*.log\n", "a.log" -> "", "b.txt" -> "", "out/x" -> "")
-    var decisions = List(Decision.AllowOnce, Decision.AllowSession)
-    val prompter: PermissionPrompter = _ =>
-      val decision = decisions.head
-      decisions = decisions.tail
-      decision
-    val policy = Policy(Nil, Nil, Nil, prompter)
+    val policy = Policy(Nil, Nil, Nil, ScriptedPrompter(List(Decision.AllowOnce, Decision.AllowSession)))
     val host = hostOn(root, GitIgnore(root, policy), policy)
     given IOCap = atc.lib.Runtime.rootIO
     given UserIO = atc.lib.Runtime.rootUser
