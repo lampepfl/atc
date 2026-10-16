@@ -889,40 +889,42 @@ newline and encoding conventions (commonly CRLF, sometimes BOM-marked UTF-16 on 
 
 ## Models and providers
 
-`ModelCatalog` resolves `provider/alias` or an unambiguous bare alias, ignoring case.
+`ModelCatalog` resolves `provider/alias` or an unambiguous bare alias, ignoring case;
 `displayName` affects presentation only. A provider without configured models is listed
-through `ChatModel.listModels` (the adapter's own client, with `Providers.ListTimeout`), at
-most once per catalog and in parallel across providers, on daemon threads of their own rather
-than the common pool, since a listing blocks on HTTP or a CLI: `App` starts `refresh()` after the
-banner, and `models` waits for it at most 30 seconds (`ModelCatalog.ListWait`), since a Claude
-Code listing can take minutes; a provider whose fetch has not finished keeps its stored list
-until it does. Lookups and Tab completion (`labels`) never wait: they use this session's list
-when it has arrived, else the one `ModelListStore` kept (`~/.atc/model-lists.json`, reused
-only for the same provider name, api and url), and a lookup else takes `provider/model-id` as
-given. A bare id
-that no list has named yet is unknown. A reference that starts with the name of a configured
-provider, turned off or not, and `/` names a model of that provider only, never a listed id
-of another provider such as OpenRouter's `anthropic/...`. A model
-taken as given keeps its unknown context window until a later session finds it in the
-stored list. Configuration validation does not check `model` or `classifiedModel`. At the start,
-`Models.configured` resolves them, and one that names no model is ignored with a warning
-that names its file: the session falls back to the last model chosen or the first one, and
-sends classified data to no model. A project layer may add models to the user's providers and
-turn providers off, so when it changes providers, `Models.classified` also resolves a
-`classifiedModel` set by a granting layer in the granting layers alone
-(`Configuration.granting`) and ignores it, with the same warning, unless both name the same
-`provider/alias` and model id. A `-m` that names no model stops the start. A failed fetch is not reported (only logged with `ATC_DEBUG`) and leaves the stored list in use. Listed models are
+through `ChatModel.listModels`, at most once per catalog, in parallel across providers and on
+daemon threads of their own (`ModelCatalog.Listing`), since a listing blocks on HTTP or on
+the Claude Code CLI. HTTP listings use `Providers.ListTimeout` (20 seconds); Claude Code's
+list takes several CLI control requests, each with the CLI's 60-second timeout. `App` starts
+`refresh()` after the banner, and `models` (`/models`) waits for it at most 30 seconds
+(`ModelCatalog.ListWait`); a provider whose fetch has not finished keeps its stored list
+until it does. A failed fetch is only logged with `ATC_DEBUG` and leaves the stored list in
+use. Lookups and Tab completion (`labels`) never wait: they use this session's list when it
+has arrived, else the one `ModelListStore` kept (`~/.atc/model-lists.json`, reused only for
+the same provider name, api and url), and a lookup else takes `provider/model-id` as given.
+Such a model keeps its unknown context window until a later session finds it in the stored
+list. A bare id that no list has named yet is unknown. A reference that starts with the name
+of a configured provider, turned off or not, and `/` names a model of that provider only,
+never a listed id of another provider such as OpenRouter's `anthropic/...`. Listed models are
 always labelled by their full reference, so fetching a list never changes the labels of
-configured models. `ChatModel.effort` is mutable per client and read at request time;
-`Models` caches one client per reference, so `/model` sets the chosen client's effort back
-to `ChatModel.defaultEffort` (its `reasoning`).
+configured models.
+
+Configuration validation does not check `model` or `classifiedModel`. At the start,
+`Models.configured` resolves them, and one that names no model is ignored with a warning that
+names its file: the session falls back to the last model chosen or the first one, and sends
+classified data to no model. A `-m` that names no model stops the start. A project layer may
+add models to the user's providers and turn providers off, so when it changes providers,
+`Models.classified` also resolves a `classifiedModel` set by a granting layer in the granting
+layers alone (`Configuration.granting`) and ignores it, with the same warning, unless both
+name the same `provider/alias` and model id. `ChatModel.effort` is mutable per client and
+read at request time; `Models` caches one client per reference, so `/model` sets the chosen
+client's effort back to `ChatModel.defaultEffort` (its `reasoning`).
 
 Web search is best effort. `ModelCatalog` gives every model without its own `webSearch`
 the top-level one, listed models included. `SpecModel.withWebSearchFallback` resends a
 streaming request without the tool when the provider answers 400 or 422 naming web
 search before anything was streamed, and turns the tool off for that client. A gateway
-that drops the tool silently cannot be detected. `ChatModel` has streaming `complete` and one-shot
-`simple` operations. Provider adapters normalize stop reasons into `CompletionStop`;
+that drops the tool silently cannot be detected. `ChatModel` has streaming `complete` and
+one-shot `simple` operations. Provider adapters normalize stop reasons into `CompletionStop`;
 `model_context_window_exceeded` (Anthropic, Claude Code) counts as truncation, as an output
 limit does, so the calls of a response cut by the context window are not run.
 
@@ -931,25 +933,28 @@ for replay to the exact provider/model reference that produced it. Switching mod
 neutral fields and excludes model-bound reasoning data. `TokenUsage.input` includes cache
 reads and writes; adapters normalize provider-specific accounting.
 
-Anthropic requests mark the system prompt and recent user/tool-result content for caching.
-Responses requests use stateless replay with encrypted reasoning content. OpenAI-compatible
-adapters send vendor `thinking` parameters only when configured. Non-thinking one-shot
-requests can retry without a guessed reasoning effort when the provider rejects that
-parameter; unrelated bad requests are not retried by this fallback.
+Anthropic requests set two cache breakpoints: the system prompt and the last user-role
+message (user text, a continuation or tool results), so each round reads the previous
+round's prefix from the cache. Responses requests use stateless replay with encrypted
+reasoning content. OpenAI-compatible adapters send vendor `thinking` parameters only when
+configured. Non-thinking one-shot requests can retry without a guessed reasoning effort when
+the provider rejects that parameter; unrelated bad requests are not retried by this
+fallback.
 
 Provider SDK request construction remains in each adapter. Shared configuration and client
-setup belong in `Providers`; model selection belongs in `ModelCatalog`. Without a configured
-key, the Anthropic and OpenAI adapters take their SDK's credentials from the environment only
-for the provider's default endpoint; a provider with a `url` gets the placeholder key `none`
-instead, so those credentials never reach another host. A streaming request has no limit on
+setup belong in `Providers`; model selection belongs in `ModelCatalog`. Every adapter builds
+its client with `Providers.key`: without a configured key, a provider with a `url` gets the
+placeholder key `none`, so the SDK's environment credentials reach only the provider's
+default endpoint. A streaming request has no limit on
 the whole call, since a long answer can stream for longer than `Providers.RequestTimeout`
 (15 minutes); connecting, and each read and write, keep their timeouts, and Ctrl-C cancels
 the call. One-shot calls keep the 15-minute limit.
 
 A provider's `headers` are extra HTTP headers for every request to it. `KeyBindings.headers`
 resolves `${VAR}` values through the key bindings (an unset variable drops the header) and
-keeps the placeholder `${ATC_SESSION}` (`ProviderConfig.SessionRef`), which `Providers.headers(spec)`
-replaces per request with the conversation id, a UUID that `Agent.clear()` renews. The same
+keeps the placeholder `${ATC_SESSION}` (`ProviderConfig.SessionRef`), which
+`Providers.headers(spec)` replaces per request with the conversation id, a UUID that
+`Agent.clear()` renews. The same
 call adds `User-Agent: atc/<version>` unless the config sets one, regardless of header-name
 case. The set goes on every request, model lists included: the OpenAI-shaped adapters add it
 with an OkHttp interceptor on the model's client, ahead of the ChatGPT authorization, and the
@@ -963,6 +968,15 @@ it to the SDK accumulator once, after the choices. It ignores empty chunks witho
 and extra choice chunks after completion. Auxiliary chat calls also apply configured
 `maxTokens` and `temperature`. `ModelSuite` checks chunk handling; `ProviderRequestSuite`
 checks requests and usage accounting against a local HTTP server.
+
+Some Chat Completions gateways end a stream without a `finish_reason`, with or without
+`[DONE]`. `OpenAIChatModel` then returns an `Incomplete` completion containing received
+answer text and usage, with no tool calls or native replay payload. The agent warns and
+requests a continuation; after two such attempts in a turn it stops with a failed outcome.
+Normal provider output limits retain their separate continuation budget. Reasoning is never
+used as answer text. When a chunk contains both reasoning and answer text, reasoning is
+displayed first so the answer stays together. Empty deltas and deltas after the finish chunk
+do not reach the UI.
 
 Gemini's OpenAI-compatible endpoint streams each tool call whole, without the `index` the
 SDK accumulator needs, so `ChunkFeed` numbers such fragments: one with an id starts the next
@@ -978,12 +992,11 @@ could begin a tag, and the stored answer and the replayed turn keep only the ans
 
 The `chatgpt` api reaches the models of a ChatGPT plan through the backend the Codex CLI
 uses (the provider's `url`, by default `https://chatgpt.com/backend-api/codex`), signed in the
-way Codex signs in.
-`ChatGPTAuth.begin` starts an OAuth authorization-code grant with PKCE and Codex's client id
-at `auth.openai.com`, with a callback server on the loopback interface at port 1455 or 1457,
-the two callbacks registered for that client. `FirstRun.signIn` opens the browser
-(`Platform.openBrowser`) and prints the address. When the browser cannot reach the callback
-(atc runs over SSH), the user pastes the address the browser ended on instead, and
+way Codex signs in. `ChatGPTAuth.begin` starts an OAuth authorization-code grant with PKCE and
+Codex's client id at `auth.openai.com`, with a callback server on the loopback interface at
+port 1455 or 1457, the two callbacks registered for that client. `FirstRun.signIn` opens the
+browser (`Platform.openBrowser`) and prints the address. When the browser cannot reach the
+callback (atc runs over SSH), the user pastes the address the browser ended on instead, and
 `Login.paste` reads the code from it. The state must match either way. The tokens go to
 `~/.atc/chatgpt-auth.json`, replaced atomically and readable only by its owner; the default
 policy's locked `.atc` rule keeps the agent out of it. The ChatGPT account id comes from
@@ -997,36 +1010,37 @@ refreshed while it waited. When the token endpoint still rejects a refresh token
 tokens win if their refresh token differs; otherwise `SignInNeeded` tells the user to sign in
 again from `/providers`. A failure of the sign-in step that is not an `IOException`, such as a
 malformed token answer, fails the request as an `IOException` that names only the exception's
-class, since its message may quote a token. The backend streams only, requires instructions
-and rejects `max_output_tokens` and `temperature`. Its closing `response.completed` carries
-an empty `output`, so `OpenAIResponsesModel.Accumulator` keeps the items of the
-`response.output_item.done` events and uses them when the final response has none. The adapter streams one-shot calls too,
+class, since its message may quote a token.
+
+The backend streams only, requires instructions and rejects `max_output_tokens` and
+`temperature`. Its closing `response.completed` carries an empty `output`, so
+`OpenAIResponsesModel.Accumulator` keeps the items of the `response.output_item.done` events
+and uses them when the final response has none. The adapter streams one-shot calls too,
 supplies instructions when a call has none, sends neither setting and sets
 `prompt_cache_key` to the conversation id. The backend never returns the reasoning itself,
 so a model without `reasoningSummary` asks for `auto` summaries, as Codex does, and shows
-them as thinking. Its model list is `GET /models?client_version=`,
-filtered to the models marked `list`, with their context windows and efforts. The backend
-lists the models that Codex release may use, so `ChatGPTModel.ClientVersion` follows Codex
-releases. The preset sends `originator: atc` and `session-id: ${ATC_SESSION}`. `ChatGPTSuite`
-covers the flow against a local server.
+them as thinking. Its model list is `GET /models?client_version=`, filtered to the models
+marked `list`, with their context windows and efforts. The backend lists the models that
+Codex release may use, so `ChatGPTModel.ClientVersion` follows Codex releases. The preset
+sends `originator: atc` and `session-id: ${ATC_SESSION}`. `ChatGPTSuite` covers the flow
+against a local server.
 
 The `claude-code` api reaches the models of a Claude plan through the `claude` CLI the user
 installed and signed in to; ATC never reads its credentials. `ClaudeCli` starts `claude -p`
 in the stream-json protocol of the Claude Agent SDK, in an empty temporary directory (deleted
-when the process exits, or else when ATC exits), with
-everything that would act or load context outside ATC turned off: `--tools=` (no built-in
-tools; `WebSearch` alone when `webSearch` is on), `--setting-sources=` (no settings files,
-hooks, plugins or skills), `--strict-mcp-config`, `--disable-slash-commands`,
-`--no-session-persistence`, and `--permission-mode=dontAsk --permission-prompts=none` with
-only ATC's MCP server allowed. The environment disables CLAUDE.md files, auto memory,
-claude.ai connectors, auto-compaction (ATC compacts) and updates, and drops
-`ANTHROPIC_API_KEY`, which would replace the subscription. The system prompt goes in the
-`initialize` control request, since it exceeds Windows' command-line limit. The CLI asks the
-API to omit thinking text by default; the hidden `--thinking-display=summarized` flag brings
-back a summary, or the full text from models that give it (Haiku 4.5). The
-`showThinkingSummaries` setting does not do this for newer models. ATC's tools are
-an in-process MCP server (`"type": "sdk"`): the CLI sends JSON-RPC as `mcp_message` control
-requests and every one, notifications included, needs a response.
+when the process exits, or else when ATC exits), with everything that would act or load
+context outside ATC turned off: `--tools=` (no built-in tools; `WebSearch` alone when
+`webSearch` is on), `--setting-sources=` (no settings files, hooks, plugins or skills),
+`--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence`, and
+`--permission-mode=dontAsk --permission-prompts=none` with only ATC's MCP server allowed. The
+environment disables CLAUDE.md files, auto memory, claude.ai connectors, auto-compaction (ATC
+compacts) and updates, and drops `ANTHROPIC_API_KEY`, which would replace the subscription.
+The system prompt goes in the `initialize` control request, since it exceeds Windows'
+command-line limit. The CLI asks the API to omit thinking text by default; the hidden
+`--thinking-display=summarized` flag brings back a summary, or the full text from models that
+give it (Haiku 4.5), which the `showThinkingSummaries` setting does not do for newer models.
+ATC's tools are an in-process MCP server (`"type": "sdk"`): the CLI sends JSON-RPC as
+`mcp_message` control requests and every one, notifications included, needs a response.
 
 The CLI runs its own agent loop, and `ClaudeCodeModel` keeps ATC's loop in charge. A
 response that calls tools ends at its `message_stop` and is returned as a completion; the
@@ -1047,14 +1061,6 @@ before that question, so an interrupt during it leaves a process that `close` or
 session ends. On Windows, `WindowsExecutable` resolves `claude` from the PATH only, so a
 `claude.exe` in the project cannot run in its place. `ClaudeCodeSuite` covers the
 protocol against a scripted CLI.
-
-Some compatible gateways end a stream without a `finish_reason`, with or without `[DONE]`.
-The adapter returns an `Incomplete` completion containing received answer text and usage,
-with no tool calls or native replay payload. The agent warns and requests a continuation;
-after two such attempts in a turn it stops with a failed outcome. Normal provider output
-limits retain their separate continuation budget. Reasoning is never used as answer text.
-When a chunk contains both reasoning and answer text, reasoning is displayed first so the
-answer stays together. Empty deltas and deltas after the finish chunk do not reach the UI.
 
 ## Conversation context and agent loop
 
