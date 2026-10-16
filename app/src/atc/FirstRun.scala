@@ -67,12 +67,12 @@ object FirstRun:
     keys: KeyBindings,
     list: ModelSpec => List[ModelSpec],
     signIn: Ui => Boolean,
-  ): Option[Outcome] =
+  ): Option[Outcome.Ready] =
     def ask(): Option[String] =
       preset.keyUrl.foreach(url => ui.info(s"Create a key at $url"))
       ui.askSecret(s"Paste your ${preset.label} API key (saved in ~/.atc/keys.properties, readable only by you)")
 
-    @tailrec def attempt(typed: Option[String]): Option[Outcome] =
+    @tailrec def attempt(typed: Option[String]): Option[Outcome.Ready] =
       val bindings = (preset.keyVariable, typed) match
         case (Some(name), Some(key)) => KeyBindings((Path.of("(typed)"), Map(name -> key)) :: keys.files)
         case _ => keys
@@ -91,7 +91,7 @@ object FirstRun:
             case Right(Nil) =>
               ui.error(s"${preset.label} lists no models.")
               None
-            case Right(models) => chooseModel(ui, models).map(Outcome.Ready(preset, typed, spec, models, _))
+            case Right(models) => chooseModel(ui, models).map(new Outcome.Ready(preset, typed, spec, models, _))
             case Left(why) =>
               ui.error(s"Could not list the models of ${preset.label}: $why")
               // Without a key there is nothing to correct (a local server that is not running).

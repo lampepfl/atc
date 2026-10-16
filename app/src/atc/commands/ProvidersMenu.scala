@@ -132,12 +132,12 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
     tui.chooseOrBack("Add a provider", addable.map(_.label)).flatMap(addable.lift).foreach: preset =>
       val ui = Setup.firstRunUi(tui)
       FirstRun.provider(ui, preset, models.configuration.keys, ChatModel.listModels, Setup.signIn(again = false)) match
-        case Some(ready: FirstRun.Outcome.Ready) =>
+        case Some(ready) =>
           Setup.saveKeyAndModels(ready)
           val edit = ProviderEdits.Edit(List("providers", ready.provider.name), Some(writeJs(ready.provider.config)))
           if applyEdits(List(edit), s"${ready.provider.label} added", into = Some(Config.globalPath)) then
             modelCommands.switchModel(ready.model.ref)
-        case _ => tui.info("No provider added.")
+        case None => tui.info("No provider added.")
 
   /** The files `edits` go to, `into` or those [[ProviderEdits.files]] names, each with its edits. */
   private def byFile(edits: List[ProviderEdits.Edit], into: Option[Path]): Map[Path, List[ProviderEdits.Edit]] =
