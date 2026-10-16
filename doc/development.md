@@ -1490,13 +1490,10 @@ and checkout environment loading; `tests/atc_test.ps1` does the same for the Win
 without touching the registry.
 
 All Scala modules use explicit null checks where configured; Java APIs may require `.nn`.
-Use `inline` selectively for small predicates, primitive conversions and wrappers where
-expansion removes a closure. Ordinary parameters preserve evaluation order and evaluate
-once; an `inline` parameter substitutes its expression at each use. `Debug.log` uses one
-inline message expression behind the runtime debug flag, so disabled logging creates no
-message closure. Keep larger methods and capability boundaries as ordinary methods.
-See the [Scala 3 inline guide](https://docs.scala-lang.org/scala3/guides/macros/inline.html)
-for parameter semantics and the distinction between `inline` and `transparent inline`.
+Use `inline` only for small predicates, conversions and wrappers whose expansion removes a
+closure, such as `Debug.log`'s message, and keep larger methods and capability boundaries
+ordinary, since an `inline` parameter is evaluated at each use (see the
+[Scala 3 inline guide](https://docs.scala-lang.org/scala3/guides/macros/inline.html)).
 Use `Platform` and `PlatformPath` for OS decisions and `ScalaSource` for generated Scala
 literals. Keep model/provider escaping, shell quoting and terminal sanitization separate.
 Scalafmt uses a 120-column configuration that preserves existing layout. `Interface.scala`
@@ -1508,71 +1505,60 @@ syntax; format them by hand. Preserve tests for capability contracts when editin
 The Unix `atc` wrapper installs to `~/.local/bin` and keeps the JARs and the startup cache
 in `~/.atc/jars`; `ATC_INSTALL_DIR` and `ATC_CACHE_DIR` override those locations. Release
 downloads require SHA-256 digests for both JARs. Metadata uses jq when available and a
-field-order-dependent fallback otherwise. A cache marker records `release-id|tag`; verified updates replace it
-with the downloaded artifacts. Uninstall validates the cache root and removes ATC-owned
-artifacts while retaining configuration and unrelated files. `atc setup` appends a marked
-snippet that puts the install directory on `PATH` to each existing rc file of the user's shell
-(`.zshrc` and `.zprofile` for zsh, `.bashrc`, `.bash_profile` and `.profile` for bash,
-`.profile` otherwise), creates the first of them when none exists, skips a file that already
-has the snippet or names the directory, and warns about a file it cannot write. fish reads none
-of these files, so setup prints the `fish_add_path` command instead. Uninstall removes the
-snippet from all five files, whatever the current shell, and removes the `self-check` stamp
-with the jars.
-Directory-name prefixes alone do not prove ownership: uninstall retains directories such
-as `dev.notes` and `download.notes`, including in a custom cache location. Temporary
-download and development directories are cleaned by the operation that creates them.
+field-order-dependent fallback otherwise. A cache marker records `release-id|tag`; verified
+updates replace it with the downloaded artifacts. `atc setup` appends a marked snippet that
+puts the install directory on `PATH` to each existing rc file of the user's shell (`.zshrc`
+and `.zprofile` for zsh, `.bashrc`, `.bash_profile` and `.profile` for bash, `.profile`
+otherwise), creates the first of them when none exists, skips a file that already has the
+snippet or names the directory, and warns about a file it cannot write; for fish, which
+reads none of these files, it prints the `fish_add_path` command. Uninstall validates the
+cache root and removes only ATC-owned artifacts, the snippet from all five files and the
+`self-check` stamp, keeping configuration and unrelated files. A directory-name prefix
+alone does not prove ownership, so `dev.notes` and `download.notes` stay, in a custom cache
+location too. Temporary download and development directories are cleaned by the operation
+that creates them.
 
-Before launching Java, `cmd_run` calls `offer_startup_update`. The check requires terminal
-stdin and stderr, a recognized installed release marker, and an interactive application
-invocation. `ATC_CHECK_UPDATES=0`, `-p`, help/version and initialization flags bypass it.
-GitHub metadata uses a two-second connection timeout and a five-second total timeout;
-lookup failures are ignored. Stable `vMAJOR.MINOR.PATCH` tags are compared numerically,
-and a release without both JAR assets is not offered. Unknown and development markers
-are left for explicit `atc update` handling.
+Interactive starts look for updates before Java launches. The check needs terminal stdin
+and stderr and is skipped for `ATC_CHECK_UPDATES=0`, `-p`, help, version and initialization
+flags. The release offer needs a recognized release marker (unknown and development markers
+are left to `atc update`). GitHub metadata uses a two-second connection timeout and a
+five-second total timeout, and lookup failures are ignored. Stable `vMAJOR.MINOR.PATCH`
+tags are compared numerically, and a release without both JAR assets is not offered. The
+prompt defaults to No, and approval installs the release that was shown without another
+lookup. Download and checksum errors stop that upgrade before Java starts; declining or a
+failed metadata check starts the current installation. The updater checks critical
+failures explicitly because Bash conditional callers can disable `errexit`.
 
-The same startup check then offers the wrapper itself (`offer_self_update`): at most once a
-day (a `self-check` stamp beside the jars, touched before the check so a failed download or a
-declined offer also waits a day), only when the running script is the installed one at
-`INSTALL_PATH` (a checkout's copy is never overwritten), it stages GitHub's `atc` beside the
-script with `stage_latest_self` (the download and `bash -n` check `atc self update` uses,
-with the release check's timeouts), compares it with `cmp`, and on `y` moves it into place
-with `install_staged_self`; bash keeps reading the running script from its old inode, so
-the new wrapper takes effect at the next start. The download runs in a subshell, so a check
-that fails there (no curl, or a `GITHUB_TOKEN` with characters the wrapper refuses to put in a
-curl config) skips the offer instead of ending the launch; `atc self update` still reports it
-and exits 1. An INT, TERM or HUP trap removes the staged file when the download or the prompt
-is interrupted.
+The same check then offers a newer wrapper, at most once a day (the `self-check` stamp is
+touched before the check, so a failed download or a declined offer also waits a day) and
+only when the running script is the installed one at `INSTALL_PATH`, so a checkout's copy
+is never overwritten. It stages GitHub's `atc` with the download and `bash -n` check of
+`atc self update`, compares it with `cmp`, and on `y` moves it into place; bash keeps
+reading the running script from its old inode, so the new wrapper takes effect at the next
+start. A download that fails skips the offer instead of ending the launch, and an
+interrupted download or prompt removes the staged file. `atc dev <checkout>` copies an
+existing local distribution and records `dev|<checkout>`; it does not build, and
+`atc update` replaces it with a release.
 
-The prompt defaults to No. Approval passes the already-fetched metadata to
-`download_latest_release`, so the updater installs the release the user approved without
-another lookup. Download and checksum errors stop that attempted upgrade before Java
-starts; declining or a failed metadata check starts the current installation. The updater
-checks critical failures explicitly because Bash conditional callers can disable `errexit`.
-
-`atc dev <checkout>` copies an existing local distribution and records `dev|<checkout>`.
-It does not build. `atc update` replaces that development installation with a release.
 The Windows wrapper, `atc.ps1` at the root, follows the Unix one. It runs under Windows
 PowerShell 5.1 and PowerShell 7 and stays ASCII, since Windows PowerShell reads a script
-without a byte order mark in the system code page. `setup` writes the wrapper and an `atc.cmd`
-shim (which starts it with `-ExecutionPolicy Bypass`) to `%USERPROFILE%\.atc\bin` and appends
-that directory to the user `Path` in the registry, keeping the value's `REG_EXPAND_SZ` type and
-its unexpanded `%VARIABLE%` entries, then broadcasts `WM_SETTINGCHANGE` so new terminals see it.
-It installs the two JARs and the release's `atc.ps1` launcher together in
-`%USERPROFILE%\.atc\jars`, requires SHA-256 digests for all three, and runs that launcher,
-which takes the JVM options, so the wrapper holds no JVM settings of its own. The marker is
-removed before the verified files are moved into place and written after, and a run without
-a complete install downloads the latest release first. Windows does not replace a JAR that a
-running ATC holds open, so an update checks that the files can be opened exclusively before
-downloading, and the startup offer is skipped while they cannot. The startup check has the
-Unix conditions. There is no `dev` command, startup cache or daily wrapper check;
-`atc self update` replaces the wrapper after parsing the download.
-
-Native Windows launchers transport
-Unicode application arguments through private `ATC_INTERNAL_*` environment variables;
-ATC removes those variables from tool-process environments.
+without a byte order mark in the system code page. `setup` writes the wrapper and an
+`atc.cmd` shim (which starts it with `-ExecutionPolicy Bypass`) to `%USERPROFILE%\.atc\bin`
+and appends that directory to the user `Path` in the registry, keeping the value's
+`REG_EXPAND_SZ` type and its unexpanded `%VARIABLE%` entries, then broadcasts
+`WM_SETTINGCHANGE` so new terminals see it. It installs the two JARs and the release's
+`atc.ps1` launcher together in `%USERPROFILE%\.atc\jars`, requires SHA-256 digests for all
+three, and runs that launcher, which holds the JVM options. The marker is removed before the
+verified files are moved into place and written after, and a run without a complete install
+downloads the latest release first. Windows does not replace a JAR that a running ATC holds
+open, so an update checks that the files can be opened exclusively before downloading, and
+the startup offer is skipped while they cannot. The startup check has the Unix conditions.
+There is no `dev` command, startup cache or daily wrapper check; `atc self update` replaces
+the wrapper after parsing the download. The native Windows launchers pass Unicode
+application arguments through private `ATC_INTERNAL_*` environment variables.
 
 CI builds distributions and runs application tests on Linux, macOS and Windows. Linux
 checks formatting; Unix jobs run the Bash wrapper tests, and the Windows job runs the
-PowerShell wrapper tests under Windows PowerShell and PowerShell 7. Published release tags must match
-`Versions.atc` (with an optional `v` prefix). The release job builds and uploads the two
-JARs and Windows launchers after the platform jobs succeed.
+PowerShell wrapper tests under Windows PowerShell and PowerShell 7. Published release tags
+must match `Versions.atc` (with an optional `v` prefix). The release job builds and uploads
+the two JARs and Windows launchers after the platform jobs succeed.
