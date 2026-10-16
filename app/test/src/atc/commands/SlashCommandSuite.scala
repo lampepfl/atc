@@ -37,6 +37,17 @@ class SlashCommandSuite extends munit.FunSuite:
     assert(isCommandLine("/run val ratio = a / b"))
     assert(!isCommandLine("fix /tmp/x"))
 
+  test("a command's arguments complete under its aliases and in any case"):
+    def complete(words: String*) = Commands.complete(words.toList, List("a", "p/b"), List("low", "high"))
+    assertEquals(complete("/mo"), names)
+    assertEquals(complete("/classified", ""), List("none", "a", "p/b"))
+    assertEquals(complete("/MODEL", "p"), List("a", "p/b"))
+    assertEquals(complete("/effort", ""), List("low", "high"))
+    assertEquals(complete("/permissions", ""), List("revoke"))
+    assertEquals(complete("/config", "notifications", ""), List("auto", "system", "terminal", "bell", "off"))
+    assertEquals(complete("/model", "a", ""), Nil)
+    assertEquals(complete("/bogus", ""), Nil)
+
   test("parse reports an unknown command by what was typed"):
     assertEquals(parse("/bogus 1 2"), Left("/bogus"))
     assertEquals(parse("/helpme"), Left("/helpme"))
