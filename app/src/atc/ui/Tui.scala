@@ -98,8 +98,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     * above a footer drawn again. A plain terminal has nothing to clear. */
   def clearScreen(): Unit = if !plain then
     frame:
-      screen.writeStyle(s"${screen.beforeClear}${Ansi.Esc}[H${Ansi.Esc}[2J${Ansi.Esc}[3J")
-      screen.tail = "\n\n"
+      screen.clear()
       statusLine.redraw()
 
   def clearOutputHistory(): Unit = screen.synchronized(tool.history.clear())
@@ -146,10 +145,11 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   @volatile var askToContinue: Boolean = true
 
   override def confirmMoreToolCalls(used: Int, budget: Int): Boolean =
-    if askToContinue then alerts.alert(s"Tool limit reached after ${Format.plural(used, "call")}. Continue?")
-    askToContinue && confirm(
-      s"Tool limit reached after ${Format.plural(used, "call")}. Allow ${Format.plural(budget, "more call")}?"
-    )
+    if !askToContinue then false
+    else
+      val reached = s"Tool limit reached after ${Format.plural(used, "call")}."
+      alerts.alert(s"$reached Continue?")
+      confirm(s"$reached Allow ${Format.plural(budget, "more call")}?")
 
   terminal.handle(Terminal.Signal.INT, _ => interruptTurn())
   terminal.handle(Terminal.Signal.WINCH, _ => resized())
@@ -186,11 +186,9 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     * leave one blank line before the next prompt. */
   def endTurn(stats: Option[Tui.TurnStats] = None): Unit =
     frame:
-      screen.stopSpinner()
+      endText()
       busy = false
       statusLine.operation = stats.fold("ready")(_.outcome.label)
-      thinking.end()
-      closeProse()
       tool.endTurn()
       flushTodos()
       flushProcessEvents()
@@ -213,9 +211,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   /** Start a new block: blank line before it, and no prose/thinking block is open any more. */
   private def beginBlock(): Unit =
-    screen.stopSpinner()
-    thinking.end()
-    closeProse()
+    endText()
     blankLine()
 
   // ── plain lines (banner, slash commands, notices) ─────────────────
@@ -234,7 +230,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   /** One dim line of context, set apart from what came before. */
   def preview(s: String): Unit =
     frame(blankLine())
-    info(screen.fit(Ansi.sanitize(s).replace('\n', ' '), 0))
+    info(screen.fit(Ansi.sanitize(s), 0))
   def success(s: String): Unit = renderedLine(styled(Ansi.sanitize(s), Green))
   def warn(s: String): Unit = renderedLine(styled(s"${g.warn} ${Ansi.sanitize(s)}", Yellow))
   def error(s: String): Unit =
@@ -246,8 +242,8 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     val fields = rows.map((command, description) => styled(Ansi.sanitize(command), Cyan) -> Ansi.sanitize(description))
     TextLayout.fields(fields, width).foreach(renderedLine)
 
-  /** The start-up banner: a title, aligned `label → value` rows and a dim hint line. */
-  def banner(title: String, rows: List[(String, String)], hint: String): Unit = frame:
+  /** The start-up banner: a title, aligned `label → value` rows and the dim key hints. */
+  def banner(title: String, rows: List[(String, String)], hints: List[String]): Unit = frame:
     screen.stopSpinner()
     blankLine()
     write(styled(s"${g.bullet} ${Ansi.sanitize(title)}", Cyan, Bold) + "\n")
@@ -255,7 +251,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     TextLayout.fields(rows.map((label, value) => styled(Ansi.sanitize(label), Dim) -> Ansi.sanitize(value)), width)
       .foreach(line => write(line + "\n"))
     val controls =
-      Ansi.sanitize(hint).split(" · ").toList.map(c => if g == Glyphs.ascii then c.replace("→", "Right") else c)
+      hints.map(Ansi.sanitize).map(c => if g == Glyphs.ascii then c.replace("→", "Right") else c)
     // Rows of whole controls: a row break inside one would split a key from what it does.
     val hintRows = controls.foldLeft(List.empty[String]):
       case (row :: done, control) if Screen.displayWidth(row) + 3 + Screen.displayWidth(control) <= width - 3 =>
@@ -299,8 +295,11 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
       )
     else MarkdownStream.plain
 
-  /** Flush what the Markdown renderer still holds and end the prose block. */
-  private def closeProse(): Unit =
+  /** Stop the spinner and end the reasoning and prose blocks; the Markdown renderer
+    * writes what it still holds. */
+  private def endText(): Unit =
+    screen.stopSpinner()
+    thinking.end()
     prose.foreach(md => writeGuttered(md.finish(), Indent))
     prose = None
 
@@ -313,18 +312,13 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     if text.nonEmpty then status(text)
 
   def assistantEnd(): Unit = frame:
-    screen.stopSpinner()
-    thinking.end()
-    closeProse()
+    endText()
     ensureNewline()
 
   /** Show progress ("model is thinking"); ends the current prose block. */
   def status(text: String): Unit = frame:
-    statusLine.operation = text
-    statusLine.refresh()
-    screen.stopSpinner()
-    thinking.end()
-    closeProse()
+    statusLine.setOperation(text)
+    endText()
     ensureNewline()
     if plain then write(styled(s"~ ${Ansi.sanitize(text)}...", Dim) + "\n")
     else if !statusLine.shown then screen.spin("", Ansi.sanitize(text))
@@ -368,8 +362,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
       while pendingProcessEvents.nonEmpty do
         val line = styled(Ansi.sanitize(pendingProcessEvents.dequeue()), Cyan)
         if tool.isOpen then tool.emit(line + "\n")
-        else if prompt.reader.isReading then prompt.reader.printAbove(line)
-        else renderedLine(line)
+        else if !prompt.printAbove(line) then renderedLine(line)
 
   def toolEnd(r: ExecutionResult, millis: Long): Unit = frame:
     statusLine.setOperation(if r.success then "tool completed" else "tool failed")
@@ -478,7 +471,9 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   // The operation is set inside the pop-up, under its lock: pop-ups that `parallel` tasks
   // open take turns, and each restores the operation it found when its turn came.
   def askPermission(req: PermissionRequest): Decision =
-    popupBlock("permission", s"${req.title} (${req.details.mkString(", ")})"):
+    val summary = s"${req.title} (${req.details.mkString(", ")})"
+    popupBlock("permission", summary):
+      alerts.alert(s"Permission needed: $summary")
       statusLine.withOperation("waiting for permission")(dialogs.permission(req))
 
   /** A yes/no question from the app itself (see [[Dialogs.confirm]]). */
@@ -490,6 +485,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   /** Ask the user a question on behalf of the agent (see [[Dialogs.answer]]). */
   def askUser(question: String, options: List[String], multiple: Boolean): Option[String] =
     popupBlock("question", question):
+      alerts.alert(s"Question: $question")
       statusLine.withOperation("waiting for your answer")(dialogs.answer(question, options, multiple))
 
   // ── TODO panel ────────────────────────────────────────────────────

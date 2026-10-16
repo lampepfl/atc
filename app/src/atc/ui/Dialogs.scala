@@ -44,7 +44,6 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
     * agent. A cancelled menu denies, so Esc is shown as deny; empty or cancelled instructions
     * return to the menu. A plain terminal reads a typed reply ([[Menus.permissionReply]]). */
   def permission(req: PermissionRequest): Decision =
-    alerts.alert(s"Permission needed: ${req.title} (${req.details.mkString(", ")})")
     // The request embeds model-chosen paths and command lines: sanitize.
     write(Indent + styled(s"${g.warn} Permission request: ${Ansi.sanitize(req.title)}", Yellow, Bold) + "\n")
     req.details.foreach: detail =>
@@ -106,7 +105,6 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
     * always with a custom-answer entry; no options give a free-text line. `None` on
     * Ctrl-C/Ctrl-D. */
   def answer(question: String, options: List[String], multiple: Boolean): Option[String] =
-    alerts.alert(s"Question: $question")
     // The question and options are model-written: sanitize.
     ask(question)
     val cleanOptions = options.map(Ansi.sanitize)

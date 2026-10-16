@@ -74,6 +74,11 @@ private[ui] final class Screen(val terminal: Terminal, val plain: Boolean, val g
     * and the redrawn footer scrolled it up into view: the footer showed twice. */
   def beforeClear: String = s"${Ansi.Esc}[r${Ansi.Esc}[$height;1H${Ansi.Esc}[2K"
 
+  /** Clear the window and its scrollback; what follows starts at the top. */
+  def clear(): Unit =
+    writeStyle(s"$beforeClear${Ansi.Esc}[H${Ansi.Esc}[2J${Ansi.Esc}[3J")
+    tail = "\n\n"
+
   def atLineStart: Boolean = tail.endsWith("\n")
   def ensureNewline(): Unit = if !atLineStart then write("\n")
   /** Make sure the previous content is followed by an empty line. */

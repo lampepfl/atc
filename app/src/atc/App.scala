@@ -181,8 +181,8 @@ final class App(args: Cli.Args, val tui: Tui):
         "directory" -> PlatformPath.display(cwd),
       ) ++ agent.classifiedModel.map(model => "classified model" -> models.describe(model))
         ++ Option.when(args.approveAll)("permissions" -> "every request approved without asking (--approve-all)"),
-      (List("/help commands", "Shift-Tab mode", "Ctrl-C interrupt", "Ctrl-O details", "Ctrl-D quit")
-        ++ Option.when(predictor.enabled)("Tab or → accept a suggestion")).mkString(" · "),
+      List("/help commands", "Shift-Tab mode", "Ctrl-C interrupt", "Ctrl-O details", "Ctrl-D quit")
+        ++ Option.when(predictor.enabled)("Tab or → accept a suggestion"),
     )
 
   /** Run one turn and retain its outcome for the terminal summary and scripted exit code. */

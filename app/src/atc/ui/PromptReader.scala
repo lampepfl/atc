@@ -297,6 +297,9 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
     try body
     finally reader.setVariable(LineReader.DISABLE_HISTORY, false)
 
+  /** Write `line` above the prompt while it reads, keeping the user's input; false when it is not reading. */
+  def printAbove(line: String): Boolean = reader.isReading && { reader.printAbove(line); true }
+
   /** Redraw the prompt (new ghost text), under the reader's lock and only while it is reading. */
   def redisplay(): Unit =
     try reader.callWidget(LineReader.REDISPLAY)
