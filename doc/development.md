@@ -653,7 +653,8 @@ new or has changed since it was trusted. Trust records the fingerprint of what w
 file that changed meanwhile stays untrusted. A `-p` run warns and goes without them unless
 `--approve-all` is given, which takes them unrecorded. Configs ATC writes itself (`--init`,
 the offered starter config) are trusted as they are written. Neither writes the home
-directory's `.atc/config.json`, which is the global config. A `/model`, `/effort` or
+directory's `.atc/config.json`, which is the global config, nor through a symbolic link at
+`.atc`, its `config.json` or its `.gitignore`. A `/model`, `/effort` or
 `/classifiedmodel` save keeps a trusted project trusted. Other edits, such as a new
 `model`, do not change the fingerprint.
 

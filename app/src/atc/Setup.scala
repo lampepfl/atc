@@ -6,7 +6,7 @@ import atc.perms.{Decision, PermissionRequest, Policy, ScopeId}
 import atc.platform.{Platform, PlatformPath}
 import atc.ui.Tui
 
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, LinkOption, Path}
 
 /** What happens before a session starts: the first-run setup and the offer of
   * a project config. */
@@ -76,8 +76,8 @@ object Setup:
     def offerProjectConfig(current: Configuration): Configuration =
       val project = Config.projectPath(args.cwd)
       // In the home directory `.atc/config.json` is the global config, which only `--init-global` writes.
-      val shouldOffer =
-        interactive && !cwdReadable(current) && !Files.exists(project) && !Config.samePath(project, global)
+      val shouldOffer = interactive && !cwdReadable(current) && !Files.exists(project, LinkOption.NOFOLLOW_LINKS) &&
+        !Config.samePath(project, global)
       if !shouldOffer then current
       else
         tui.println(

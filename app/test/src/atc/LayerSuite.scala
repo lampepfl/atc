@@ -592,6 +592,30 @@ class LayerSuite extends munit.FunSuite:
     intercept[IllegalArgumentException](Config.initProject(home, linkedHome.resolve(".atc/config.json").nn))
     assert(!Files.exists(global))
 
+  test("the starter project config is not written through links a repository ships"):
+    val outside = Files.createTempDirectory("atc-init-outside").nn.toRealPath().nn
+    def project(): Path = Files.createTempDirectory("atc-init-links").nn.toRealPath().nn
+    def noGlobal(dir: Path) = dir.resolve("no-such-global.json").nn
+    // `.atc` itself a link
+    val linkedDir = project()
+    assume(TestEnv.trySymbolicLink(linkedDir.resolve(".atc").nn, outside), "symbolic links are unavailable")
+    intercept[IllegalArgumentException](Config.initProject(linkedDir, noGlobal(linkedDir)))
+    // `.atc/.gitignore` a link to a file elsewhere
+    val linkedIgnore = project()
+    Files.createDirectories(linkedIgnore.resolve(".atc"))
+    val target = Files.writeString(outside.resolve("profile"), "keep\n").nn
+    TestEnv.trySymbolicLink(linkedIgnore.resolve(".atc/.gitignore").nn, target)
+    intercept[IllegalArgumentException](Config.initProject(linkedIgnore, noGlobal(linkedIgnore)))
+    assertEquals(Files.readString(target), "keep\n")
+    assert(!Files.exists(Config.projectPath(linkedIgnore)))
+    // `.atc/config.json` a dangling link: it counts as present, and nothing is created where it points
+    val dangling = project()
+    Files.createDirectories(dangling.resolve(".atc"))
+    TestEnv.trySymbolicLink(Config.projectPath(dangling), outside.resolve("created").nn)
+    assertEquals(Config.initProject(dangling, noGlobal(dangling)), Nil)
+    assert(!Files.exists(outside.resolve("created")))
+    assertEquals(outside.toFile.list().nn.toList, List("profile"))
+
   // ── keys ────────────────────────────────────────────────────────
 
   /** A world with the two `keys` files, and a provider whose key is a

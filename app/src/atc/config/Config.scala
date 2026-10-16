@@ -6,7 +6,8 @@ import atc.platform.PlatformPath
 import upickle.default.*
 
 import java.nio.file.{
-  AtomicMoveNotSupportedException, FileAlreadyExistsException, Files, Path, StandardCopyOption, StandardOpenOption
+  AtomicMoveNotSupportedException, FileAlreadyExistsException, Files, LinkOption, Path, StandardCopyOption,
+  StandardOpenOption
 }
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.Locale
@@ -352,16 +353,20 @@ object Config:
     * modified, or an empty list if the configuration already exists.
     *
     * Throws `IllegalArgumentException` when the file would be the global config `global`, as it
-    * is in the home directory. */
+    * is in the home directory, or when `.atc` or its `.gitignore` is a symbolic link: a cloned
+    * repository can ship links that point the writes elsewhere. */
   def initProject(dir: Path, global: Path): List[Path] =
     val config = projectPath(dir)
+    val atc = config.getParent.nn
+    val ignore = atc.resolve(".gitignore").nn
     if samePath(config, global) then
       throw IllegalArgumentException(s"$config is the global config; atc --init-global writes that one")
-    if Files.exists(config) then Nil
+    if Files.exists(config, LinkOption.NOFOLLOW_LINKS) then Nil
     else
-      Files.createDirectories(config.getParent)
-      Files.writeString(config, projectTemplate)
-      val ignore = config.getParent.nn.resolve(".gitignore").nn
+      List(atc, ignore).find(Files.isSymbolicLink(_)).foreach: link =>
+        throw IllegalArgumentException(s"$link is a symbolic link; atc does not write a project config through it")
+      Files.createDirectories(atc)
+      Files.writeString(config, projectTemplate, StandardOpenOption.CREATE_NEW, LinkOption.NOFOLLOW_LINKS)
       val ignoreChanged = ensureIgnored(ignore, KeysFile)
       config :: Option.when(ignoreChanged)(ignore).toList
 
@@ -373,7 +378,14 @@ object Config:
       .map(_.trim).filter(line => line == entry || line == s"!$entry").lastOption
     if lastRule.contains(entry) then false
     else
-      Files.writeString(path, TextFiles.appendLine(current.getOrElse(""), entry))
+      val text = TextFiles.appendLine(current.getOrElse(""), entry)
+      Files.writeString(
+        path,
+        text,
+        StandardOpenOption.CREATE,
+        StandardOpenOption.TRUNCATE_EXISTING,
+        LinkOption.NOFOLLOW_LINKS
+      )
       true
 
   private val OwnerOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
