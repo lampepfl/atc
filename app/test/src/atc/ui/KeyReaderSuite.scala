@@ -1,9 +1,6 @@
 package atc.ui
 
-import org.jline.terminal.{Size, Sized}
-import org.jline.terminal.impl.DumbTerminal
-
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InputStream}
+import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets.UTF_8
 import java.util.concurrent.{ConcurrentLinkedQueue, LinkedBlockingQueue}
 import scala.jdk.CollectionConverters.*
@@ -13,9 +10,7 @@ import scala.jdk.CollectionConverters.*
 class KeyReaderSuite extends munit.FunSuite:
   test("a paste reports its text once, when it ends"):
     val input = "\u001b[200~first line\rsecond\u001b[201~"
-    val in = ByteArrayInputStream(input.getBytes(UTF_8))
-    val terminal = DumbTerminal("test", "xterm-256color", in, ByteArrayOutputStream(), UTF_8)
-    terminal.setSize(Size.of(80, 24): Sized)
+    val terminal = TestTerminal(input = ByteArrayInputStream(input.getBytes(UTF_8)))
     val drafts = ConcurrentLinkedQueue[String]()
     val submitted = ConcurrentLinkedQueue[String]()
     val alerts = Alerts(terminal, plain = false, _ => ())
@@ -30,20 +25,9 @@ class KeyReaderSuite extends munit.FunSuite:
 
   test("a pop-up that reads the end of a paste leaves the key reader out of paste mode"):
     val queue = LinkedBlockingQueue[Int]()
-    // Bytes as they are sent, one per read, so a read never waits for more than one.
-    val in = new InputStream:
-      override def read(): Int = queue.take()
-      override def read(bytes: Array[Byte], offset: Int, length: Int): Int =
-        if length == 0 then 0
-        else
-          val next = queue.take()
-          if next < 0 then -1
-          else
-            bytes(offset) = next.toByte
-            1
+    // Bytes as they are sent, so a read never waits for more than one.
+    val terminal = TestTerminal(input = TestTerminal.oneByteAtATime(() => queue.take()))
     def send(text: String): Unit = text.getBytes(UTF_8).foreach(b => queue.put(b & 0xff))
-    val terminal = DumbTerminal("test", "xterm-256color", in, ByteArrayOutputStream(), UTF_8)
-    terminal.setSize(Size.of(80, 24): Sized)
     val drafts = ConcurrentLinkedQueue[String]()
     val submitted = ConcurrentLinkedQueue[String]()
     val alerts = Alerts(terminal, plain = false, _ => ())

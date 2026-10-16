@@ -2,9 +2,6 @@ package atc.ui
 
 import atc.perms.{Decision, ExecRequest}
 
-import org.jline.terminal.{Size, Sized}
-import org.jline.terminal.impl.DumbTerminal
-
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InputStream}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Files
@@ -18,8 +15,7 @@ class DialogsSuite extends munit.FunSuite:
 
   private def dialogsReading(source: InputStream, width: Int, plain: Boolean): (Dialogs, ByteArrayOutputStream) =
     val out = ByteArrayOutputStream()
-    val terminal = DumbTerminal("test", "xterm-256color", source, out, UTF_8)
-    terminal.setSize(Size.of(width, 24): Sized)
+    val terminal = TestTerminal(width, input = source, output = out)
     val screen = Screen(terminal, plain, Glyphs.unicode)
     val alerts = Alerts(terminal, plain = false, _ => ())
     val status = StatusLine(screen, () => true, () => true, () => 0)
@@ -29,10 +25,10 @@ class DialogsSuite extends munit.FunSuite:
   private def written(out: ByteArrayOutputStream): String = Ansi.Sgr.replaceAllIn(out.toString(UTF_8), "")
 
   /** Input sent in parts, each after its delay: a menu ignores an Enter that comes just after it opens. */
-  private def paced(parts: (Long, String)*): InputStream = new InputStream:
-    private val pending = parts.iterator
-    private var current = ByteArrayInputStream(Array.emptyByteArray)
-    override def read(): Int =
+  private def paced(parts: (Long, String)*): InputStream =
+    val pending = parts.iterator
+    var current = ByteArrayInputStream(Array.emptyByteArray)
+    TestTerminal.oneByteAtATime: () =>
       var next = current.read()
       while next < 0 && pending.hasNext do
         val (delay, text) = pending.next()
@@ -40,14 +36,6 @@ class DialogsSuite extends munit.FunSuite:
         current = ByteArrayInputStream(text.getBytes(UTF_8))
         next = current.read()
       next
-    override def read(bytes: Array[Byte], offset: Int, length: Int): Int =
-      if length == 0 then 0
-      else
-        val next = read()
-        if next < 0 then -1
-        else
-          bytes(offset) = next.toByte
-          1
 
   test("a stray Enter does not approve a permission request, and Esc is shown to deny"):
     val (d, out) = dialogs("\r")

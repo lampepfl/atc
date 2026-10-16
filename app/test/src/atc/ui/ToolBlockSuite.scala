@@ -2,10 +2,7 @@ package atc.ui
 
 import atc.sandbox.ExecutionResult
 
-import org.jline.terminal.{Size, Terminal}
-import org.jline.terminal.impl.DumbTerminal
-
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
+import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.charset.StandardCharsets.UTF_8
 import scala.collection.mutable
@@ -17,11 +14,7 @@ class ToolBlockSuite extends munit.FunSuite:
   /** A block on a 80x24 terminal whose output is kept in the returned stream. */
   private def block(expanded: => Boolean): (Screen, ToolBlock, ByteArrayOutputStream) =
     val out = ByteArrayOutputStream()
-    // A dumb terminal of an xterm type writes synchronously and sends no probes, whose
-    // pending answers would delay the output of a terminal built from streams.
-    val terminal = DumbTerminal("test", "xterm-256color", ByteArrayInputStream(Array.emptyByteArray), out, UTF_8)
-    (terminal: Terminal).setSize(Size(80, 24))
-    val screen = Screen(terminal, plain = false, Glyphs.unicode)
+    val screen = TestTerminal.screen(output = out)
     (screen, ToolBlock(screen, () => expanded), out)
 
   /** The rows the output leaves on screen, replaying the cursor moves and line

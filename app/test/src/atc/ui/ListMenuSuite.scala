@@ -1,8 +1,5 @@
 package atc.ui
 
-import org.jline.terminal.{Size, Sized, Terminal}
-import org.jline.terminal.impl.DumbTerminal
-
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
 
@@ -76,10 +73,7 @@ class ListMenuSuite extends munit.FunSuite:
     assertEquals(menu.matches.take(3).map(models), Vector("gemini-2.5-pro", "gemini-3.8-flash", "gemini-2.5-flash"))
 
   test("the menu fits the screen: title and counts stay, rows scroll, long labels are cut"):
-    val terminal =
-      DumbTerminal("test", "xterm-256color", ByteArrayInputStream(Array.emptyByteArray), ByteArrayOutputStream(), UTF_8)
-    (terminal: Terminal).setSize(Size(50, 16))
-    val screen = Screen(terminal, plain = false, Glyphs.unicode)
+    val screen = Screen(TestTerminal(50, 16), plain = false, Glyphs.unicode)
     val menu = MenuState(models :+ ("x" * 80), multi = true, 0, Set(4))
     // As the menu's live region draws them: cut to one row.
     def plain(lines: List[String]) =
@@ -115,8 +109,7 @@ class ListMenuSuite extends munit.FunSuite:
       override def read(): Int =
         if !waited then { Thread.sleep(delayMillis); waited = true }
         bytes.read()
-    val terminal = DumbTerminal("test", "xterm-256color", source, out, UTF_8)
-    terminal.setSize(Size.of(80, 24): Sized)
+    val terminal = TestTerminal(input = source, output = out)
     val screen = Screen(terminal, plain = false, glyphs)
     val alerts = Alerts(terminal, plain = false, _ => ())
     val status = StatusLine(screen, () => true, () => true, () => 0)

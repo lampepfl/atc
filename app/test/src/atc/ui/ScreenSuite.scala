@@ -1,18 +1,15 @@
 package atc.ui
 
-import org.jline.terminal.{Size, Sized, Terminal}
-import org.jline.terminal.impl.DumbTerminal
+import org.jline.terminal.{Size, Terminal}
 
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
+import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets.UTF_8
 
 /** The screen: its measured size, rows fitted and broken to the width, live
   * regions and the row updates that keep the footer in place. */
 class ScreenSuite extends munit.FunSuite:
   test("measuring again reports whether the terminal's size changed"):
-    val terminal =
-      DumbTerminal("test", "xterm-256color", ByteArrayInputStream(Array.emptyByteArray), ByteArrayOutputStream(), UTF_8)
-    (terminal: Terminal).setSize(Size(100, 30))
+    val terminal = TestTerminal(100, 30)
     val screen = Screen(terminal, plain = false, Glyphs.unicode)
     assertEquals((screen.width, screen.height), (100, 30))
     assert(!screen.resized(), "nothing changed")
@@ -21,13 +18,8 @@ class ScreenSuite extends munit.FunSuite:
     assert(screen.resized())
     assertEquals((screen.width, screen.height), (60, 30))
 
-  private def screenOf(width: Int, out: ByteArrayOutputStream = ByteArrayOutputStream()): Screen =
-    val terminal = DumbTerminal("test", "xterm-256color", ByteArrayInputStream(Array.emptyByteArray), out, UTF_8)
-    terminal.setSize(Size.of(width, 24): Sized)
-    Screen(terminal, plain = false, Glyphs.unicode)
-
   test("fit counts tab stops from the column the text starts at, and a newline as a space"):
-    val screen = screenOf(80)
+    val screen = TestTerminal.screen(80)
     // After a four-column gutter the tab reaches column 16, so the line would end at column 83.
     val tabbed = "xxxxx\t" + "y" * 67
     val cut = screen.fit(tabbed, 4)
@@ -43,7 +35,7 @@ class ScreenSuite extends munit.FunSuite:
 
   test("a live region cuts every row to the width from column 0, gutter and all"):
     val out = ByteArrayOutputStream()
-    val screen = screenOf(24, out)
+    val screen = TestTerminal.screen(24, out)
     val region = screen.LiveRegion()
     val rows =
       List(screen.gutter(Ansi.Dim) + "xxxxx\t" + "y" * 10, "• thinking… (Ctrl-O to expand)", "a label\nwith a newline")

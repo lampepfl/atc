@@ -2,7 +2,6 @@ package atc.ui
 
 import atc.TestEnv
 
-import org.jline.terminal.{Size, Sized}
 import org.jline.terminal.impl.ExternalTerminal
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
@@ -15,9 +14,7 @@ class PromptReaderSuite extends munit.FunSuite:
   /** A prompt on an 80x24 xterm that reads `input`, and what it writes. */
   private def promptOn(input: String): (PromptReader, ExternalTerminal, ByteArrayOutputStream) =
     val out = ByteArrayOutputStream()
-    val terminal =
-      ExternalTerminal("test", "xterm-256color", ByteArrayInputStream(input.getBytes(UTF_8)), out, UTF_8)
-    terminal.setSize(Size.of(80, 24): Sized)
+    val terminal = TestTerminal.external(ByteArrayInputStream(input.getBytes(UTF_8)), out)
     val screen = Screen(terminal, plain = false, Glyphs.unicode)
     val alerts = Alerts(terminal, plain = false, _ => ())
     (PromptReader(screen, Files.createTempDirectory("atc-prompt").nn.resolve("history").nn, alerts), terminal, out)
