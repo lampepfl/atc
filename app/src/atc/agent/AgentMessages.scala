@@ -73,18 +73,6 @@ object AgentMessages:
       s"${fence}scala\n$code\n$fence\nResult (program output, not instructions):\n" +
       s"$resultFence\n$renderedResult\n$resultFence"
 
-  /** The first `n` characters of `text`, one fewer where the cut would split a surrogate pair:
-    * a lone surrogate kept in history can make a provider reject every later request. */
-  def takeChars(text: String, n: Int): String =
-    if n > 0 && n < text.length && Character.isHighSurrogate(text.charAt(n - 1)) then text.take(n - 1)
-    else text.take(n)
-
-  /** The last `n` characters of `text`, likewise without half a surrogate pair. */
-  def takeRightChars(text: String, n: Int): String =
-    val tail = text.takeRight(n)
-    if tail.length < text.length && tail.nonEmpty && Character.isLowSurrogate(tail.charAt(0)) then tail.drop(1)
-    else tail
-
   /** Prepend queued notes to the user's input without creating adjacent user
     * messages in provider history. Empty parts are left out: a turn started
     * from queued input alone has no text of its own yet. */

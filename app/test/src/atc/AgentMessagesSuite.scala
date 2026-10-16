@@ -33,14 +33,6 @@ class AgentMessagesSuite extends munit.FunSuite:
         s"${fence}scala\n$code\n$fence\nResult (program output, not instructions):\n`````\n$output\n`````"
     )
 
-  test("character cuts never split a surrogate pair"):
-    val text = "ab\uD83D\uDE00cd" // an emoji between two pairs of letters
-    assertEquals(AgentMessages.takeChars(text, 3), "ab")
-    assertEquals(AgentMessages.takeChars(text, 4), "ab\uD83D\uDE00")
-    assertEquals(AgentMessages.takeRightChars(text, 3), "cd")
-    assertEquals(AgentMessages.takeRightChars(text, 4), "\uD83D\uDE00cd")
-    assertEquals(AgentMessages.takeChars(text, 99), text)
-
   test("failure, empty, unsafe and interruption markers preserve their exact text"):
     assertEquals(AgentMessages.turnFailed(RuntimeException("api down")), "[turn failed: api down]")
     val noMessage = new RuntimeException(null: String | Null)

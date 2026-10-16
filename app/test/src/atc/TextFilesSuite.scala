@@ -1,6 +1,14 @@
 package atc
 
 class TextFilesSuite extends munit.FunSuite:
+  test("character cuts never split a surrogate pair"):
+    val text = "ab\uD83D\uDE00cd" // an emoji between two pairs of letters
+    assertEquals(TextFiles.takeChars(text, 3), "ab")
+    assertEquals(TextFiles.takeChars(text, 4), "ab\uD83D\uDE00")
+    assertEquals(TextFiles.takeRightChars(text, 3), "cd")
+    assertEquals(TextFiles.takeRightChars(text, 4), "\uD83D\uDE00cd")
+    assertEquals(TextFiles.takeChars(text, 99), text)
+
   test("a leading BOM is stripped without touching embedded BOMs"):
     assertEquals(TextFiles.bomLength("plain"), 0)
     assertEquals(TextFiles.bomLength("\uFEFFplain"), 1)

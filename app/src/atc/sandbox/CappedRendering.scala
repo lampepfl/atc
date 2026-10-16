@@ -32,6 +32,5 @@ final class CappedRendering(parent: Option[ClassLoader], maxChars: Int) extends 
     if full.length <= maxChars then full
     else
       val text = full.plainText // same length as `full`
-      // Do not cut in the middle of a surrogate pair, as an emoji has.
-      val cut = if maxChars > 0 && Character.isHighSurrogate(text.charAt(maxChars - 1)) then maxChars - 1 else maxChars
-      fansi.Str(text.take(cut) + s"… [${text.length - cut} more characters not shown; println the value to see all]")
+      val kept = atc.TextFiles.takeChars(text, maxChars)
+      fansi.Str(kept + s"… [${text.length - kept.length} more characters not shown; println the value to see all]")

@@ -1,6 +1,6 @@
 package atc.agent
 
-import atc.Debug
+import atc.{Debug, TextFiles}
 import atc.config.Config
 import atc.lib.{TaskNotes, Todo}
 import atc.llm.*
@@ -169,14 +169,14 @@ final class Agent(
       "originalRequest" -> conversation.userRequests.headOption.getOrElse(""),
       "recentUserInstructions" ->
         ujson.Arr.from(
-          conversation.userRequests.drop(1).takeRight(Conversation.RecentRequests).map(AgentMessages.takeChars(_, 2000))
+          conversation.userRequests.drop(1).takeRight(Conversation.RecentRequests).map(TextFiles.takeChars(_, 2000))
         ),
       "goal" -> notes.goal,
       "constraints" -> ujson.Arr.from(notes.constraints),
       "completed" -> ujson.Arr.from(notes.completed),
       "remaining" -> ujson.Arr.from(notes.remaining),
       "todos" ->
-        ujson.Arr.from(todos.take(50).map(todo => s"${todo.status}: ${AgentMessages.takeChars(todo.text, 200)}")),
+        ujson.Arr.from(todos.take(50).map(todo => s"${todo.status}: ${TextFiles.takeChars(todo.text, 200)}")),
     ))
 
   /** Summarize the older exchanges with the current model (`/compact`). History

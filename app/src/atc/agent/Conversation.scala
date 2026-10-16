@@ -1,5 +1,6 @@
 package atc.agent
 
+import atc.TextFiles
 import atc.llm.{Msg, ToolResult}
 
 /** Stores conversation history and pending notes, and repairs incomplete
@@ -20,7 +21,7 @@ private[agent] final class Conversation:
 
   private def remember(input: String): Unit =
     if input.nonEmpty then
-      requests :+= AgentMessages.takeChars(input, MaxRequestChars)
+      requests :+= TextFiles.takeChars(input, MaxRequestChars)
       if requests.size > RecentRequests + 1 then requests = requests.take(1) ++ requests.takeRight(RecentRequests)
 
   def queueNote(note: String): Unit = pendingNotes :+= note
