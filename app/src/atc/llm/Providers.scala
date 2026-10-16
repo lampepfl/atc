@@ -224,7 +224,7 @@ private[atc] object Providers:
   /** Whether a failed request is the provider refusing its web search tool or
     * parameter: a 400 or 422 whose message names it. */
   def isWebSearchRejection(error: Throwable): Boolean =
-    Iterator.iterate[Throwable | Null](error)(_.nn.getCause).takeWhile(_ != null).take(8).exists:
+    Debug.causes(error).exists:
       case e: com.anthropic.errors.AnthropicServiceException => rejectsWebSearch(e.statusCode(), e.getMessage)
       case e: com.openai.errors.OpenAIServiceException => rejectsWebSearch(e.statusCode(), e.getMessage)
       case _ => false

@@ -441,8 +441,10 @@ object Config:
   /** The starter global config with `providers` as its providers. */
   def globalTemplateWith(providers: List[ProviderPreset]): String =
     val template = resource("/atc/config-template.json")
+    val slot = "\"providers\": {}"
+    require(template.contains(slot), s"the starting config template has no $slot to fill in")
     val rendered = ujson.write(ujson.Obj.from(providers.map(p => p.name -> writeJs(p.config))), indent = 2)
-    template.replace("\"providers\": {}", "\"providers\": " + rendered.linesIterator.mkString("\n  "))
+    template.replace(slot, "\"providers\": " + rendered.linesIterator.mkString("\n  "))
 
   /** The starter key bindings written beside it. */
   def keysTemplate: String = resource("/atc/keys-template.properties")

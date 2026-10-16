@@ -139,13 +139,15 @@ object ProjectTrust:
 
   private def of(json: ujson.Obj, bindings: Map[String, String]): Grants =
     def strings(key: String) = json.value.get(key).flatMap(_.arrOpt).fold(Nil)(_.toList.flatMap(_.strOpt))
+    val commands = strings("commands")
+    val hosts = strings("hosts")
     val keys = bindings.toList.sortBy(_._1)
     val classified = json.value.get("classifiedModel").flatMap(_.strOpt)
     val webSearch = webSearchEntries(json).nonEmpty
     // Web search enters only when it is on, so that fingerprints recorded without it still match.
     val granted = ujson.Obj(
-      "commands" -> ujson.Arr.from(strings("commands")),
-      "hosts" -> ujson.Arr.from(strings("hosts")),
+      "commands" -> ujson.Arr.from(commands),
+      "hosts" -> ujson.Arr.from(hosts),
       "classifiedModel" -> classified.fold[ujson.Value](ujson.Null)(ujson.Str(_)),
       "keys" -> ujson.Obj.from(keys.map((name, value) => name -> ujson.Str(value))),
     )
@@ -155,8 +157,8 @@ object ProjectTrust:
     classified.map(definition(json, _)).filter(_.value.nonEmpty).foreach(granted("classifiedDefinition") = _)
     val digest = MessageDigest.getInstance("SHA-256").nn.digest(ujson.write(granted).getBytes(UTF_8))
     Grants(
-      strings("commands"),
-      strings("hosts"),
+      commands,
+      hosts,
       classified,
       keys.map(_._1),
       webSearch,

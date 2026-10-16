@@ -99,8 +99,6 @@ final case class Configuration(
   /** The `${VAR}` bindings from `.atc/keys.properties`; kept apart from the settings. */
   keys: KeyBindings = KeyBindings.empty
 ):
-  def sources: List[Path] = layers.flatMap(_.path)
-
   /** Whether the bundled starting config stands in for a missing global one. */
   def bundledGlobal: Boolean = layers.exists(l => l.origin == Origin.Global && l.path.isEmpty)
 
@@ -248,7 +246,7 @@ object Configuration:
     * replacing the whole model entry), everything else is overwritten. So a
     * project config can add a model to a provider the global config defined
     * without repeating its url and key. */
-  def mergeJson(base: ujson.Obj, over: ujson.Obj): ujson.Obj =
+  private[atc] def mergeJson(base: ujson.Obj, over: ujson.Obj): ujson.Obj =
     overlay(base, over): (k, a, b) =>
       (a, b) match
         case (x: ujson.Arr, y: ujson.Arr) if ListKeys.contains(k) => ujson.Arr(x.value ++ y.value)

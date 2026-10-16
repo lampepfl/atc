@@ -144,7 +144,7 @@ class ConfigSuite extends munit.FunSuite:
     )
     val loaded = load(dir, Some(cfg))
     val c = loaded.settings
-    assertEquals(loaded.sources, List(cfg))
+    assertEquals(loaded.layers.flatMap(_.path), List(cfg))
     assertEquals(c.model, Some("claude"))
     assertEquals(c.classifiedModel, Some("local"))
     assertEquals(c.providers("anthropic").models("claude").name, Some("claude-opus-5"))
@@ -264,7 +264,7 @@ class ConfigSuite extends munit.FunSuite:
   test("with no config file at all, nothing is configured and nothing is permitted"):
     val dir = Files.createTempDirectory("atc-cfg-none").nn
     val loaded = load(dir, None)
-    assert(loaded.sources.isEmpty)
+    assert(loaded.layers.flatMap(_.path).isEmpty)
     assertEquals(loaded.layers, Nil)
     assertEquals(loaded.rules, Nil)
     assertEquals(loaded.settings.commands, Nil)
@@ -274,7 +274,7 @@ class ConfigSuite extends munit.FunSuite:
     val projectDir = Files.createDirectories(dir.resolve(".atc")).nn
     val project = writeCfg(projectDir, "config.json", """{ "commands": ["git status"] }""")
     val loaded = load(dir, Some(project))
-    assertEquals(loaded.sources, List(project))
+    assertEquals(loaded.layers.flatMap(_.path), List(project))
     // read once, in its project role
     assertEquals(loaded.layers.map(_.origin), List(Origin.Project))
     assertEquals(loaded.settings.commands, List("git status"))

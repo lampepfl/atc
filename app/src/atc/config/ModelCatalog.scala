@@ -82,8 +82,7 @@ final class ModelCatalog(
     configured.groupBy(m => lower(m.alias)).map((a, ms) => a -> ms.size)
 
   /** The lists kept from earlier sessions, read once. */
-  private lazy val stored: Map[String, List[ModelSpec]] =
-    discoverable.flatMap(p => store.flatMap(_.load(p)).map(p.provider -> _)).toMap
+  private lazy val stored: Map[String, List[ModelSpec]] = store.fold(Map.empty)(_.load(discoverable))
 
   /** This session's fetches by provider name, `None` for one that failed. */
   private val fetches = mutable.Map[String, CompletableFuture[Option[List[ModelSpec]]]]()
@@ -227,7 +226,7 @@ object ModelCatalog:
         )
     val discoverable = providers.collect {
       case (p, endpoint)
-          if p.models.isEmpty && !endpoint.api.trim.equalsIgnoreCase("echo") &&
+          if p.models.isEmpty && !ProviderConfig.canonicalApi(endpoint.api).contains("echo") &&
             (endpoint.apiKey.isDefined || (p.key.isEmpty && p.keyEnv.isEmpty)) => endpoint
     }
     ModelCatalog(configured, discoverable, discover, store, providerNames = config.providers.keySet.toSet)
@@ -252,9 +251,17 @@ final class ModelListStore(path: Path):
     try read[Map[String, Saved]](Files.readString(path).nn)
     catch case NonFatal(_) => Map.empty
 
-  def load(provider: ModelSpec): Option[List[ModelSpec]] =
-    all().get(provider.provider).filter(s => s.api == provider.api && s.url == provider.baseUrl).map: saved =>
-      saved.models.map(m => provider.listed(m.id, m.settings.copy(webSearch = provider.settings.webSearch)))
+  def load(provider: ModelSpec): Option[List[ModelSpec]] = load(List(provider)).get(provider.provider)
+
+  /** The stored lists of `providers` by provider name, from one reading of the file. */
+  def load(providers: List[ModelSpec]): Map[String, List[ModelSpec]] =
+    val saved = all()
+    val found =
+      for
+        p <- providers
+        list <- saved.get(p.provider) if list.api == p.api && list.url == p.baseUrl
+      yield p.provider -> list.models.map(m => p.listed(m.id, m.settings.copy(webSearch = p.settings.webSearch)))
+    found.toMap
 
   def save(provider: ModelSpec, models: List[ModelSpec]): Unit = ModelListStore.synchronized:
     try

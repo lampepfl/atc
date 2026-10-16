@@ -152,5 +152,4 @@ object FirstRun:
 
   /** The messages of `e` and its causes: an SDK's "Request failed" alone does not say why. */
   private def reasons(e: Throwable): String =
-    Iterator.iterate[Throwable | Null](e)(_.nn.getCause).takeWhile(_ != null).take(8)
-      .flatMap(t => Option(t.nn.getMessage)).filter(_.nonEmpty).distinct.mkString(": ")
+    Debug.causes(e).flatMap(t => Option(t.getMessage)).filter(_.nonEmpty).distinct.mkString(": ")

@@ -160,7 +160,7 @@ class LayerSuite extends munit.FunSuite:
       List(Origin.Global -> None, Origin.Project -> Some(Config.projectPath(w.cwd)))
     )
     assert(bundled.layers.head.describe.contains("(bundled)"))
-    assertEquals(bundled.sources, List(Config.projectPath(w.cwd))) // no file to report for it
+    assertEquals(bundled.layers.flatMap(_.path), List(Config.projectPath(w.cwd))) // no file to report for it
     // it is the config the file would hold, and nothing was written
     assertEquals(bundled.settings.providers.keySet, ujson.read(Config.globalTemplate)("providers").obj.keySet)
     assert(!Files.exists(w.globalPath))
@@ -182,7 +182,7 @@ class LayerSuite extends munit.FunSuite:
       (false, "off", 0.9),
     )
     assert(session.describe.contains("(this session)"), session.describe)
-    assertEquals(combined.sources, w.configuration.sources) // no file behind it
+    assertEquals(combined.layers.flatMap(_.path), w.configuration.layers.flatMap(_.path)) // no file behind it
     // It grants nothing: a policy setting in it could only narrow.
     val loose = ConfigLayer.session(ujson.Obj("safeMode" -> false, "maxToolCalls" -> 1000))
     val narrowed = Configuration.combine(w.configuration.layers :+ loose, w.configuration.keys).settings
@@ -630,7 +630,7 @@ class LayerSuite extends munit.FunSuite:
   test("layers are reported in order, and a path named twice is read once"):
     val w = World(global = """{ "maxToolCalls": 9 }""", project = """{ "maxToolCalls": 8 }""")
     assertEquals(w.configuration.layers.map(_.origin), List(Origin.Global, Origin.Project))
-    assertEquals(w.configuration.sources, List(w.globalPath, Config.projectPath(w.cwd)))
+    assertEquals(w.configuration.layers.flatMap(_.path), List(w.globalPath, Config.projectPath(w.cwd)))
     // naming the project file with -c keeps it in its narrowing role
     val again = Config.load(w.cwd, Some(Config.projectPath(w.cwd)), w.globalPath)
     assertEquals(again.layers.map(_.origin), List(Origin.Global, Origin.Project))

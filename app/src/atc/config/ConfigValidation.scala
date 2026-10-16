@@ -28,9 +28,7 @@ object ConfigValidation:
     config.executionTimeoutMs.foreach(requirePositive("executionTimeoutMs", _))
     validateChoice("notifications", config.notifications, NotificationChoices)
     config.effort.foreach(validateChoice("effort", _, ModelConfig.ReasoningEfforts :+ ModelConfig.DefaultEffort))
-    config.mode.foreach: m =>
-      try Mode.parse(m)
-      catch case e: IllegalArgumentException => invalid(e.getMessage.nn)
+    validateMode(config.mode, "")
     config.providers.foreach(validateProvider)
     // `model` and `classifiedModel` are not checked here: a model a provider
     // lists may be named before the list is fetched, and the start warns
@@ -47,12 +45,13 @@ object ConfigValidation:
     * [[Configuration.combine]] validates every layer first, so combining modes
     * can assume valid input. */
   private[config] def validateLayerMode(layer: ConfigLayer): Unit =
-    layer.config.mode.foreach: m =>
+    validateMode(layer.config.mode, " " + layer.path.map(_.toString).getOrElse(s"(${layer.origin.label} layer)"))
+
+  /** Reject an unknown `mode`; `where` follows "Invalid config" in the message. */
+  private def validateMode(mode: Option[String], where: String): Unit =
+    mode.foreach: m =>
       try Mode.parse(m)
-      catch
-        case e: IllegalArgumentException =>
-          val where = layer.path.map(_.toString).getOrElse(s"(${layer.origin.label} layer)")
-          throw IllegalArgumentException(s"Invalid config $where: ${e.getMessage}")
+      catch case e: IllegalArgumentException => throw IllegalArgumentException(s"Invalid config$where: ${e.getMessage}")
 
   /** Reject what the JSON reader takes without complaint and turns into a different value:
     * `null` where the setting is not optional, which it reads as `null`, `0` or `false`, and
