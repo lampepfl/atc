@@ -47,7 +47,7 @@ private[ui] final class Dialogs(
 
   /** A question, wrapped with its lines under the first one's text. */
   private def ask(question: String): Unit =
-    TextLayout.wrap(Ansi.sanitize(question), width - 5).zipWithIndex.foreach: (line, index) =>
+    TextLayout.wrap(Ansi.sanitize(question), width - 5, Under.length).zipWithIndex.foreach: (line, index) =>
       write(Indent + styled((if index == 0 then "? " else "  ") + line, Cyan, Bold) + "\n")
 
   /** A permission request: allow once, allow for the session, deny, or instructions for the
@@ -58,7 +58,7 @@ private[ui] final class Dialogs(
     // The request embeds model-chosen paths and command lines: sanitize.
     write(Indent + styled(s"${g.warn} Permission request: ${Ansi.sanitize(req.title)}", Yellow, Bold) + "\n")
     req.details.foreach: detail =>
-      TextLayout.wrap(Ansi.sanitize(detail), width - 5)
+      TextLayout.wrap(Ansi.sanitize(detail), width - 5, Under.length)
         .foreach(line => write(Indent + Indent + styled(line, Yellow) + "\n"))
     var cancelled = false
     val decision =

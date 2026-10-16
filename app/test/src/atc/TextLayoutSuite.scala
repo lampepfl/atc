@@ -1,6 +1,6 @@
 package atc
 
-import atc.ui.{Ansi, TextLayout}
+import atc.ui.{Ansi, Screen, TextLayout}
 
 class TextLayoutSuite extends munit.FunSuite:
   private def plain(text: String): String = Ansi.Sgr.replaceAllIn(text, "")
@@ -15,6 +15,12 @@ class TextLayoutSuite extends munit.FunSuite:
   test("tabs measure as tab stops, so a tabbed line is wrapped rather than let through"):
     assertEquals(TextLayout.width("a\tb"), 9)
     assertEquals(TextLayout.wrap("a\tb", 4).map(plain), List("a", "b"))
+
+  test("rows written after a gutter count tab stops from the screen column"):
+    // From column 4 the tab after five cells reaches column 16, so `fghij` needs a row of its own.
+    val rows = TextLayout.wrap("abcde\tfghij", 12, origin = 4)
+    assertEquals(rows, List("abcde", "fghij"))
+    assert(rows.forall(row => Screen.displayWidth(row, 4) <= 12), rows)
 
   test("long unbroken text wraps without dropping characters"):
     for text <- List("abcdefghijklmnopqrstuvwxyz", "中文漢字" * 8, "e\u0301" * 20) do

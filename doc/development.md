@@ -1307,7 +1307,9 @@ on one line and capped at 200 characters.
 
 `TextLayout` wraps complete lines by terminal cell width, preserving ANSI styles and whole
 Unicode code points. It scans long lines once, with word boundaries preferred over hard
-breaks. Help and banner fields retain aligned continuation lines; when their value column
+breaks. Rows written after a gutter or indent pass its width as `origin` to `TextLayout.wrap`
+and `Screen.breakLines`, since the terminal counts tab stops from column 0, not from the
+gutter. Help and banner fields retain aligned continuation lines; when their value column
 would be too narrow, values move below labels. Tool code, diagnostics, permission details
 and TODOs use the same wrapping rules. Diagnostic folding counts the resulting display
 rows, so a long first error remains readable and `/output` exposes the complete result.

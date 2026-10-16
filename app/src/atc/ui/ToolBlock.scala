@@ -78,7 +78,8 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
   private var wrappedWidth = -1
   private def codeRows: List[String] =
     if wrappedWidth != width then
-      wrapped = codeLines.flatMap(line => TextLayout.wrap(line, width - GutterWidth - 1)).map(gutter(Magenta) + _)
+      wrapped =
+        codeLines.flatMap(line => TextLayout.wrap(line, width - GutterWidth - 1, GutterWidth)).map(gutter(Magenta) + _)
       wrappedWidth = width
     wrapped
 
@@ -127,7 +128,8 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
           write(section("output", Dim))
           outputStarted = true
           outputColumn = 0
-        val (rows, column) = if plain then (text, 0) else Screen.breakLines(text, outputColumn, width - GutterWidth - 1)
+        val (rows, column) =
+          if plain then (text, 0) else Screen.breakLines(text, outputColumn, width - GutterWidth - 1, GutterWidth)
         outputColumn = column
         screen.writeGuttered(rows, gutter(Dim))
 
@@ -242,7 +244,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       // REPL output holds the agent's raw prints and compiler diagnostics: sanitize
       // before display. The subtraction above runs on the raw text, before this.
       val cleaned = lines.map(Ansi.sanitize).flatMap: line =>
-        if plain then List(line) else TextLayout.wrap(line, width - GutterWidth - 1)
+        if plain then List(line) else TextLayout.wrap(line, width - GutterWidth - 1, GutterWidth)
       val max = ToolBlock.MaxPanelLines
       val kept =
         if cleaned.length <= max || plain || expanded() then cleaned

@@ -536,7 +536,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
         case TodoStatus.Done => styled(s"${g.done} $text", Dim)
         case TodoStatus.InProgress => styled(s"${g.inProgress} $text", Yellow)
         case TodoStatus.Pending => s"${g.pending} $text"
-      TextLayout.wrap(line, width - 5).foreach(row => write(Indent + Indent + row + "\n"))
+      TextLayout.wrap(line, width - 5, 2 * Indent.length).foreach(row => write(Indent + Indent + row + "\n"))
 
   // ── input ─────────────────────────────────────────────────────────
 

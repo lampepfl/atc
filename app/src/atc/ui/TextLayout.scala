@@ -1,6 +1,6 @@
 package atc.ui
 
-import org.jline.utils.{AttributedString, WCWidth}
+import org.jline.utils.AttributedString
 
 /** Width-aware wrapping for complete terminal lines. ANSI styles do not consume columns. */
 private[atc] object TextLayout:
@@ -8,10 +8,12 @@ private[atc] object TextLayout:
     * count nothing (`columnLength` would make a tab -1 and let `wrap` skip such a line). */
   def width(text: String): Int = Screen.displayWidth(AttributedString.fromAnsi(text).nn.toString)
 
-  def wrap(text: String, columns: Int): List[String] =
+  /** `text` in rows of at most `columns` cells. Every row is written from screen column
+    * `origin`, after a gutter or indent, and the terminal's tab stops count from column 0. */
+  def wrap(text: String, columns: Int, origin: Int = 0): List[String] =
     val room = columns.max(2)
     text.split("\n", -1).toList.flatMap: line =>
-      if width(line) <= room then List(line)
+      if Screen.displayWidth(AttributedString.fromAnsi(line).nn.toString, origin) <= room then List(line)
       else
         val lines = List.newBuilder[String]
         val styled = AttributedString.fromAnsi(line).nn
@@ -24,7 +26,7 @@ private[atc] object TextLayout:
           var full = false
           while end < plain.length && !full do
             val cp = plain.codePointAt(end)
-            val size = if cp == '\t' then 8 - used % 8 else WCWidth.wcwidth(cp).max(0)
+            val size = Screen.cellWidth(cp, origin + used)
             if used + size > room then full = true
             else
               if Character.isWhitespace(cp) then space = end

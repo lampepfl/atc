@@ -37,6 +37,10 @@ class ScreenSuite extends munit.FunSuite:
     assertEquals(screen.fit("a\nb", 0), "a b")
     assertEquals(screen.fit("\u001b[2m" + "z" * 200 + "\u001b[0m", 0), "\u001b[2m" + "z" * 78 + "\u001b[0m…")
 
+  test("output breaks count tab stops from the screen column after the gutter"):
+    // From column 4 the tab after five cells reaches column 16: twelve cells, the whole room.
+    assertEquals(Screen.breakLines("abcde\tfghij", 0, 12, origin = 4), ("abcde\t\nfghij", 5))
+
   test("a live region cuts every row to the width from column 0, gutter and all"):
     val out = ByteArrayOutputStream()
     val screen = screenOf(24, out)

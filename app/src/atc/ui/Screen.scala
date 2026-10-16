@@ -234,8 +234,9 @@ object Screen:
   /** `text` with a line break wherever it would pass `room` cells, for a row that already
     * holds `column` cells, and the column it ends at. Output is shown verbatim, so it breaks
     * where the row ends rather than between words; left to the terminal, the rest of a long
-    * line would continue at column 0, outside its block's gutter. */
-  def breakLines(text: String, column: Int, room: Int): (String, Int) =
+    * line would continue at column 0, outside its block's gutter. Rows are written from
+    * screen column `origin`, which tab stops count from. */
+  def breakLines(text: String, column: Int, room: Int, origin: Int = 0): (String, Int) =
     val out = StringBuilder()
     var col = column
     var i = 0
@@ -248,17 +249,20 @@ object Screen:
         val cp = text.codePointAt(i)
         if cp == '\n' then col = 0
         else
-          val w = cellWidth(cp, col)
+          val w = cellWidth(cp, origin + col)
           if col > 0 && col + w > room then
             out.append('\n')
             col = 0
-          col += cellWidth(cp, col)
+          col += cellWidth(cp, origin + col)
         out.appendAll(Character.toChars(cp))
         i += Character.charCount(cp)
     (out.toString, col)
 
   /** Display width in terminal cells of `s` starting at column 0; SGR sequences take none. */
-  def displayWidth(s: String): Int =
+  def displayWidth(s: String): Int = displayWidth(s, 0)
+
+  /** As [[displayWidth]] for text written from screen column `origin`, which tab stops count from. */
+  def displayWidth(s: String, origin: Int): Int =
     var w = 0
     var i = 0
     while i < s.length do
@@ -266,7 +270,7 @@ object Screen:
       if styleEnd > 0 then i = styleEnd
       else
         val cp = s.codePointAt(i)
-        w += cellWidth(cp, w)
+        w += cellWidth(cp, origin + w)
         i += Character.charCount(cp)
     w
 
