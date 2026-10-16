@@ -179,7 +179,7 @@ private[host] trait HostProcesses:
 
   private def reapProcesses(): Unit = spawned.filterInPlace((_, process) => process.managed.isAlive)
 
-  /** Kill processes owned by a closing one-time permission scope. */
+  /** Kill the processes owned by a closing `request*` scope. */
   private[host] def killProcessesInScope(id: ScopeId): Unit = spawned.synchronized:
     spawned.values.toList.filter(_.scope == id).foreach: process =>
       try process.managed.kill()

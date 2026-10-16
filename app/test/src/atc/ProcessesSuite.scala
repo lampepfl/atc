@@ -44,7 +44,7 @@ class ProcessesSuite extends munit.FunSuite:
 
     buffer.append("!")
     assertEquals(buffer.peek, text.drop(1) + "!")
-    assert(buffer.marker.contains("older output dropped"), buffer.marker)
+    assert(buffer.marker.contains("older output dropped: exceeded 64 characters"), buffer.marker)
 
     val continued = (0 until 4096).map(i => ('A' + i % 26).toChar).mkString
     continued.foreach(char => buffer.append(char.toString))

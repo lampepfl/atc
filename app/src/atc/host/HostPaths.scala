@@ -128,8 +128,8 @@ private[host] trait HostPaths:
         // failure nor its message may reach the agent: either would reveal a
         // success/failure bit, and an exception can quote the content.
         try Files.writeString(path, value, StandardCharsets.UTF_8)
-        catch case NonFatal(_) => classifiedSinkFailed(s"writing '$path'")
-      case Failure(_) => classifiedSinkFailed(s"writing '$path'")
+        catch case NonFatal(_) => classifiedSinkFailed(s"writing '${PlatformPath.portable(path)}'")
+      case Failure(_) => classifiedSinkFailed(s"writing '${PlatformPath.portable(path)}'")
 
   /** Visible children. Policy checks use canonical paths; gitignore checks use the entry. */
   private def visibleEntries(scope: ScopeId, dir: Path): List[VisibleEntry] =

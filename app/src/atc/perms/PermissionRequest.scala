@@ -1,5 +1,7 @@
 package atc.perms
 
+import atc.platform.PlatformPath
+
 import java.nio.file.Path
 
 /** What the user answers to a permission prompt. */
@@ -49,7 +51,8 @@ object PermissionRequest:
 
 final case class FileRequest(path: Path, access: Access, current: Perm, reason: String) extends PermissionRequest:
   def title: String = s"File access: ${access.label}"
-  protected def fields: List[(String, String)] = List("path" -> path.toString, "current" -> current.describe)
+  protected def fields: List[(String, String)] =
+    List("path" -> PlatformPath.portable(path), "current" -> current.describe)
 
 final case class ExecRequest(commands: List[String], reason: String) extends PermissionRequest:
   def title: String = "Run commands"

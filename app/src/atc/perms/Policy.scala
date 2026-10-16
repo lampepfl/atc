@@ -312,8 +312,8 @@ final class Policy(
     * reads what was added during a tool call and tells the model in that
     * call's result, since the model cannot see the pop-ups: it would otherwise
     * take an "allow once" for a standing grant, or a later "no" for a
-    * revocation. The prompt itself never changes with a decision, so every
-    * request keeps its prefix. */
+    * revocation. The system prompt never changes with a decision, so every
+    * request keeps its cached prefix. */
   private val decisionLog = mutable.ListBuffer[(Decision, String)]()
   def decisionCount: Int = decisionLog.synchronized:
     decisionLog.length
@@ -397,7 +397,7 @@ final class Policy(
       lines += s"  classified patterns: ${classifiedOnly.map(_.pattern).mkString(", ")}"
     if withSession && base.fileGrants.nonEmpty then
       lines += "Session file grants:"
-      lines ++= base.fileGrants.reverse.map((p, a) => s"  $p: ${a.label}")
+      lines ++= base.fileGrants.reverse.map((p, a) => s"  ${PlatformPath.portable(p)}: ${a.label}")
     lines += s"Commands: ${listOf(baseCommands)}${session(base.commands)}"
     if denyCommands.nonEmpty then lines += s"  always refused: ${denyCommands.mkString(", ")}"
     lines += s"Hosts:    ${listOf(baseHosts)}${session(base.hosts)}"

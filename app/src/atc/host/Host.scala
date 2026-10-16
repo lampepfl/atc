@@ -45,15 +45,10 @@ final class Host(
   def network(using IOCap): Network = NetworkImpl(ScopeId.Base)
 
   /** Run the tasks on up to [[Host.MaxParallel]] daemon threads of a pool that lives for
-    * this call only. A nested `parallel`, called from one of those threads, runs its tasks
-    * one after another on that thread: a pool per level would multiply the threads of a
-    * recursion, and a pool shared by the levels could starve them. Every task runs to its
-    * end before the call returns, even when one of them failed: a task's effects (a
-    * command, a request) must not outlive the snippet. A fatal throwable from any task wins
-    * over ordinary failures, since the REPL's stop signal (`ThreadDeath`, raised in
-    * instrumented agent code on every thread once the session is interrupted) must reach
-    * the evaluation thread. Interrupting the caller while it waits interrupts the workers
-    * (for blocking host calls, nested tasks included) and is reported as an interruption. */
+    * this call only. A nested call, made from one of those threads, runs its tasks one after
+    * another on that thread. A fatal throwable from any task wins over ordinary failures, so
+    * that the REPL's stop signal reaches the evaluation thread. Interrupting the caller while
+    * it waits interrupts the workers. */
   def parallel[A, C <: caps.CapSet](tasks: Seq[() => A]): List[A] =
     if tasks.isEmpty then Nil
     else if Thread.currentThread.isInstanceOf[Host.ParallelThread] then
