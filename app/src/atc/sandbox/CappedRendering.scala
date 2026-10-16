@@ -27,25 +27,6 @@ final class CappedRendering(parent: Option[ClassLoader], maxChars: Int) extends 
     val diag = super.renderError(thr, d)
     Diagnostic(NoExplanation(atc.sandbox.ExecutionResult.trimStackFrames(diag.message)), diag.pos, diag.level)
 
-  /** Values of the capture-checked API types echo with an explicit empty capture
-    * set (`val r: ProcessResult^{} = ...`). The agent may copy that into its own
-    * annotations, so the echoed signatures drop it. */
-  private def withoutEmptyCaptureSets(diag: Diagnostic)(using Context): Diagnostic =
-    val text = diag.message
-    if !text.contains("^{}") then diag
-    else Diagnostic(NoExplanation(text.replace("^{}", "")), diag.pos, diag.level)
-
-  override def renderVal(d: Denotation)(using Context): Either[ReflectiveOperationException, Option[Diagnostic]] =
-    super.renderVal(d).map(_.map(withoutEmptyCaptureSets))
-
-  override def renderMethod(d: Denotation)(using Context): Diagnostic = withoutEmptyCaptureSets(super.renderMethod(d))
-
-  override def renderTypeDef(d: Denotation)(using Context): Diagnostic =
-    withoutEmptyCaptureSets(super.renderTypeDef(d))
-
-  override def renderTypeAlias(d: Denotation)(using Context): Diagnostic =
-    withoutEmptyCaptureSets(super.renderTypeAlias(d))
-
   override def replStringOf(value: Object, prefixLength: Int)(using Context): fansi.Str =
     val full = super.replStringOf(value, prefixLength)
     if full.length <= maxChars then full
