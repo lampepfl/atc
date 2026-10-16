@@ -1,6 +1,6 @@
 package atc.config
 
-import atc.{Debug, TextFiles}
+import atc.TextFiles
 
 /** The top-level members of a JSON object's text, with their positions. */
 private[config] final case class ObjectText(text: String, open: Int, close: Int, members: List[ObjectText.Member]):
@@ -23,15 +23,6 @@ object ObjectText:
     * the value (no surrounding whitespace, no trailing comma). */
   private[config] final case class Member(key: String, keyStart: Int, valueStart: Int, valueEnd: Int)
 
-  /** `text` parsed as a config, which must be a JSON object; `where` names it in errors. */
-  private[config] def parse(text: String, where: String): ujson.Obj =
-    val parsed =
-      try ujson.read(TextFiles.stripBom(text))
-      catch case e: Exception => throw IllegalArgumentException(s"Cannot parse config $where: ${Debug.message(e)}")
-    parsed match
-      case o: ujson.Obj => o
-      case _ => throw IllegalArgumentException(s"Config $where must be a JSON object")
-
   /** `text` (a JSON object) with the top-level `key` set to `value`: an
     * existing key keeps its place and only its value changes; a new one is
     * added after the first of `after` that is present, else first, indented
@@ -43,7 +34,7 @@ object ObjectText:
     after: List[String] = Nil,
     where: String = "config"
   ): String =
-    parse(text, where) // fail clearly on anything that is not a JSON object
+    ConfigLayer.parse(text, where) // fail clearly on anything that is not a JSON object
     val obj = scan(text)
     val rendered = ujson.write(value)
     // ujson honors the final occurrence of a duplicate key. Rewrite that occurrence;
@@ -68,7 +59,7 @@ object ObjectText:
     * created, and a new member goes last in its object, written on one line.
     * Everything else keeps its text, like [[withTopLevel]]. */
   def withMember(text: String, path: List[String], value: Option[ujson.Value], where: String = "config"): String =
-    parse(text, where)
+    ConfigLayer.parse(text, where)
     member(text, path, value)
 
   private def member(text: String, path: List[String], value: Option[ujson.Value]): String =

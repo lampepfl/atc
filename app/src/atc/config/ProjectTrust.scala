@@ -130,7 +130,7 @@ object ProjectTrust:
 
   private def readConfig(root: Path): ujson.Obj =
     val config = Config.projectPath(root)
-    if Files.isRegularFile(config) then ObjectText.parse(Files.readString(config).nn, config.toString)
+    if Files.isRegularFile(config) then ConfigLayer.parse(Files.readString(config).nn, config.toString)
     else ujson.Obj()
 
   private def readKeys(root: Path): Map[String, String] =

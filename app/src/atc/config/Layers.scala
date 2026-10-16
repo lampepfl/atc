@@ -1,6 +1,6 @@
 package atc.config
 
-import atc.Debug
+import atc.{Debug, TextFiles}
 import atc.perms.{Access, FileRule, Mode, PathPattern}
 import atc.platform.PlatformPath
 
@@ -47,6 +47,15 @@ final case class ConfigLayer(
     f"  ${origin.label}%-9s $source%-52s $role"
 
 object ConfigLayer:
+  /** `text` parsed as a config, which must be a JSON object; `where` names it in errors. */
+  private[config] def parse(text: String, where: String): ujson.Obj =
+    val parsed =
+      try ujson.read(TextFiles.stripBom(text))
+      catch case e: Exception => throw IllegalArgumentException(s"Cannot parse config $where: ${Debug.message(e)}")
+    parsed match
+      case o: ujson.Obj => o
+      case _ => throw IllegalArgumentException(s"Config $where must be a JSON object")
+
   /** The config file at `path`, in the role `origin`. */
   def read(origin: Origin, path: Path): ConfigLayer =
     val text =
@@ -58,14 +67,14 @@ object ConfigLayer:
     // The policy evaluates canonical paths, so the base is canonical too;
     // otherwise a project reached through a symlink would never grant access.
     val base = Option.when(origin == Origin.Project)(PlatformPath.canonical(path.getParent.nn.getParent.nn))
-    val json = ObjectText.parse(text, path.toString)
+    val json = parse(text, path.toString)
     ConfigLayer(origin, Some(path), json, settings(json, path.toString), base)
 
   /** The starting global config as an in-memory layer, for a run without a
     * `~/.atc/config.json`. */
   def bundled: ConfigLayer =
     val where = "the bundled starting config"
-    val json = ObjectText.parse(Config.globalTemplate, where)
+    val json = parse(Config.globalTemplate, where)
     ConfigLayer(Origin.Global, None, json, settings(json, where), None)
 
   /** The settings `/config` changed for this session only, as a layer. */
