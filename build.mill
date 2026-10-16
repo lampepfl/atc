@@ -6,7 +6,7 @@ import mill.*, scalalib.*
 import mill.scalalib.scalafmt.ScalafmtModule
 
 object Versions:
-  val atc = "0.2.1"
+  val atc = "0.2.2"
   val scala = "3.10.2-RC1-bin-20261015-88be2f5-NIGHTLY"
   val jline = "4.4.8"
   val upickle = "4.4.3"
