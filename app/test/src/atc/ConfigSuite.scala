@@ -678,6 +678,11 @@ class ConfigSuite extends munit.FunSuite:
       .getMessage.nn.contains("provider name"))
     assert(rejected("""{ "p": { "api": "echo", "models": { "m ": {} } } }""")
       .getMessage.nn.contains("model alias"))
+    // A control character in a reference would reach the terminal wherever the model is named.
+    val alias = rejected("""{ "p": { "api": "echo", "models": { "m\u001b[2J": {} } } }""").getMessage.nn
+    assert(alias.contains("""model alias 'm\u001b[2J' must not contain control characters"""), alias)
+    val provider = rejected("""{ "p\u0007q": { "api": "echo", "models": { "m": {} } } }""").getMessage.nn
+    assert(provider.contains("""provider name 'p\u0007q' must not contain control characters"""), provider)
 
   test("setTopLevel rewrites the project config, and a null classifiedModel there unsets a global one"):
     val dir = Files.createTempDirectory("atc-cfg-set").nn

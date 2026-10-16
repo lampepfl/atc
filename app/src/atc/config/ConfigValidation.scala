@@ -1,6 +1,6 @@
 package atc.config
 
-import atc.perms.{Access, Mode, PathPattern}
+import atc.perms.{Access, Mode, PathPattern, PermissionRequest}
 
 import java.nio.file.Paths
 import java.util.Locale
@@ -96,6 +96,10 @@ object ConfigValidation:
   private def validateProvider(name: String, provider: ProviderConfig): Unit =
     requireValid(name.trim.nonEmpty, "provider names must not be blank")
     requireValid(name == name.trim, s"provider name '$name' must not start or end with whitespace")
+    requireValid(
+      !name.exists(_.isControl),
+      s"provider name '${PermissionRequest.visible(name)}' must not contain control characters"
+    )
     // `api` may be absent from a layer that only extends an earlier provider, but
     // the fully merged provider must define it.
     requireValid(
@@ -123,6 +127,10 @@ object ConfigValidation:
     requireValid(alias.trim.nonEmpty, s"model aliases of provider '$provider' must not be blank")
     requireValid(alias == alias.trim, s"model alias '$alias' must not start or end with whitespace")
     requireValid(!alias.contains('/'), s"model alias '$alias' must not contain '/'")
+    requireValid(
+      !alias.exists(_.isControl),
+      s"model alias '${PermissionRequest.visible(alias)}' must not contain control characters"
+    )
     requireValid(!model.name.exists(_.trim.isEmpty), s"$where.name must not be blank")
     requireValid(!model.displayName.exists(_.trim.isEmpty), s"$where.displayName must not be blank")
     requireValid(
