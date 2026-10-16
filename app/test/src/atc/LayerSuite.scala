@@ -561,6 +561,30 @@ class LayerSuite extends munit.FunSuite:
     assert(ProjectTrust.pending(entry.cwd, entry.globalPath.getParent.nn).get.grants.webSearch)
     assertEquals(Config.load(entry.cwd, None, entry.globalPath).catalog.find("m").settings.webSearch, None)
 
+  test("a project's classified model is trusted as the project's providers define it"):
+    val w = World(
+      global = """{ "providers": { "local": { "api": "echo" }, "cloud": { "api": "echo" } } }""",
+      project = """{ "classifiedModel": "safe",
+                    "providers": { "local": { "models": { "safe": { "name": "small" }, "other": {} } } } }""",
+    )
+    val atcDir = w.globalPath.getParent.nn
+    def edit(providers: String) =
+      Files.writeString(Config.projectPath(w.cwd), s"""{ "classifiedModel": "safe", "providers": $providers }""")
+    ProjectTrust.trust(w.cwd, atcDir)
+    // an edit that leaves the model alone is not put to the user again
+    edit("""{ "local": { "models": { "safe": { "name": "small" }, "other": {}, "more": {} } } }""")
+    assertEquals(ProjectTrust.pending(w.cwd, atcDir), None)
+    // one that changes what `safe` names is, whether by its model id, its provider or a provider turned off
+    for providers <- List(
+        """{ "local": { "models": { "safe": { "name": "large" }, "other": {} } } }""",
+        """{ "local": { "models": { "other": {} } }, "cloud": { "models": { "safe": { "name": "small" } } } }""",
+        """{ "local": { "enabled": false, "models": { "safe": { "name": "small" }, "other": {} } } }""",
+      )
+    do
+      edit(providers)
+      assert(ProjectTrust.pending(w.cwd, atcDir).exists(_.changed), providers)
+      assertEquals(Config.load(w.cwd, None, w.globalPath).settings.classifiedModel, None)
+
   test("what is trusted is what the prompt showed, not a later version of the files"):
     val w = World(project = """{ "commands": ["make test"] }""")
     val atcDir = w.globalPath.getParent.nn

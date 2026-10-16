@@ -6,7 +6,7 @@ import atc.platform.PlatformPath
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
-import java.util.HexFormat
+import java.util.{HexFormat, Locale}
 import scala.collection.mutable
 
 /** Whether the user trusts what a project's configuration adds beyond its own files: the
@@ -109,6 +109,25 @@ object ProjectTrust:
       yield entry
     (json.value :: models).filter(_.get("webSearch").contains(ujson.True))
 
+  /** What the providers of `json` say about the model `reference` names: the entries of that alias,
+    * by `provider/alias`, and which providers it turns off. A change to either can change the
+    * provider, model id or settings the reference resolves to. */
+  private def definition(json: ujson.Obj, reference: String): ujson.Obj =
+    def names(name: String) = name.toLowerCase(Locale.ROOT) == reference.trim.toLowerCase(Locale.ROOT)
+    val parts = mutable.ListBuffer[(String, ujson.Value)]()
+    for
+      providers <- json.value.get("providers").flatMap(_.objOpt)
+      (name, provider) <- providers
+      fields <- provider.objOpt
+    do
+      fields.get("enabled").foreach(on => parts += s"$name.enabled" -> on)
+      for
+        models <- fields.get("models").flatMap(_.objOpt)
+        (alias, entry) <- models
+        if names(alias) || names(s"$name/$alias")
+      do parts += s"$name/$alias" -> entry
+    ujson.Obj.from(parts.sortBy(_._1))
+
   private def readConfig(root: Path): ujson.Obj =
     val config = Config.projectPath(root)
     if Files.isRegularFile(config) then ObjectText.parse(Files.readString(config).nn, config.toString)
@@ -131,6 +150,9 @@ object ProjectTrust:
       "keys" -> ujson.Obj.from(keys.map((name, value) => name -> ujson.Str(value))),
     )
     if webSearch then granted("webSearch") = ujson.True
+    // The classified model is trusted as the project's providers define it. The definition enters
+    // only when they say something about it, so that fingerprints recorded without it still match.
+    classified.map(definition(json, _)).filter(_.value.nonEmpty).foreach(granted("classifiedDefinition") = _)
     val digest = MessageDigest.getInstance("SHA-256").nn.digest(ujson.write(granted).getBytes(UTF_8))
     Grants(
       strings("commands"),

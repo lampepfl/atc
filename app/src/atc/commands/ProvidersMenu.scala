@@ -2,7 +2,8 @@ package atc.commands
 
 import atc.{App, Debug, FirstRun, Setup}
 import atc.config.{
-  Config, ModelCatalog, ModelListStore, ModelSpec, ObjectText, ProviderConfig, ProviderEdits, ProviderPreset
+  Config, ModelCatalog, ModelListStore, ModelSpec, ObjectText, ProjectTrust, ProviderConfig, ProviderEdits,
+  ProviderPreset
 }
 import atc.llm.ChatModel
 import atc.platform.PlatformPath
@@ -147,10 +148,14 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
       into.orElse(ProviderEdits.owner(models.configuration.layers, e.path).flatMap(_.path)).getOrElse(global)
     val created = if byFile.contains(global) && !Files.exists(global) then Config.ensureGlobal() else Nil
     val originals = byFile.keys.filterNot(created.contains).map(p => p -> Files.readString(p).nn).toMap
+    // The user's own edit, such as turning off the provider of the classified model, must not
+    // make a trusted project ask again.
+    val trusted = ProjectTrust.pending(app.cwd, Config.globalDir).isEmpty
     try
       byFile.foreach: (path, es) =>
         Config.editFile(path): text =>
           es.foldLeft(text)((t, e) => ObjectText.withMember(t, e.path, e.value, path.toString))
+      if trusted then ProjectTrust.trust(app.cwd, Config.globalDir)
       modelCommands.reload()
       tui.success(s"$done (saved to ${byFile.keys.map(PlatformPath.display).mkString(", ")})")
       true
@@ -158,6 +163,7 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
       case NonFatal(e) =>
         originals.foreach((p, text) => Files.writeString(p, text))
         created.foreach(Files.deleteIfExists)
+        if trusted then ProjectTrust.trust(app.cwd, Config.globalDir)
         // A reload that failed part way may have taken up the edited files already.
         try modelCommands.reload()
         catch case NonFatal(again) => Debug.trace(again)

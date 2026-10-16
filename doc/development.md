@@ -666,9 +666,12 @@ level or on a model entry, and its `keys.properties` reach beyond its own files,
 repository can ship them. Provider web search is an outbound channel that `hosts` and
 `denyHosts` do not govern. `ProjectTrust` records a SHA-256 fingerprint of exactly these per
 project root in `~/.atc/trusted-projects.json` (owner-only); web search enters it only when
-on, so fingerprints recorded without it still match. `Config.load` leaves them out while the
-fingerprint is not recorded, judging that on the same reading of the files that the layer and
-the keys come from, so every reload agrees with the decision. `Setup.load` shows every entry
+on, so fingerprints recorded without it still match. A `classifiedModel` enters with what the
+project's providers say about it, the entries of its alias and the providers turned off, so an
+edit that changes the provider, model id or settings it names is put to the user again.
+`Config.load` leaves them out while the fingerprint is not recorded, judging that on the same
+reading of the files that the layer and the keys come from, so every reload agrees with the
+decision. `Setup.load` shows every entry
 they grant, escaped like permission details, and offers Trust, Run without these grants, or
 Quit; it says whether the config is new or has changed since it was trusted. Trust records
 the fingerprint of what was shown, so a file that changed meanwhile stays untrusted. A `-p`
@@ -678,8 +681,8 @@ written, unless the directory already waited for trust, such as for a `keys.prop
 repository shipped: the prompt then shows the starter config's grants with it. Neither writes
 the home directory's `.atc/config.json`, which is the global config, nor through a symbolic
 link at `.atc`, its `config.json` or its `.gitignore`. A `/model`, `/effort`,
-`/classifiedmodel` or `/config` save keeps a trusted project trusted. Other edits, such as a
-new `model`, do not change the fingerprint.
+`/classifiedmodel`, `/config` or `/providers` save keeps a trusted project trusted. Other
+edits, such as a new `model`, do not change the fingerprint.
 
 Only explicitly defined project settings narrow a value. `executionTimeoutMs` defaults to
 300000; a JSON `null` clears it and means no limit. Reading a layer
