@@ -25,6 +25,12 @@ object AgentMessages:
   val missingCodeArgument: String = "Missing 'code' argument."
 
   val thinkingStatus: String = "waiting for model"
+  val runningScalaStatus: String = "running Scala"
+  val compactingStatus: String = "Compacting context…"
+
+  val compactedWarning: String = "Conversation compacted into a summary."
+  val compactionNotSmallerWarning: String = "Context compaction produced no smaller summary; history unchanged."
+  def compactionFailedWarning(detail: String): String = s"Context compaction failed ($detail); history unchanged."
 
   val truncationContinuation: String =
     "[continuation request] Continue exactly where the previous response was truncated. " +

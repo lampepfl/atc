@@ -182,7 +182,7 @@ final class Agent(
   /** Summarize the older exchanges with the current model (`/compact`). History
     * is replaced only after a complete summary smaller than what it replaces
     * has been received; a cancellation, an incomplete reply or a transcript
-    * that cannot fit the model leaves it unchanged (the last two throw). */
+    * that cannot fit the model throws and leaves it unchanged. */
   def compact(focus: String, cancelled: () => Boolean): Agent.CompactOutcome =
     compactHistory(focus, cancelled, inTurn = false)
 
@@ -207,7 +207,7 @@ final class Agent(
             "window, or start over with /new"
         )
     val retained = retainedContext
-    ui.status("Compacting context…")
+    ui.status(AgentMessages.compactingStatus)
     val result = request.run(cancelled) {
       current.complete(ContextCompaction.prompt, input, Nil, StreamSink(_ => ()), cancelled)
     }
@@ -339,16 +339,16 @@ final class Agent(
           def retryLater(): Unit = compactRetryAt = usage.tokens + usage.window.getOrElse(0) / 10
           try
             compactHistory("", stop, inTurn = true) match
-              case Agent.CompactOutcome.Compacted => ui.warn("Conversation compacted into a summary.")
+              case Agent.CompactOutcome.Compacted => ui.warn(AgentMessages.compactedWarning)
               case Agent.CompactOutcome.NothingToCompact => ()
               case Agent.CompactOutcome.SummaryNotSmaller =>
                 retryLater()
-                ui.warn("Context compaction produced no smaller summary; history unchanged.")
+                ui.warn(AgentMessages.compactionNotSmallerWarning)
           catch
             case e: CancelledException => if cancelled() then throw e
             case NonFatal(e) =>
               retryLater()
-              ui.warn(s"Context compaction failed (${Debug.describe(e)}); history unchanged.")
+              ui.warn(AgentMessages.compactionFailedWarning(Debug.describe(e)))
 
     private def completeRound(): Option[Completion] =
       val active = AtomicBoolean(true)
@@ -418,7 +418,8 @@ final class Agent(
         budgetDenied = true
         false
 
-    /** The provider cut the response after a server-side tool call: re-send the history. */
+    /** The response stopped before it was complete (a provider pause, the output limit or a
+      * broken stream): ask the model again with the history so far. */
     private def resume(): Outcome =
       resumes += 1
       ui.status(AgentMessages.resumingStatus)
@@ -447,7 +448,8 @@ object Agent:
     /** The summary was no smaller than what it would replace, so history was kept. */
     case SummaryNotSmaller
 
-  /** Server-side tool pauses (web search) per turn; a research turn can take many. */
+  /** Resumes per turn, whatever stopped the response; a research turn that pauses for
+    * server-side web searches can take many. */
   val MaxResumes = 20
   /** A broken provider stream gets fewer retries than a normal output-limit continuation. */
   val MaxIncompleteResumes = 2

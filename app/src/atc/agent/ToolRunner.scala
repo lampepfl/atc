@@ -58,7 +58,7 @@ private[atc] object ScalaToolRunner:
     code: String
   ): (ExecutionResult, List[(Decision, String)]) =
     val decisionsBefore = policy.decisionCount
-    ui.status("running Scala")
+    ui.status(AgentMessages.runningScalaStatus)
     val start = System.nanoTime()
     val result = session.run(code)
     val millis = (System.nanoTime() - start - session.clock.paused) / 1_000_000L
