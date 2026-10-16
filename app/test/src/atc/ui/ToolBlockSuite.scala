@@ -177,3 +177,18 @@ class ToolBlockSuite extends munit.FunSuite:
     assertEquals(out.size, shown, "nothing is written over the pop-up")
     screen.frame(tool.release())
     assert(rows(out).last.endsWith("during"), rows(out))
+
+  test("withoutPrinted removes the live-shown prints and keeps diagnostics and echoes"):
+    val printed = "  leading spaces\nstaged:\nA  file\n"
+    val body = "-- Warning: something\n  leading spaces\nstaged:\nA  file\nval r: Int = 1"
+    assertEquals(ToolBlock.withoutPrinted(body, printed), "-- Warning: something\nval r: Int = 1")
+
+  test("withoutPrinted handles prints at the start, at the end, and nothing else"):
+    assertEquals(ToolBlock.withoutPrinted("hello\nval x: Int = 1", "hello\n"), "val x: Int = 1")
+    assertEquals(ToolBlock.withoutPrinted("1 warning found\nhello", "hello\n"), "1 warning found")
+    assertEquals(ToolBlock.withoutPrinted("hello", "hello\n"), "")
+    assertEquals(ToolBlock.withoutPrinted("only echo", ""), "only echo")
+
+  test("withoutPrinted leaves the body alone when the prints are not found verbatim"):
+    val body = "hel...[truncated]"
+    assertEquals(ToolBlock.withoutPrinted(body, "hello world\n"), body)

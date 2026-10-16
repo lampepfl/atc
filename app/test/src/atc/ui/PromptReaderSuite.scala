@@ -1,5 +1,7 @@
 package atc.ui
 
+import atc.TestEnv
+
 import org.jline.terminal.{Size, Sized}
 import org.jline.terminal.impl.ExternalTerminal
 
@@ -8,7 +10,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Files
 import scala.jdk.CollectionConverters.*
 
-/** The main prompt as the terminal shows it. */
+/** The main prompt: what the terminal shows, its history file and its command list. */
 class PromptReaderSuite extends munit.FunSuite:
   /** A prompt on an 80x24 xterm that reads `input`, and what it writes. */
   private def promptOn(input: String): (PromptReader, ExternalTerminal, ByteArrayOutputStream) =
@@ -66,3 +68,65 @@ class PromptReaderSuite extends munit.FunSuite:
       assertEquals(prompt.readAnswer("answer> "), None)
       assert(!out.toString(UTF_8).contains("rename word_count"), out.toString(UTF_8).replace("\u001b", "ESC"))
     finally terminal.close()
+
+  test("cancelling a text answer clears JLine's interrupt before returning to the menu"):
+    try
+      val answer = PromptReader.answerOf {
+        Thread.currentThread().interrupt()
+        throw org.jline.reader.UserInterruptException("unfinished")
+      }
+      assertEquals(answer, None)
+      assert(!Thread.currentThread().isInterrupted)
+      assertEquals(PromptReader.answerOf(" revised instructions "), Some("revised instructions"))
+      assertEquals(PromptReader.answerOf(throw org.jline.reader.EndOfFileException()), None)
+    finally Thread.interrupted()
+
+  test("history is an owner-only regular file where POSIX permissions exist"):
+    val dir = Files.createTempDirectory("atc-history").nn
+    val history = dir.resolve("nested/history").nn
+    assertEquals(PromptReader.secureHistoryFile(history), history.toRealPath())
+    assert(Files.isRegularFile(history))
+    val view = Files.getFileAttributeView(history, classOf[java.nio.file.attribute.PosixFileAttributeView])
+    if view != null then
+      val permissive = java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--")
+      Files.setPosixFilePermissions(history, permissive)
+      PromptReader.secureHistoryFile(history)
+      val perms = Files.getPosixFilePermissions(history).nn
+      assertEquals(perms, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"))
+
+  test("history refuses a final symbolic link"):
+    val dir = Files.createTempDirectory("atc-history-link").nn
+    val target = dir.resolve("target").nn
+    Files.writeString(target, "do not append here")
+    val link = dir.resolve("history-link").nn
+    assume(TestEnv.trySymbolicLink(link, target), "symbolic links are unavailable for this account")
+    val e = intercept[IllegalArgumentException](PromptReader.secureHistoryFile(link))
+    assert(e.getMessage.nn.contains("symbolic link"), e.getMessage)
+    assertEquals(Files.readString(target), "do not append here")
+
+  private def commandRows =
+    List("/model [ref]" -> "choose a model", "/models" -> "list models", "/mode [name]" -> "change mode")
+
+  test("matchingCommands: a single word starting with / lists the names it starts, case-insensitively"):
+    assertEquals(PromptReader.matchingCommands("/", commandRows), commandRows)
+    assertEquals(
+      PromptReader.matchingCommands("/MODE", commandRows).map(_._1),
+      List("/model [ref]", "/models", "/mode [name]")
+    )
+    assertEquals(PromptReader.matchingCommands("/models", commandRows).map(_._1), List("/models"))
+    assertEquals(PromptReader.matchingCommands("/x", commandRows), Nil)
+    assertEquals(PromptReader.matchingCommands("/model ", commandRows), Nil) // arguments: Tab completion instead
+    assertEquals(PromptReader.matchingCommands("/mo\nx", commandRows), Nil)
+    assertEquals(PromptReader.matchingCommands("model", commandRows), Nil)
+    assertEquals(PromptReader.matchingCommands("", commandRows), Nil)
+
+  test("renderCommands: aligned rows cut to the width, scrolled to keep the selection in view"):
+    def plain(selected: Int, width: Int, height: Int) =
+      PromptReader.renderCommands(commandRows, selected, ">", width, height).toString.split("\n").toList
+    assertEquals(
+      plain(0, 80, 5),
+      List("> /model [ref]  choose a model", "  /models       list models", "  /mode [name]  change mode"),
+    )
+    assertEquals(plain(2, 80, 2), List("  /models       list models", "> /mode [name]  change mode"))
+    assertEquals(plain(0, 80, 2).head, "> /model [ref]  choose a model")
+    assert(plain(1, 12, 5).forall(_.length <= 11))

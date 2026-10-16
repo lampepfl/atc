@@ -59,3 +59,28 @@ class StatusLineSuite extends munit.FunSuite:
     assertEquals(reports(), List("state=idle:app=atc"))
     status.close()
     assertEquals(reports(), List("state=clear"))
+
+  test("the footer draw leaves the terminal outside a synchronized update (JLine buffers the closer)"):
+    val output = ByteArrayOutputStream()
+    val terminal = org.jline.terminal.impl.ExternalTerminal(
+      "test",
+      "xterm-256color",
+      ByteArrayInputStream(Array.emptyByteArray),
+      output,
+      UTF_8,
+    )
+    try
+      terminal.setSize(org.jline.terminal.Size.of(80, 24): org.jline.terminal.Sized)
+      val status = org.jline.utils.Status.getStatus(terminal)
+      assert(status != null)
+      StatusLine.draw(terminal, status, "ready")
+      StatusLine.draw(terminal, status, "reasoning 1.0 s")
+      val written = output.toString(UTF_8)
+      def count(sub: String): Int = written.sliding(sub.length).count(_ == sub)
+      val begins = count("\u001b[?2026h")
+      val ends = count("\u001b[?2026l")
+      assertEquals(begins, 2)
+      assertEquals(ends, 2)
+      assert(written.lastIndexOf("\u001b[?2026l") > written.lastIndexOf("\u001b[?2026h"))
+      assert(written.contains("ready")) // the second draw only rewrites the changed suffix
+    finally terminal.close()

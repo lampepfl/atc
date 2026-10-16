@@ -1,104 +1,14 @@
 package atc
 
-import atc.ui.{Ansi, Format, Glyphs, KeyReader, Menus, PromptReader, Screen, StatusLine, TailBuffer, ToolBlock, Tui}
-import atc.perms.Decision
+import atc.ui.{Ansi, Format, Glyphs, TailBuffer, Tui}
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
-/** The terminal front-end's pure helpers (the rest needs a real terminal). */
+/** The terminal front-end on a non-interactive terminal, and the helpers no other
+  * ui suite owns: formatting, sanitizing, the tail buffer and multi-line input. */
 class TuiSuite extends munit.FunSuite:
-
-  test("live row updates preserve the footer while growing, shrinking and clearing the preview"):
-    val cases = List(
-      List("header", "old") -> List("header", "new"),
-      List("first") -> List("first", "second"),
-      List("first", "second", "third") -> List("first"),
-      List("first", "second") -> Nil,
-      Nil -> List("first"),
-      List("same") -> List("same"),
-    )
-    val control = "\u001b\\[([0-9]+)([ABK])".r
-    for
-      (before, after) <- cases
-      force <- List(false, true)
-    do
-      val rows = Array.fill(12)("")
-      before.zipWithIndex.foreach((line, index) => rows(index) = line)
-      rows(11) = "footer must remain"
-      var row = before.size
-      var column = 0
-      var remaining = Screen.replaceRows(before, after, force)
-      while remaining.nonEmpty do
-        control.findPrefixMatchOf(remaining) match
-          case Some(sequence) =>
-            val count = sequence.group(1).nn.toInt
-            sequence.group(2) match
-              case "A" => row -= count
-              case "B" => row += count
-              case "K" => assertEquals(count, 2); rows(row) = ""
-              case _ => fail("Unexpected cursor operation")
-            remaining = remaining.drop(sequence.end)
-          case None =>
-            remaining.head match
-              case '\r' => column = 0
-              case '\n' => row += 1; column = 0
-              case '\u001b' => fail("A row update must not erase the screen")
-              case char =>
-                rows(row) = rows(row).take(column).padTo(column, ' ') + char + rows(row).drop(column + 1)
-                column += 1
-            remaining = remaining.tail
-      assertEquals(rows.take(after.size).toList, after)
-      assert(rows.slice(after.size, 11).forall(_.isEmpty))
-      assertEquals(rows(11), "footer must remain")
-      assertEquals(row, after.size)
-    assert(!Screen.replaceRows(List("header", "old"), List("header", "new")).contains("header"))
-
-  test("cancelling a text answer clears JLine's interrupt before returning to the menu"):
-    try
-      val answer = PromptReader.answerOf {
-        Thread.currentThread().interrupt()
-        throw org.jline.reader.UserInterruptException("unfinished")
-      }
-      assertEquals(answer, None)
-      assert(!Thread.currentThread().isInterrupted)
-      assertEquals(PromptReader.answerOf(" revised instructions "), Some("revised instructions"))
-      assertEquals(PromptReader.answerOf(throw org.jline.reader.EndOfFileException()), None)
-    finally Thread.interrupted()
-
-  test("plain permission prompts require an exact approval and preserve qualified answers as instructions"):
-    for answer <- List("y", "YES", " yes ") do
-      assertEquals(Menus.permissionReply(Some(answer)), Decision.AllowOnce)
-    for answer <- List("s", "SESSION", " session ") do
-      assertEquals(Menus.permissionReply(Some(answer)), Decision.AllowSession)
-    for answer <- List(None, Some(""), Some("  "), Some("n"), Some("NO")) do
-      assertEquals(Menus.permissionReply(answer), Decision.Deny)
-    for answer <- List("yes, except the fifth command", "skip deployment", "session only for tests", "只运行测试") do
-      assertEquals(Menus.permissionReply(Some(answer)), Decision.Revise(answer))
-
-  test("escape sequences stop at their final byte, timeout or EOF"):
-    val expired = org.jline.utils.NonBlockingReader.READ_EXPIRED
-    for sequence <- List(
-        List('['.toInt, '1'.toInt, ';'.toInt, '5'.toInt, 'A'.toInt),
-        List('O'.toInt, 'B'.toInt),
-        List('['.toInt, expired),
-        List('['.toInt, -1),
-        List(expired),
-      )
-    do
-      val input = (sequence :+ 'x'.toInt).iterator
-      KeyReader.readEscapeSequence(() => input.next())
-      assertEquals(input.next(), 'x'.toInt)
-
-  test("malformed escape sequences cannot retain the terminal reader indefinitely"):
-    var reads = 0
-    val sequence = KeyReader.readEscapeSequence(() =>
-      reads += 1
-      if reads == 1 then '['.toInt else ';'.toInt
-    )
-    assertEquals(reads, 64)
-    assertEquals(sequence.length, 64)
 
   test("glyphs fall back to ASCII when a dumb terminal has no encoding"):
     assertEquals(Tui.glyphs(null, forceAscii = false), Glyphs.ascii)
@@ -160,46 +70,6 @@ class TuiSuite extends munit.FunSuite:
       assert(shown(plan :+ Todo("ship")).exists(_.endsWith("read")), "a new list is shown whole")
     finally tui.close()
 
-  test("the footer draw leaves the terminal outside a synchronized update (JLine buffers the closer)"):
-    val output = ByteArrayOutputStream()
-    val terminal = org.jline.terminal.impl.ExternalTerminal(
-      "test",
-      "xterm-256color",
-      ByteArrayInputStream(Array.emptyByteArray),
-      output,
-      StandardCharsets.UTF_8,
-    )
-    try
-      terminal.setSize(org.jline.terminal.Size.of(80, 24): org.jline.terminal.Sized)
-      val status = org.jline.utils.Status.getStatus(terminal)
-      assert(status != null)
-      StatusLine.draw(terminal, status, "ready")
-      StatusLine.draw(terminal, status, "reasoning 1.0 s")
-      val written = output.toString(StandardCharsets.UTF_8)
-      def count(sub: String): Int = written.sliding(sub.length).count(_ == sub)
-      val begins = count("\u001b[?2026h")
-      val ends = count("\u001b[?2026l")
-      assertEquals(begins, 2)
-      assertEquals(ends, 2)
-      assert(written.lastIndexOf("\u001b[?2026l") > written.lastIndexOf("\u001b[?2026h"))
-      assert(written.contains("ready")) // the second draw only rewrites the changed suffix
-    finally terminal.close()
-
-  test("withoutPrinted removes the live-shown prints and keeps diagnostics and echoes"):
-    val printed = "  leading spaces\nstaged:\nA  file\n"
-    val body = "-- Warning: something\n  leading spaces\nstaged:\nA  file\nval r: Int = 1"
-    assertEquals(ToolBlock.withoutPrinted(body, printed), "-- Warning: something\nval r: Int = 1")
-
-  test("withoutPrinted handles prints at the start, at the end, and nothing else"):
-    assertEquals(ToolBlock.withoutPrinted("hello\nval x: Int = 1", "hello\n"), "val x: Int = 1")
-    assertEquals(ToolBlock.withoutPrinted("1 warning found\nhello", "hello\n"), "1 warning found")
-    assertEquals(ToolBlock.withoutPrinted("hello", "hello\n"), "")
-    assertEquals(ToolBlock.withoutPrinted("only echo", ""), "only echo")
-
-  test("withoutPrinted leaves the body alone when the prints are not found verbatim"):
-    val body = "hel...[truncated]"
-    assertEquals(ToolBlock.withoutPrinted(body, "hello world\n"), body)
-
   test("count: short forms, without a pointless .0"):
     assertEquals(Format.count(999), "999")
     assertEquals(Format.count(1234), "1.2k")
@@ -211,29 +81,6 @@ class TuiSuite extends munit.FunSuite:
     assertEquals(Format.contextUsage(45_200, Some(200_000)), "context 45.2k/200k (23%)")
     assertEquals(Format.contextUsage(199_000, Some(200_000)), "context 199k/200k (100%)")
     assertEquals(Format.contextUsage(45_200, None), "context ~45.2k")
-
-  test("history is an owner-only regular file where POSIX permissions exist"):
-    val dir = Files.createTempDirectory("atc-history").nn
-    val history = dir.resolve("nested/history").nn
-    assertEquals(PromptReader.secureHistoryFile(history), history.toRealPath())
-    assert(Files.isRegularFile(history))
-    val view = Files.getFileAttributeView(history, classOf[java.nio.file.attribute.PosixFileAttributeView])
-    if view != null then
-      val permissive = java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--")
-      Files.setPosixFilePermissions(history, permissive)
-      PromptReader.secureHistoryFile(history)
-      val perms = Files.getPosixFilePermissions(history).nn
-      assertEquals(perms, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"))
-
-  test("history refuses a final symbolic link"):
-    val dir = Files.createTempDirectory("atc-history-link").nn
-    val target = dir.resolve("target").nn
-    Files.writeString(target, "do not append here")
-    val link = dir.resolve("history-link").nn
-    assume(TestEnv.trySymbolicLink(link, target), "symbolic links are unavailable for this account")
-    val e = intercept[IllegalArgumentException](PromptReader.secureHistoryFile(link))
-    assert(e.getMessage.nn.contains("symbolic link"), e.getMessage)
-    assertEquals(Files.readString(target), "do not append here")
 
   // ── sanitization, widths, durations, the tail buffer ─────────────
 
@@ -256,11 +103,6 @@ class TuiSuite extends munit.FunSuite:
     assertEquals(Format.duration(119.6), "2 min 0 s") // was "1 min 60 s"
     assertEquals(Format.duration(65.4), "1 min 5 s")
     assertEquals(Format.duration(60.0), "1 min 0 s")
-
-  test("displayWidth counts wide (CJK) characters as two columns"):
-    assertEquals(Screen.displayWidth("abc"), 3)
-    assertEquals(Screen.displayWidth("中文"), 4)
-    assertEquals(Screen.displayWidth("\u001b[36m$ git status\u001b[0m"), 12) // styles take no cells
 
   test("TailBuffer: the tail is the last n lines; a trailing newline is not a line"):
     val b = TailBuffer(1000)
@@ -350,30 +192,3 @@ class TuiSuite extends munit.FunSuite:
     assertEquals(pending("val x = 1\nx + 1", block = true), Some(0))
     assertEquals(pending("val x = 1\n", block = true), None)
     assertEquals(pending("", block = true), None)
-
-  private def commandRows =
-    List("/model [ref]" -> "choose a model", "/models" -> "list models", "/mode [name]" -> "change mode")
-
-  test("matchingCommands: a single word starting with / lists the names it starts, case-insensitively"):
-    assertEquals(PromptReader.matchingCommands("/", commandRows), commandRows)
-    assertEquals(
-      PromptReader.matchingCommands("/MODE", commandRows).map(_._1),
-      List("/model [ref]", "/models", "/mode [name]")
-    )
-    assertEquals(PromptReader.matchingCommands("/models", commandRows).map(_._1), List("/models"))
-    assertEquals(PromptReader.matchingCommands("/x", commandRows), Nil)
-    assertEquals(PromptReader.matchingCommands("/model ", commandRows), Nil) // arguments: Tab completion instead
-    assertEquals(PromptReader.matchingCommands("/mo\nx", commandRows), Nil)
-    assertEquals(PromptReader.matchingCommands("model", commandRows), Nil)
-    assertEquals(PromptReader.matchingCommands("", commandRows), Nil)
-
-  test("renderCommands: aligned rows cut to the width, scrolled to keep the selection in view"):
-    def plain(selected: Int, width: Int, height: Int) =
-      PromptReader.renderCommands(commandRows, selected, ">", width, height).toString.split("\n").toList
-    assertEquals(
-      plain(0, 80, 5),
-      List("> /model [ref]  choose a model", "  /models       list models", "  /mode [name]  change mode"),
-    )
-    assertEquals(plain(2, 80, 2), List("  /models       list models", "> /mode [name]  change mode"))
-    assertEquals(plain(0, 80, 2).head, "> /model [ref]  choose a model")
-    assert(plain(1, 12, 5).forall(_.length <= 11))

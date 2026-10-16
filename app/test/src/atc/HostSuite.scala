@@ -6,7 +6,7 @@ import atc.perms.*
 import atc.platform.{PathGlob, Platform, PlatformPath}
 
 import java.io.IOException
-import java.nio.charset.{Charset, StandardCharsets}
+import java.nio.charset.Charset
 import java.nio.file.{Files, LinkOption, Path}
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import scala.collection.mutable.ListBuffer
@@ -308,7 +308,7 @@ class HostSuite extends munit.FunSuite:
     insertLines("empty2.txt", 1, "first")
     assertEquals(Files.readString(root.resolve("empty2.txt")), "first\n")
 
-  test("parseCommandLine, globRegex and splitLines (pure helpers)"):
+  test("parseCommandLine, parsePipeline and PathGlob (pure helpers)"):
     val escapedTail = if Platform.isWindows then List("e\\", "f") else List("e f")
     assertEquals(
       CommandLine.parseCommandLine("""git commit -m 'a b' --x="c d" e\ f"""),
@@ -395,10 +395,10 @@ class HostSuite extends munit.FunSuite:
     )
 
   test("a UNC path is refused before the file system (and so the network) is touched"):
-    if Platform.isWindows then
-      for path <- List("//server.invalid/share/x", "\\\\server.invalid\\share\\x") do
-        val error = intercept[IllegalArgumentException](exists(path))
-        assert(error.getMessage.nn.contains("UNC path"), error.getMessage)
+    assume(Platform.isWindows, "UNC paths are Windows paths")
+    for path <- List("//server.invalid/share/x", "\\\\server.invalid\\share\\x") do
+      val error = intercept[IllegalArgumentException](exists(path))
+      assert(error.getMessage.nn.contains("UNC path"), error.getMessage)
 
   test("readBytes/writeBytes round-trip a binary file byte for byte"):
     val bytes = Array[Byte](0, 1, 2, -1, -128, 127, 10, 13)
@@ -590,33 +590,6 @@ class HostSuite extends munit.FunSuite:
     assertEquals(plain.host.exec(printPath).stdout.trim, "<set>")
     assertEquals(keyed.exec(printPath).stdout.trim, "<unset>")
 
-  test("provider key variables: named references, keyEnv, headers and the SDK defaults"):
-    import atc.config.{Config, ConfigLayer, Configuration, KeyBindings, Origin, ProviderConfig}
-    val anthropic = Set("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-    val openai =
-      Set("OPENAI_API_KEY", "AZURE_OPENAI_KEY", "OPENAI_ADMIN_KEY", "OPENAI_WEBHOOK_SECRET", "OPENAI_CUSTOM_HEADERS")
-    val named = ProviderConfig(
-      api = Some("anthropic"),
-      url = Some("https://gateway.example"),
-      key = Some("${MY_KEY}"),
-      headers = Map("x-token" -> "${GATEWAY_TOKEN}", "x-plain" -> "literal"),
-    )
-    assertEquals(KeyBindings.variables(named), Set("MY_KEY", "GATEWAY_TOKEN"))
-    // At the default endpoint a key whose variable is unset leaves the SDK to read its own.
-    assertEquals(KeyBindings.variables(named.copy(url = None)), Set("MY_KEY", "GATEWAY_TOKEN") ++ anthropic)
-    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("openai"), keyEnv = Some("K"))), openai + "K")
-    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("anthropic"))), anthropic)
-    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("openai-responses"))), openai)
-    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("openai"), url = Some("http://localhost"))), Set())
-    assertEquals(KeyBindings.variables(ProviderConfig(api = Some("chatgpt"))), Set())
-    // Every spelling of an api that `ChatModel.create` accepts.
-    for api <- List("Claude", "ANTHROPIC") do assertEquals(KeyBindings.variables(ProviderConfig(Some(api))), anthropic)
-    for api <- List("responses", "openai-chat", "chat", "OpenAI") do
-      assertEquals(KeyBindings.variables(ProviderConfig(Some(api))), openai)
-    val config = ujson.read("""{ "providers": { "c": { "api": "Claude", "models": { "m": {} } } } }""").obj
-    val global = ConfigLayer(Origin.Global, None, config, upickle.default.read[Config](config))
-    assertEquals(Configuration.combine(List(global)).keyVariables, anthropic)
-
   test("a denied executable path gets a copyable requestExec hint"):
     val executable = if Platform.isWindows then "C:\\Program Files\\Example\\tool.exe" else "/opt/Example Tools/tool"
     val error = intercept[SecurityException](exec(s"'$executable' --status"))
@@ -676,18 +649,6 @@ class HostSuite extends munit.FunSuite:
     val e4 = intercept[SecurityException](deny.host.requestNetwork(Set("db.internal"), "try") { 1 })
     assert(e4.getMessage.nn.contains("may not be granted"), e4.getMessage)
     assertEquals(deny.policy.openScopeCount, 0)
-
-  test("normalizeHost canonicalises equivalent spellings so a deny rule cannot be dodged"):
-    // Normalize non-canonical decimal IPv4 forms and trailing dots.
-    assertEquals(GlobMatcher.normalizeHost("2852039166"), "169.254.169.254")
-    assertEquals(GlobMatcher.normalizeHost("169.254.169.254."), "169.254.169.254")
-    // `URI.getHost` returns bracketed IPv4-mapped IPv6 addresses. Both forms of
-    // the metadata address must normalize to the IPv4 literal used by deny rules.
-    assertEquals(GlobMatcher.normalizeHost("[::ffff:169.254.169.254]"), "169.254.169.254")
-    assertEquals(GlobMatcher.normalizeHost("[::ffff:a9fe:a9fe]"), "169.254.169.254")
-    // Expand a pure IPv6 literal, but only lowercase a hostname; never resolve it.
-    assertEquals(GlobMatcher.normalizeHost("[::1]"), "0:0:0:0:0:0:0:1")
-    assertEquals(GlobMatcher.normalizeHost("Example.COM"), "example.com")
 
   test("an IPv6-mapped spelling of a denied IPv4 host is refused, not just the IPv4 form"):
     // Every host is allowed except this one, however it is spelled.
@@ -793,34 +754,3 @@ class HostSuite extends munit.FunSuite:
     write("self.txt", "data")
     move("self.txt", "./self.txt")
     assertEquals(read("self.txt"), "data")
-
-  test("TextSink incrementally decodes UTF-8, UTF-16 BOMs, and malformed bytes"):
-    val sb = StringBuilder()
-    val sink = TextSink(s => sb.append(s))
-    for b <- "héllo 🙂 x".getBytes("UTF-8") do sink.write(Array(b), 0, 1) // one byte at a time
-    sink.finish()
-    assertEquals(sb.toString, "héllo 🙂 x")
-    val sb2 = StringBuilder()
-    val sink2 = TextSink(s => sb2.append(s))
-    sink2.write(Array(0xc3.toByte, 0x28.toByte), 0, 2) // malformed UTF-8, not an encoding marker
-    sink2.finish()
-    assertEquals(sb2.toString, "\uFFFD(")
-    def bomText(bom: Array[Byte], encoded: Array[Byte]): String =
-      val out = StringBuilder()
-      val sink = TextSink(s => out.append(s))
-      for byte <- bom ++ encoded do sink.write(Array(byte), 0, 1)
-      sink.finish()
-      out.toString
-    val sample = "bom 🙂"
-    assertEquals(
-      bomText(Array(0xef.toByte, 0xbb.toByte, 0xbf.toByte), sample.getBytes(StandardCharsets.UTF_8)),
-      sample,
-    )
-    assertEquals(
-      bomText(Array(0xff.toByte, 0xfe.toByte), sample.getBytes(StandardCharsets.UTF_16LE)),
-      sample,
-    )
-    assertEquals(
-      bomText(Array(0xfe.toByte, 0xff.toByte), sample.getBytes(StandardCharsets.UTF_16BE)),
-      sample,
-    )

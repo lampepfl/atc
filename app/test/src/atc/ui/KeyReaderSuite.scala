@@ -8,7 +8,8 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.util.concurrent.{ConcurrentLinkedQueue, LinkedBlockingQueue}
 import scala.jdk.CollectionConverters.*
 
-/** The key reader of a turn: corrections typed or pasted while the agent works. */
+/** The key reader of a turn: corrections typed or pasted while the agent works,
+  * and the escape sequences it reads. */
 class KeyReaderSuite extends munit.FunSuite:
   test("a paste reports its text once, when it ends"):
     val input = "\u001b[200~first line\rsecond\u001b[201~"
@@ -65,3 +66,26 @@ class KeyReaderSuite extends munit.FunSuite:
       keys.stop()
       queue.put(-1)
     assertEquals(submitted.asScala.toList, List("first more"))
+
+  test("escape sequences stop at their final byte, timeout or EOF"):
+    val expired = org.jline.utils.NonBlockingReader.READ_EXPIRED
+    for sequence <- List(
+        List('['.toInt, '1'.toInt, ';'.toInt, '5'.toInt, 'A'.toInt),
+        List('O'.toInt, 'B'.toInt),
+        List('['.toInt, expired),
+        List('['.toInt, -1),
+        List(expired),
+      )
+    do
+      val input = (sequence :+ 'x'.toInt).iterator
+      KeyReader.readEscapeSequence(() => input.next())
+      assertEquals(input.next(), 'x'.toInt)
+
+  test("malformed escape sequences cannot retain the terminal reader indefinitely"):
+    var reads = 0
+    val sequence = KeyReader.readEscapeSequence(() =>
+      reads += 1
+      if reads == 1 then '['.toInt else ';'.toInt
+    )
+    assertEquals(reads, 64)
+    assertEquals(sequence.length, 64)

@@ -376,6 +376,24 @@ class PolicySuite extends munit.FunSuite:
     assert(!GlobMatcher.matchesCommand("lsblk", "ls"))
     assert(GlobMatcher.matchesHost("API.GitHub.com", "*.github.com"))
     assert(!GlobMatcher.matchesHost("github.com", "*.github.com"))
+    assert(GlobMatcher.matchesHost("127.0.0.1", "127.*"))
+
+  test("normalizeHost canonicalises equivalent spellings so a deny rule cannot be dodged"):
+    // Lowercase a hostname and drop a trailing dot; never resolve it.
+    assertEquals(GlobMatcher.normalizeHost("Example.COM"), "example.com")
+    assertEquals(GlobMatcher.normalizeHost("evil.com."), "evil.com")
+    assertEquals(GlobMatcher.normalizeHost("example.com"), "example.com")
+    assertEquals(GlobMatcher.normalizeHost(""), "")
+    // Numeric IPv4 literals take their dotted form; an out-of-range one is not a literal.
+    assertEquals(GlobMatcher.normalizeHost("2852039166"), "169.254.169.254")
+    assertEquals(GlobMatcher.normalizeHost("169.254.169.254."), "169.254.169.254")
+    assertEquals(GlobMatcher.normalizeHost("127.1"), "127.0.0.1")
+    assertEquals(GlobMatcher.normalizeHost("127.0.0.1"), "127.0.0.1")
+    assertEquals(GlobMatcher.normalizeHost("999.1.2.3"), "999.1.2.3")
+    // `URI.getHost` returns bracketed IPv4-mapped IPv6 addresses. Both forms of
+    // the metadata address must normalize to the IPv4 literal used by deny rules.
+    assertEquals(GlobMatcher.normalizeHost("[::ffff:169.254.169.254]"), "169.254.169.254")
+    assertEquals(GlobMatcher.normalizeHost("[::ffff:a9fe:a9fe]"), "169.254.169.254")
 
   test("a bracketed host name is not resolved through DNS"):
     assertEquals(GlobMatcher.normalizeHost("[localhost]"), "localhost")

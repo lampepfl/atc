@@ -6,8 +6,8 @@ import org.jline.terminal.impl.DumbTerminal
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
 
-/** The screen's measured size: kept between resizes, and caught up with when a
-  * resize went to a reader that had the terminal's signal. */
+/** The screen: its measured size, rows fitted and broken to the width, live
+  * regions and the row updates that keep the footer in place. */
 class ScreenSuite extends munit.FunSuite:
   test("measuring again reports whether the terminal's size changed"):
     val terminal =
@@ -52,3 +52,53 @@ class ScreenSuite extends munit.FunSuite:
     assertEquals(drawn.size, 3)
     assert(drawn.forall(row => !row.contains('\n') && Screen.displayWidth(row) < 24), drawn)
     assertEquals(drawn(2), "a label with a newline")
+
+  test("live row updates preserve the footer while growing, shrinking and clearing the preview"):
+    val cases = List(
+      List("header", "old") -> List("header", "new"),
+      List("first") -> List("first", "second"),
+      List("first", "second", "third") -> List("first"),
+      List("first", "second") -> Nil,
+      Nil -> List("first"),
+      List("same") -> List("same"),
+    )
+    val control = "\u001b\\[([0-9]+)([ABK])".r
+    for
+      (before, after) <- cases
+      force <- List(false, true)
+    do
+      val rows = Array.fill(12)("")
+      before.zipWithIndex.foreach((line, index) => rows(index) = line)
+      rows(11) = "footer must remain"
+      var row = before.size
+      var column = 0
+      var remaining = Screen.replaceRows(before, after, force)
+      while remaining.nonEmpty do
+        control.findPrefixMatchOf(remaining) match
+          case Some(sequence) =>
+            val count = sequence.group(1).nn.toInt
+            sequence.group(2) match
+              case "A" => row -= count
+              case "B" => row += count
+              case "K" => assertEquals(count, 2); rows(row) = ""
+              case _ => fail("Unexpected cursor operation")
+            remaining = remaining.drop(sequence.end)
+          case None =>
+            remaining.head match
+              case '\r' => column = 0
+              case '\n' => row += 1; column = 0
+              case '\u001b' => fail("A row update must not erase the screen")
+              case char =>
+                rows(row) = rows(row).take(column).padTo(column, ' ') + char + rows(row).drop(column + 1)
+                column += 1
+            remaining = remaining.tail
+      assertEquals(rows.take(after.size).toList, after)
+      assert(rows.slice(after.size, 11).forall(_.isEmpty))
+      assertEquals(rows(11), "footer must remain")
+      assertEquals(row, after.size)
+    assert(!Screen.replaceRows(List("header", "old"), List("header", "new")).contains("header"))
+
+  test("displayWidth counts wide (CJK) characters as two columns"):
+    assertEquals(Screen.displayWidth("abc"), 3)
+    assertEquals(Screen.displayWidth("中文"), 4)
+    assertEquals(Screen.displayWidth("\u001b[36m$ git status\u001b[0m"), 12) // styles take no cells

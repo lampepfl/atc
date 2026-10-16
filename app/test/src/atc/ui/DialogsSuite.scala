@@ -75,3 +75,13 @@ class DialogsSuite extends munit.FunSuite:
     do
       val (d, _) = dialogs(s"$reply\r", plain = true)
       assertEquals(d.confirm("Trust this project's config?"), expected, reply)
+
+  test("plain permission prompts require an exact approval and preserve qualified answers as instructions"):
+    for answer <- List("y", "YES", " yes ") do
+      assertEquals(Menus.permissionReply(Some(answer)), Decision.AllowOnce)
+    for answer <- List("s", "SESSION", " session ") do
+      assertEquals(Menus.permissionReply(Some(answer)), Decision.AllowSession)
+    for answer <- List(None, Some(""), Some("  "), Some("n"), Some("NO")) do
+      assertEquals(Menus.permissionReply(answer), Decision.Deny)
+    for answer <- List("yes, except the fifth command", "skip deployment", "session only for tests", "只运行测试") do
+      assertEquals(Menus.permissionReply(Some(answer)), Decision.Revise(answer))
