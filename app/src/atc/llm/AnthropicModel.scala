@@ -207,7 +207,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
   /** `GET /v1/models`, with the display name, input limit, effort levels and
     * whether adaptive thinking is supported (the only kind this adapter asks for).
     * Capabilities a response leaves out are left to the defaults. */
-  private[llm] def listModels(): List[ModelSpec] =
+  private[atc] def listModels(): List[ModelSpec] =
     val options = RequestOptions.builder().timeout(Providers.ListTimeout).build()
     val params = ModelListParams.builder().limit(1000L).build()
     def optional[T](read: => T): Option[T] = Try(read).toOption

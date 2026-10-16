@@ -183,8 +183,6 @@ object ChatModel:
     val client = create(provider)
     try
       client match
-        case m: AnthropicModel => m.listModels()
-        case m: OpenAIShapedModel => m.listModels()
-        case m: ClaudeCodeModel => m.listModels()
+        case m: SpecModel => m.listModels()
         case _ => Nil
     finally client.close()

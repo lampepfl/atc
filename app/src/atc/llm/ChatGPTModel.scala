@@ -51,7 +51,7 @@ final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
 
   /** `GET /models`, the list Codex shows: the models marked for listing, in
     * the backend's order, with their context windows and efforts. */
-  override private[llm] def listModels(): List[ModelSpec] =
+  override private[atc] def listModels(): List[ModelSpec] =
     val base = spec.baseUrl.getOrElse(ChatGPTModel.BackendUrl).stripSuffix("/")
     val request = okhttp3.Request.Builder().url(s"$base/models?client_version=${ChatGPTModel.ClientVersion}").build()
     val call = http.newBuilder().callTimeout(Providers.ListTimeout).build().newCall(request)

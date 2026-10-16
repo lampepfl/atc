@@ -32,6 +32,10 @@ private[llm] abstract class SpecModel(val spec: ModelSpec) extends ChatModel:
   /** Every effort the provider's api accepts, for a model whose config lists none. */
   protected def knownEfforts: List[String]
 
+  /** The models the provider's endpoint lists, each as a spec named by its model id. Called on
+    * a model whose spec has an empty alias and model id ([[ChatModel.listModels]]). */
+  private[atc] def listModels(): List[ModelSpec]
+
   @volatile private var webSearchOn = settings.webSearch.getOrElse(false)
   /** Set once the provider rejected its web search tool for this model. */
   @volatile private var webSearchRejected = false
@@ -119,7 +123,7 @@ private[llm] abstract class OpenAIShapedModel(spec: ModelSpec) extends SpecModel
     * the `name` OpenRouter and DeepSeek give, and the efforts DeepSeek lists with its
     * default. A reported output limit is not taken: it would be sent with every request
     * and reserved from the window. */
-  private[llm] def listModels(): List[ModelSpec] =
+  private[atc] def listModels(): List[ModelSpec] =
     val options = RequestOptions.builder().timeout(Providers.ListTimeout).build()
     client.models().list(options).items().asScala.toList.map: m =>
       // Gemini's compatible list names models `models/<id>`; its chat endpoint takes the bare id.
