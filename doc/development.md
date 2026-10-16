@@ -522,8 +522,11 @@ and always hides `.git`. An ignored path can still be accessed explicitly if per
 
 Commands use `*` globs; a pattern without `*` also matches a word prefix. Hosts are
 case-insensitive and normalize numeric IP literals. Deny rules are checked at use, even
-when a requested pattern was previously approved. Each permission decision is included in
-the tool result so the model knows whether approval was temporary, session-wide or denied.
+when a requested pattern was previously approved. A request is refused before the prompt
+when one of its patterns and a deny pattern match a common command line or host:
+`git * --force` against `git push*`, which both match `git push --force`. Each permission
+decision is included in the tool result so the model knows whether approval was temporary,
+session-wide or denied.
 
 ### Request blocks from the agent's side
 

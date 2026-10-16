@@ -314,6 +314,34 @@ class PolicySuite extends munit.FunSuite:
     assertEquals(prompter.asked.size, 1)
     p.closeScope(s)
 
+  test("a requested pattern that shares a match with a deny pattern fails without asking"):
+    val prompter = ScriptedPrompter(List.fill(2)(Decision.AllowOnce))
+    val p = Policy(Nil, Nil, Nil, prompter, List("git push*"), List("*.internal"))
+    // Neither spelling matches the other, yet `git push --force` and `api.internal` match both.
+    val e = intercept[SecurityException](p.requestExec(ScopeId.Base, List("git * --force"), "push"))
+    assert(e.getMessage.nn.contains("git push*"), e.getMessage)
+    intercept[SecurityException](p.requestNet(ScopeId.Base, List("api.*"), "fetch"))
+    assertEquals(prompter.asked, Nil)
+    p.closeScope(p.requestExec(ScopeId.Base, List("git status"), "status"))
+    p.closeScope(p.requestNet(ScopeId.Base, List("api.example.com"), "fetch"))
+    assertEquals(prompter.asked.size, 2)
+
+  test("command and host patterns overlap when some input matches both"):
+    import GlobMatcher.{commandsOverlap, hostsOverlap}
+    assert(commandsOverlap("git", "git push"))
+    assert(!commandsOverlap("git", "gitk"))
+    assert(commandsOverlap("ls", "*-f")) // `ls -f`
+    assert(commandsOverlap("git * --force", "git push*"))
+    assert(!commandsOverlap("git status*", "git push*"))
+    assert(!commandsOverlap("rm a*", "rm b*"))
+    assert(commandsOverlap("a*", "*b"))
+    // a `*` stops at a line terminator, a word-prefix continuation does not
+    assert(!commandsOverlap("a*b", "a\nb"))
+    assert(commandsOverlap("a", "a *\nb"))
+    assert(hostsOverlap("API.*", "*.internal"))
+    assert(!hostsOverlap("*.example.com", "*.internal"))
+    assert(!commandsOverlap("", "*"))
+
   test("the summary names the always-refused patterns"):
     val p = Policy(Nil, List("ls"), Nil, ScriptedPrompter(Nil), List("rm *"), List("*.internal"))
     val summary = p.summary
