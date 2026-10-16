@@ -189,9 +189,12 @@ final class FileEntryImpl(fs: FileSystemImpl, p: Path) extends FileEntry:
     requireReadable("walk", "walkClassified")
     host.walkPaths(scope, p, intoClassified = false).map(FileEntryImpl(fs, _))
 
-  private[host] def walkIterator: Iterator[FileEntryImpl] =
+  /** The non-directory descendants `walk` lists, lazily; classified ones only when `classified`. */
+  private[host] def files(classified: Boolean): Iterator[FileEntryImpl] =
     requireReadable("walk", "walkClassified")
-    host.iteratePaths(scope, p, intoClassified = false).map(FileEntryImpl(fs, _))
+    host.iteratePaths(scope, p, intoClassified = false)
+      .filter(entry => !entry.isDirectory && (classified || !entry.permission.classified))
+      .map(entry => FileEntryImpl(fs, entry.path))
 
   def readClassified(): Classified[String] =
     asClassified("readClassified")(Files.readString(p, UTF_8).nn)

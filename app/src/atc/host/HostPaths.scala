@@ -131,9 +131,8 @@ private[host] trait HostPaths:
         catch case NonFatal(_) => classifiedSinkFailed(s"writing '$path'")
       case Failure(_) => classifiedSinkFailed(s"writing '$path'")
 
-  /** Visible children paired with whether the original directory entry was a
-    * symlink. Policy checks use canonical paths; gitignore checks use the entry. */
-  private def visibleEntries(scope: ScopeId, dir: Path): List[(Path, Boolean)] =
+  /** Visible children. Policy checks use canonical paths; gitignore checks use the entry. */
+  private def visibleEntries(scope: ScopeId, dir: Path): List[VisibleEntry] =
     val entries = Using.resource(Files.list(dir).nn): stream =>
       stream.iterator.nn.asScala.toList.sortBy(_.getFileName.toString).flatMap: entry =>
         try
@@ -143,27 +142,31 @@ private[host] trait HostPaths:
           // and evaluate policy on what it actually reaches.
           val path = PlatformPath.canonical(entry.toAbsolutePath.nn.normalize.nn)
           val attributes = Files.readAttributes(entry, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS).nn
-          val isLinkLike = attributes.isSymbolicLink || attributes.isOther
-          Option.when(!gitIgnore.ignores(entry) && policy.effective(scope, path).canRead)((path, isLinkLike))
+          val isLink = attributes.isSymbolicLink || attributes.isOther
+          if gitIgnore.ignores(entry) then None
+          else
+            val permission = policy.effective(scope, path)
+            Option.when(permission.canRead):
+              // A link's own attributes do not describe what it reaches.
+              VisibleEntry(path, permission, isLink, if isLink then Files.isDirectory(path) else attributes.isDirectory)
         catch
           case NonFatal(_) => None
     // A link beside its own target resolves to the same path: list that path once, as the plain entry.
-    val plain = entries.collect { case (path, false) => path }.toSet
-    entries.filter((path, link) => !link || !plain.contains(path)).distinctBy(_._1)
+    val plain = entries.collect { case entry if !entry.isLink => entry.path }.toSet
+    entries.filter(entry => !entry.isLink || !plain.contains(entry.path)).distinctBy(_.path)
 
-  private[host] def visibleChildren(scope: ScopeId, dir: Path): List[Path] = visibleEntries(scope, dir).map(_._1)
+  private[host] def visibleChildren(scope: ScopeId, dir: Path): List[Path] = visibleEntries(scope, dir).map(_.path)
 
   /** Visible descendants in pre-order. Classified trees require an explicit
     * classified traversal, and symlinked directories are never followed. */
   private[host] def walkPaths(scope: ScopeId, dir: Path, intoClassified: Boolean): List[Path] =
-    iteratePaths(scope, dir, intoClassified).toList
+    iteratePaths(scope, dir, intoClassified).map(_.path).toList
 
-  private[host] def iteratePaths(scope: ScopeId, dir: Path, intoClassified: Boolean): Iterator[Path] =
-    def descendInto(child: Path, isLink: Boolean): Boolean =
-      !isLink && Files.isDirectory(child) && (intoClassified || !policy.effective(scope, child).classified)
-    def visit(current: Path): Iterator[Path] =
-      visibleEntries(scope, current).iterator.flatMap: (child, isLink) =>
-        Iterator.single(child) ++ (if descendInto(child, isLink) then visit(child) else Iterator.empty)
+  private[host] def iteratePaths(scope: ScopeId, dir: Path, intoClassified: Boolean): Iterator[VisibleEntry] =
+    def visit(current: Path): Iterator[VisibleEntry] =
+      visibleEntries(scope, current).iterator.flatMap: entry =>
+        val descend = !entry.isLink && entry.isDirectory && (intoClassified || !entry.permission.classified)
+        Iterator.single(entry) ++ (if descend then visit(entry.path) else Iterator.empty)
     visit(dir)
 
   private lazy val canonicalCwd: Path = canonical(".")
@@ -174,3 +177,7 @@ private[host] trait HostPaths:
     if path == canonicalCwd then "."
     else if path.startsWith(canonicalCwd) then PlatformPath.portable(canonicalCwd.relativize(path).nn)
     else PlatformPath.portable(path)
+
+/** A listed directory entry: the canonical path it reaches, that path's permission, whether the
+  * entry itself is a symlink or another reparse point, and whether the path is a directory. */
+private[host] final case class VisibleEntry(path: Path, permission: Perm, isLink: Boolean, isDirectory: Boolean)

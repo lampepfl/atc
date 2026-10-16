@@ -263,10 +263,10 @@ private[host] trait HostFiles:
 
   def grepRecursive(dir: String, pattern: String, glob: String)(using fs: FileSystem): List[GrepMatch] =
     val regex = pattern.r
-    filesNamed(dir, glob).filterNot(_.isClassified).flatMap(grepEntry(_, "grepRecursive", regex))
+    filesNamed(dir, glob, classified = false).toList.flatMap(grepEntry(_, "grepRecursive", regex))
 
   def find(dir: String, glob: String)(using fs: FileSystem): List[String] =
-    filesNamed(dir, glob).map(entry => display(entry.path))
+    filesNamed(dir, glob, classified = true).map(entry => display(entry.path)).toList
 
   def search(dir: String, pattern: String, glob: String, options: SearchOptions)(using fs: FileSystem): SearchResult =
     val limits = List(
@@ -281,7 +281,7 @@ private[host] trait HostFiles:
         "search: limits must be positive (maxMatches <= 10000, maxFiles <= 100000, maxLinesPerFile <= 1000000, maxLineChars <= 10000, maxCharsPerFile <= 10000000)"
       )
     val regex = pattern.r
-    val entries = matchingFiles(impl(fs.access(dir)).walkIterator, dir, glob).filterNot(_.isClassified)
+    val entries = filesNamed(dir, glob, classified = false)
     val matches = mutable.ListBuffer[GrepMatch]()
     var scanned = 0
     // `limited` is set only where something was left out: a line cut at the
@@ -308,12 +308,11 @@ private[host] trait HostFiles:
       if readLimit then limited = true
     SearchResult(matches.toList, scanned, limited || entries.hasNext)
 
-  /** Select non-directory descendants by filename or relative-path glob. */
-  private def filesNamed(dir: String, glob: String)(using fs: FileSystem): List[FileEntryImpl] =
-    matchingFiles(impl(fs.access(dir)).walkIterator, dir, glob).toList
-
-  private def matchingFiles(entries: Iterator[FileEntryImpl], dir: String, glob: String): Iterator[FileEntryImpl] =
-    val files = entries.filterNot(_.isDirectory)
+  /** Select the files of [[FileEntryImpl.files]] by filename or relative-path glob. */
+  private def filesNamed(dir: String, glob: String, classified: Boolean)(using
+    fs: FileSystem
+  ): Iterator[FileEntryImpl] =
+    val files = impl(fs.access(dir)).files(classified)
     val pattern = PathGlob.pattern(glob)
     if glob.contains('/') || glob.contains("**") then
       val base = canonical(dir)
