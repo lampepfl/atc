@@ -99,7 +99,7 @@ class TuiSuite extends munit.FunSuite:
     assertEquals(Ansi.sanitize(""), "")
 
   test("duration never prints 60 seconds"):
-    assertEquals(Format.duration(119.6), "2 min 0 s") // was "1 min 60 s"
+    assertEquals(Format.duration(119.6), "2 min 0 s") // the seconds round up into the minute, not to "1 min 60 s"
     assertEquals(Format.duration(65.4), "1 min 5 s")
     assertEquals(Format.duration(60.0), "1 min 0 s")
 
@@ -127,7 +127,7 @@ class TuiSuite extends munit.FunSuite:
     assertEquals(b.tail(0), Nil)
 
   test("TailBuffer: cutting in batches keeps the tails the live views show"):
-    // The buffer as it was: cut back to the cap on every append.
+    // A reference that cuts back to the cap on every append.
     final class EveryAppend(cap: Int):
       val sb = StringBuilder()
       def append(text: String): Unit =

@@ -7,8 +7,7 @@ import java.nio.charset.CharacterCodingException
 import java.nio.file.{Files, Path}
 
 /** ATC's configuration: JSON parsing, layered merge, file-rule construction,
-  * access-level parsing and API-key resolution. (ATC has no scopt CLI config
-  * like TACIT; this covers the equivalent surface.) */
+  * access-level parsing and API-key resolution. */
 class ConfigSuite extends munit.FunSuite:
   /** Load with an absent global layer, so a test never depends on the machine's
     * own `~/.atc/config.json`. Layer combination and project trust are `LayerSuite`. */

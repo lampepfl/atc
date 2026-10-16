@@ -12,8 +12,7 @@ import java.nio.file.{Files, Path}
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Exec and network permission enforcement, at the host level and end-to-end
-  * through a sandbox REPL (migrated from TACIT's ProcessPermissionSuite,
-  * WebOpsSuite and the exec/network parts of LibraryIntegrationSuite). */
+  * through a sandbox REPL. */
 class PermissionSuite extends munit.FunSuite:
   override val munitTimeout = scala.concurrent.duration.Duration(5, "min")
 
@@ -304,7 +303,7 @@ class PermissionSuite extends munit.FunSuite:
     val raw = env.host.httpRequest("GET", url("/not-found"))
     assertEquals(raw.status, 404)
     assert(raw.body.contains("not found"))
-    // the new overloads without secretHeaders
+    // the overloads without secretHeaders
     assertEquals(env.host.httpPost(url("/echo"), "ping", "text/plain", Map("X-A" -> "1")), "ping")
     assertEquals(env.host.httpRequest("POST", url("/echo"), "pong", Map("X-A" -> "1")).body, "pong")
     // the classified POST stays status-blind: no throw, the body stays classified

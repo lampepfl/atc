@@ -669,8 +669,8 @@ class HostSuite extends munit.FunSuite:
 
   test("entries listed through children/walk are judged by their target, like paths given by name"):
     // A link in a readable directory to a classified file: `read` by name is
-    // refused, and an entry obtained from a listing must be refused the same
-    // way (it used to carry the link's path and be judged at the link's location).
+    // refused, and an entry obtained from a listing must be refused the same way,
+    // so the entry carries the target's path and is judged there.
     val linked = TestEnv(TestEnv.withSecrets)
     import linked.given
     linked.file("secrets/key.txt", "THE-SECRET")

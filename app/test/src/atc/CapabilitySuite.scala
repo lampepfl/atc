@@ -38,7 +38,7 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
 
   // ── Read-only vs full views ─────────────────────────────────────
 
-  test("new file helpers retain read-only restrictions and task notes cannot receive classified data"):
+  test("readRange and search run, replaceExact refuses a read-only view, and task notes take no classified data"):
     assertOk(run("""readRange("a.txt", 1, 1)"""))
     assertOk(run("""search(".", "content", "*.txt", SearchOptions(maxMatches = 1))"""))
     assertFails(run("""val ro: FileSystem^{fs.rd} = fs; replaceExact("a.txt", "content", "changed")(using ro)"""))
@@ -317,9 +317,9 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
       assert(!result.success, s"$capability was usable after being classified:\n${result.render}")
 
   test("map rejects outward channels wrapped in a def (eta-expansion)"):
-    // Regression guard for the default-argument leak: an API method with a
-    // defaulted parameter used to eta-expand to a *pure* function here, which
-    // let `exec`/`httpGet`/... run on the secret. The API now uses overloads.
+    // An API method with a defaulted parameter would eta-expand to a *pure*
+    // function here and let `exec`/`httpGet`/... run on the secret, which is why
+    // the API uses overloads.
     val wrappers = List(
       """def w1(s: String) = exec("echo", List(s)).stdout""" -> "w1",
       """def w2(s: String) = execOutput(s)""" -> "w2",

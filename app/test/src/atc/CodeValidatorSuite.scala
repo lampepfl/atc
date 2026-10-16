@@ -2,8 +2,7 @@ package atc
 
 import atc.sandbox.{CodeValidator, Violation}
 
-/** Static validation of agent code (migrated from TACIT's CodeValidatorSuite
-  * and CodeValidatorEvasionSuite, plus the ATC-specific rules). */
+/** Static validation of agent code: the rules, and attempts to evade them. */
 class CodeValidatorSuite extends munit.FunSuite:
   private def ids(code: String): List[String] = CodeValidator.validate(code).map(_.ruleId)
   private def assertRejected(code: String, rule: String)(using munit.Location): Unit =
@@ -464,7 +463,7 @@ class CodeValidatorSuite extends munit.FunSuite:
       "catch-type-param"
     )
   test("reject catching a parenthesised or union type parameter"):
-    // Demonstrated to swallow a real StackOverflowError in the sandbox: the arm's
+    // Either form swallows a StackOverflowError in the sandbox, so the arm's
     // ascription is scanned as a whole, not only its leading identifier.
     assertRejected("def g[T](b: => Int): String = try b.toString catch case _: (T) => \"x\"", "catch-type-param")
     assertRejected(
@@ -506,8 +505,8 @@ class CodeValidatorSuite extends munit.FunSuite:
   test("allow an @-binder over a typed (non-fatal) pattern"):
     assertAllowed("try read(\"x\") catch case e @ (_: RuntimeException) => e.getMessage")
   test("no-fp: an arm typed inside an enclosing pattern does not pull in later code"):
-    // The ascription scan used to run past the arm's closing `)` to the end of the
-    // snippet, so any later mention of a fatal type name was reported on this arm.
+    // The ascription scan stops at the arm's closing `)`, so a later mention of a
+    // fatal type name is not reported on this arm.
     assertAllowed("try f() catch { case e @ (_: Exception) => 1 }\nval noted = List.empty[Throwable]")
     assertAllowed("try f() catch { case (e: Exception) => 1 }\nval noted = List.empty[Throwable]")
 

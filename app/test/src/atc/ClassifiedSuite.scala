@@ -8,8 +8,7 @@ import java.nio.file.{Files, Path}
 import scala.util.Try
 
 /** `Classified` semantics: the host implementation as a value, and the file
-  * system / output / LLM sinks that enforce the classified boundary
-  * (migrated from TACIT's ClassifiedSuite, adapted to ATC's policy model). */
+  * system / output / LLM sinks that enforce the classified boundary. */
 class ClassifiedSuite extends munit.FunSuite:
 
   private val nl = System.lineSeparator

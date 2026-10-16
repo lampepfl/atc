@@ -402,7 +402,7 @@ class PolicySuite extends munit.FunSuite:
     assertEquals(GlobMatcher.normalizeHost("[::1]"), "0:0:0:0:0:0:0:1")
     assertEquals(GlobMatcher.normalizeHost("::FFFF:127.0.0.1"), "127.0.0.1")
 
-  test("direct glob matching preserves the previous regex semantics"):
+  test("glob matching agrees with the regex that reads `*` as `.*` and quotes the rest"):
     def strings(alphabet: List[Char], maxLength: Int): List[String] =
       def exact(length: Int): List[String] =
         if length == 0 then List("")

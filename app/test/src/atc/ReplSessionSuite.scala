@@ -3,10 +3,9 @@ package atc
 import atc.perms.Decision
 import atc.sandbox.*
 
-/** The sandbox REPL executor: language coverage, error reporting, REPL
+/** The sandbox REPL executor: language coverage, state, error reporting, REPL
   * command allow-list, validator integration, timeouts, output capture,
-  * safe-mode on/off and session isolation (migrated from TACIT's
-  * ScalaExecutorSuite / SessionManagerSuite / CodeValidatorEvasionSuite e2e). */
+  * safe-mode on/off and session isolation. */
 class ReplSessionSuite extends munit.FunSuite, ReplAssertions:
   override val munitTimeout = scala.concurrent.duration.Duration(5, "min")
 
@@ -251,7 +250,6 @@ class ReplSessionSuite extends munit.FunSuite, ReplAssertions:
     val r = assertOk(run("def count(): Int = { var c = 0; for i <- 1 to 3 do c += i; c }\ncount()"))
     assert(r.output.contains("6"), r.output)
   test("safe mode: effects inside Option.foreach and match both work"):
-    // Older nightlies rejected the effectful lambda; since 3.10.1 nightlies (2026-09) it compiles.
     assertOk(run("Some(1).foreach(println)"))
     assertOk(run("Some(1) match { case Some(v) => println(v); case _ => () }"))
   test("safe mode: top-level val of a capturing type needs an explicit type"):

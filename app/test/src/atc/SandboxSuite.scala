@@ -243,9 +243,8 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
     assertFails(run("""while true do try { val x = 1 } catch case _ => ()"""), "catch-all")
 
   test("a catch-all in a LATER arm is rejected too (it catches fatal errors)"):
-    // The catch-all used to slip through as a non-first arm. A recursion needs no
-    // forbidden type name to raise a StackOverflowError, so this WAS a live
-    // per-bit oracle over classified data.
+    // A recursion needs no forbidden type name to raise a StackOverflowError, so a
+    // catch-all in any arm would be a per-bit oracle over classified data.
     val attack =
       """val c = readClassified("secrets/s.txt")
         |def bit(ch: Char): Boolean =
@@ -268,8 +267,7 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
 
   test("a catch of an erased type cannot swallow a StackOverflowError"):
     // A type parameter and an abstract type member both erase to their bound, so
-    // `case _: T` catches fatal throwables. Both forms ran and printed "SWALLOWED"
-    // before the validator scanned the whole ascription rather than its first token.
+    // `case _: T` catches fatal throwables, inside parentheses or a union as well.
     val attacks = List(
       """def viaParen[T](b: => Int): String = try b.toString catch case _: (T) => "SWALLOWED"
         |def deep(n: Int): Int = deep(n + 1) + 1
