@@ -238,7 +238,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
   private def writeResult(r: ExecutionResult, millis: Long, id: Int): Unit =
     ensureNewline()
     val body =
-      List(Option(ExecutionResult.trimStackFrames(r.output)).filter(_.nonEmpty), r.error).flatten.mkString("\n")
+      List(Option(r.output).filter(_.nonEmpty), r.error).flatten.mkString("\n")
     val lines = ToolBlock.withoutPrinted(body, printed.toString).linesIterator.toList
     if lines.nonEmpty then
       // REPL output holds the agent's raw prints and compiler diagnostics: sanitize
@@ -325,7 +325,7 @@ private[atc] object ToolBlock:
           val message = lines.drop(1).filter(_.startsWith("|")).map(_.stripPrefix("|").trim)
             .find(m => m.nonEmpty && !m.forall(c => c == '^' || c == ' '))
           if heading.startsWith("[") then heading else message.getOrElse(heading)
-    r.error.flatMap(first).orElse(first(withoutPrinted(ExecutionResult.trimStackFrames(r.output), printed)))
+    r.error.flatMap(first).orElse(first(withoutPrinted(r.output, printed)))
       .map(_.replaceFirst("^java\\.lang\\.(?=\\w+(?:Exception|Error)\\b)", ""))
 
   /** The REPL output without the agent's own prints. The host wrote those to

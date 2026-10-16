@@ -439,7 +439,10 @@ shared wrapper-name table and hide this failure.
 Output capture retains at most 4 MiB and reports truncation. Top-level value echoes have a
 separate character limit. User-visible prints also enter the REPL capture; the TUI records
 a bounded prefix to subtract already-displayed output from result panels. Preserve leading
-whitespace in capture because subtraction uses exact text.
+whitespace in capture because subtraction uses exact text. For the same reason only the
+trace the REPL renders for an uncaught exception loses its host and runtime frames
+(`CappedRendering.renderError`); printed text, which can hold a command's own traces,
+reaches the model unchanged.
 
 `/reset` and `/mode` reset the REPL and its spawned processes, `/mode` with the newly
 selected capabilities. `/new` resets that and the conversation, queued notes, usage

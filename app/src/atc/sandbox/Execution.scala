@@ -7,7 +7,7 @@ final case class ExecutionResult(success: Boolean, output: String, error: Option
   /** What the agent gets to see. */
   def render: String =
     val parts = List(
-      Some(ExecutionResult.trimStackFrames(output)).filter(_.nonEmpty),
+      Some(output).filter(_.nonEmpty),
       error.map(e => s"ERROR: $e"),
     ).flatten
     if parts.nonEmpty then parts.mkString("\n")
@@ -21,8 +21,9 @@ object ExecutionResult:
   private val hostFrame = """^\s+at (atc\.|java\.|jdk\.|scala\.|dotty\.|sun\.).*$""".r
   private val elided = """^\s+\.\.\. \d+ (more|elided)$""".r
 
-  /** Drop stack frames that point into the host or the runtime; frames in
-    * agent code (`rs$line$N`) are kept because they locate the failing line. */
+  /** Drop stack frames that point into the host or the runtime from a trace the REPL
+    * renders; frames in agent code (`rs$line$N`) are kept because they locate the
+    * failing line. Printed output is never passed here. */
   def trimStackFrames(text: String): String =
     if !text.contains("at ") && !text.contains("... ") then text // ordinary output: no frame to drop
     else text.linesIterator.filterNot(l => hostFrame.matches(l) || elided.matches(l)).mkString("\n")

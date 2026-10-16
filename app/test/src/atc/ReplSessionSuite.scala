@@ -182,6 +182,21 @@ class ReplSessionSuite extends munit.FunSuite:
     assert(!rendered.contains("at java."), rendered)
     assert(!rendered.contains("elided"), rendered)
     assert(rendered.contains("rs$line$"), rendered)
+  test("printed lines that look like stack frames reach the model unchanged"):
+    // A project's test runner prints traces too; only the trace the REPL renders is trimmed.
+    val printed = "  at java.lang.Thread.run(Thread.java:1)\n  at scala.Option.map(Option.scala:1)\n  ... 3 more"
+    val r = assertFails(
+      run(
+        """println("  at java.lang.Thread.run(Thread.java:1)\n  at scala.Option.map(Option.scala:1)\n  ... 3 more")
+          |def failPrinted(): Int = throw new IllegalStateException("thrown")
+          |failPrinted()""".stripMargin
+      ),
+      "thrown"
+    )
+    val rendered = r.render
+    assert(rendered.contains(printed), rendered)
+    assertEquals(rendered.split("at java\\.", -1).length - 1, 1, rendered) // the printed frame only
+    assert(rendered.contains("rs$line$"), rendered)
   test("empty and whitespace-only code do not crash"):
     assertOk(run(""))
     assertOk(run("   \n\n  "))

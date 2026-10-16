@@ -120,6 +120,12 @@ class ToolBlockSuite extends munit.FunSuite:
     )
     assertEquals(problem(""), None)
 
+  test("printed lines that look like stack frames are subtracted as printed"):
+    val printed = "running tests\n  at scala.Option.map(Option.scala:1)\n"
+    val output = printed + "java.lang.IllegalStateException: boom\n  at rs$line$3$.f(rs$line$3:1)"
+    val r = ExecutionResult(success = false, output = output)
+    assertEquals(ToolBlock.firstProblem(r, printed), Some("IllegalStateException: boom"))
+
   test("every line of a classified print is marked"):
     val (screen, tool, out) = block(expanded = true)
     screen.frame(tool.start("println(secret)", "run_scala"))
