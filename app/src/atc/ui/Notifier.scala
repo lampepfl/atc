@@ -1,6 +1,6 @@
 package atc.ui
 
-import atc.{Debug, ProcessEnvironment}
+import atc.{Debug, ProcessEnvironment, Threads}
 import atc.platform.Platform
 
 import java.nio.charset.StandardCharsets
@@ -41,9 +41,7 @@ enum Notifier:
             case e: Exception =>
               Debug.log(s"notification command ${command.head} failed: $e")
               emit(Bel)
-        val thread = Thread(show, "atc-notify")
-        thread.setDaemon(true)
-        thread.start()
+        Threads.daemon("atc-notify")(show).start()
 
 object Notifier:
   /** The notification escape sequences terminals understand. */

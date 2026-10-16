@@ -1,6 +1,6 @@
 package atc.agent
 
-import atc.{Debug, TextFiles}
+import atc.{Debug, TextFiles, Threads}
 import atc.llm.{ChatModel, Msg, TokenUsage}
 
 import java.util.concurrent.atomic.AtomicLong
@@ -53,8 +53,7 @@ final class InputPredictor(
         Option(worker).filter(_.isAlive) match
           case Some(current) => current.interrupt()
           case None =>
-            val next = Thread(() => work(), "atc-predict")
-            next.setDaemon(true)
+            val next = Threads.daemon("atc-predict")(() => work())
             worker = next
             next.start()
 

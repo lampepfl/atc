@@ -1,6 +1,6 @@
 package atc.config
 
-import atc.{Debug, TextFiles}
+import atc.{Debug, TextFiles, Threads}
 import atc.platform.OwnerOnlyFiles
 
 import upickle.default.*
@@ -196,10 +196,7 @@ object ModelCatalog:
 
   /** Where the fetches run: a listing blocks on HTTP or on a CLI, which the common pool, sized
     * for computation, does not compensate for, so one slow provider would hold back the others. */
-  private val Listing = Executors.newCachedThreadPool: task =>
-    val thread = Thread(task, "atc-model-list")
-    thread.setDaemon(true)
-    thread
+  private val Listing = Executors.newCachedThreadPool(Threads.daemon("atc-model-list")(_))
 
   /** Resolve every model of every provider. A provider's `${VAR}` key is
     * resolved through `keys` (a project's `.atc/keys.properties`, then the global one)

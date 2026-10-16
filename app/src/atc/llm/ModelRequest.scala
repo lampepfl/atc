@@ -1,5 +1,7 @@
 package atc.llm
 
+import atc.Threads
+
 import java.util.concurrent.{CompletableFuture, ExecutionException}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import scala.util.Using
@@ -36,8 +38,7 @@ private[atc] final class ModelRequest:
           done.completeExceptionally(e)
           throw e
       finally ModelRequest.current.remove()
-    val thread = Thread(work, "atc-model-request")
-    thread.setDaemon(true)
+    val thread = Threads.daemon("atc-model-request")(work)
     val active = Pending(cancelled, thread, scope, done)
     synchronized:
       if pending != null && pending.nn.thread.isAlive then

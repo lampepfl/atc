@@ -38,7 +38,7 @@ final class SandboxRepl(config: Config, policy: => Policy, host: => Host, tui: T
   /** Start a session in the background; nothing happens when one exists or is already starting. */
   def warm(): Unit = if live.isEmpty && warming.isEmpty then
     val task = FutureTask[ReplSession](() => start())
-    daemon("atc-sandbox-warmup")(task)
+    Threads.daemon("atc-sandbox-warmup")(task).start()
     warming = Some(task)
 
   /** Drop a session still starting in the background: a daemon thread closes it once it
@@ -46,9 +46,10 @@ final class SandboxRepl(config: Config, policy: => Policy, host: => Host, tui: T
   private def discardWarming(): Unit =
     warming.foreach: task =>
       warming = None
-      daemon("atc-sandbox-discard"): () =>
+      val discard = Threads.daemon("atc-sandbox-discard"): () =>
         try task.get().close()
         catch case _: Exception => ()
+      discard.start()
 
   /** The live session: the one warming in the background once it is ready (the status
     * line says so only if the wait is real), else one started here and now. */
@@ -87,8 +88,3 @@ final class SandboxRepl(config: Config, policy: => Policy, host: => Host, tui: T
     discardWarming()
     live.foreach(_.close())
     live = None
-
-  private def daemon(name: String)(work: Runnable): Unit =
-    val thread = Thread(work, name)
-    thread.setDaemon(true)
-    thread.start()

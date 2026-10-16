@@ -1,5 +1,6 @@
 package atc.ui
 
+import atc.Threads
 import atc.agent.TurnOutcome
 
 import org.jline.terminal.Terminal
@@ -33,11 +34,7 @@ private[ui] final class Alerts(
   @volatile private var focusKnown = false
   /** The alert waiting for input, with its text; guarded by `this`. */
   private var pending: Option[(ScheduledFuture[?], String)] = None
-  private lazy val timer = Executors.newSingleThreadScheduledExecutor { r =>
-    val t = Thread(r, "atc-alert")
-    t.setDaemon(true)
-    t
-  }.nn
+  private lazy val timer = Executors.newSingleThreadScheduledExecutor(Threads.daemon("atc-alert")(_)).nn
 
   /** Tell the user that a question or permission request waits for them. */
   def alert(body: String): Unit = schedule(body, questionDelayMillis)

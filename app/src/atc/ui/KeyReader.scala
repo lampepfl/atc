@@ -1,5 +1,7 @@
 package atc.ui
 
+import atc.Threads
+
 import org.jline.terminal.{Attributes, Terminal}
 import org.jline.utils.NonBlockingReader
 
@@ -39,8 +41,7 @@ private[ui] final class KeyReader(
     out.flush()
     pasting = false
     running = true
-    val t = Thread(() => loop(), "atc-keys")
-    t.setDaemon(true)
+    val t = Threads.daemon("atc-keys")(() => loop())
     thread = Some(t)
     t.start()
 

@@ -1,5 +1,6 @@
 package atc.sandbox
 
+import atc.Threads
 import atc.lib.{Derivations, Interface}
 import atc.perms.Mode
 import atc.platform.Platform
@@ -327,9 +328,7 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
     val previousIndex = state.objectIndex
     val resultRef = AtomicReference[Evaluated]()
     val started = CountDownLatch(1)
-    val worker = Thread(() => resultRef.set(evaluate(res, started)))
-    worker.setName("atc-repl-eval")
-    worker.setDaemon(true)
+    val worker = Threads.daemon("atc-repl-eval")(() => resultRef.set(evaluate(res, started)))
     evalThread = worker
     worker.start()
     try
