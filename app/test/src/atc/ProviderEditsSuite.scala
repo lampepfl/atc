@@ -3,6 +3,8 @@ package atc
 import atc.config.*
 import atc.config.ProviderEdits.{Choice, Edit}
 
+import java.nio.file.Path
+
 /** What `/providers` writes: member edits that keep a hand-formatted config's
   * text, the shortlist of a provider's models, and which layer owns an edit. */
 class ProviderEditsSuite extends munit.FunSuite:
@@ -104,10 +106,11 @@ class ProviderEditsSuite extends munit.FunSuite:
     assertEquals(ProviderEdits.aliasFor("vendor/big", Set("big", "vendor-big")), "vendor-big-2")
     assertEquals(ProviderEdits.aliasFor("plain", Set.empty), "plain")
 
+  private def layer(origin: Origin, json: String) =
+    val obj = ujson.read(json).obj
+    ConfigLayer(origin, Some(java.nio.file.Path.of(origin.label)), obj, upickle.default.read[Config](obj))
+
   test("an edit goes to the last layer holding the longest part of its path"):
-    def layer(origin: Origin, json: String) =
-      val obj = ujson.read(json).obj
-      ConfigLayer(origin, Some(java.nio.file.Path.of(origin.label)), obj, upickle.default.read[Config](obj))
     val global = layer(Origin.Global, """{ "providers": { "p": { "api": "openai", "models": { "a": {} } } } }""")
     val project = layer(Origin.Project, """{ "providers": { "p": { "models": { "b": {} } } } }""")
     val layers = List(global, project)
@@ -116,6 +119,23 @@ class ProviderEditsSuite extends munit.FunSuite:
     assertEquals(owner("providers", "p", "models", "b", "enabled"), Some(Origin.Project))
     assertEquals(owner("providers", "p", "enabled"), Some(Origin.Project), "the last file naming the provider")
     assertEquals(owner("providers", "q", "enabled"), None, "a provider no file defines")
+
+  test("a removal reaches every layer that holds it, so the merged configuration loses it"):
+    val texts = List(
+      Origin.Global -> """{ "providers": { "p": { "api": "openai", "enabled": false, "models": { "a": {} } } } }""",
+      Origin.Project -> """{ "providers": { "p": { "enabled": false, "models": { "b": {} } } } }""",
+    )
+    val layers = texts.map(layer)
+    def merged(edits: List[Edit]): ProviderConfig =
+      val edited = texts.map: (origin, text) =>
+        val own = edits.filter(ProviderEdits.files(layers, _, Path.of("global")).contains(Path.of(origin.label)))
+        layer(origin, apply(text, own*))
+      Configuration.combine(edited).settings.providers("p")
+    assertEquals(merged(ProviderEdits.showAll("p")).models, Map.empty[String, ModelConfig])
+    assertEquals(merged(ProviderEdits.setEnabled("p", on = true)).enabled, true)
+    // A change still goes to the one file that owns it.
+    val off = ProviderEdits.setEnabled("p", on = false).head
+    assertEquals(ProviderEdits.files(layers, off, Path.of("global")), List(Path.of("project")))
 
   test("a provider or model turned off is not offered, and an all-off provider lists nothing"):
     val c = upickle.default.read[Config](

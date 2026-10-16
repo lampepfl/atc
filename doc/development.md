@@ -797,9 +797,12 @@ for a provider that lists its own writes the ticked ones as entries with the dis
 context window, efforts, default effort (`reasoning`) and `thinking` support the list
 reported, which makes them its shortlist;
 *Offer every model it lists* drops the entries again. A listed id with `/` gets an alias
-without one (`ProviderEdits.aliasFor`). Each edit goes to the last layer holding the
+without one (`ProviderEdits.aliasFor`). A change goes to the last layer holding the
 longest part of its path (`ProviderEdits.owner`), because layers merge a model entry as a
-whole; a new provider goes to the global config. The configuration is then loaded again
+whole. A removal, such as dropping the entries or turning a provider back on, goes to every
+layer that holds the member (`ProviderEdits.files`), because layers merge a provider's
+`models` and `enabled` across files; dropping the entries names those files when it asks. A
+new provider goes to the global config. The configuration is then loaded again
 (a failure restores the files and loads them again) and the catalog rebuilt; a model in use
 that the change renamed moves to its new name. A provider or model in use, by the session or
 as `model`/`classifiedModel`, cannot be turned off, and a provider with a model in use keeps

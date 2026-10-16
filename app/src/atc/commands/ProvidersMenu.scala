@@ -56,9 +56,11 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
       // Dropping the entries removes every alias of the provider, so none of its models may be in use.
       val showAll = "Offer every model it lists (drop its model entries)" ->
         (() =>
-          val question = s"Drop the ${p.models.size} model entries of $name and their settings?"
+          val edits = ProviderEdits.showAll(name)
+          val files = byFile(edits, None).keys.map(PlatformPath.display).mkString(" and ")
+          val question = s"Drop the ${p.models.size} model entries of $name and their settings from $files?"
           unused() && tui.chooseOrBack(question, List("Drop them")).isDefined &&
-          applyEdits(ProviderEdits.showAll(name), s"$name offers every model it lists")
+          applyEdits(edits, s"$name offers every model it lists")
         )
       val signIn = "Sign in with ChatGPT" ->
         (() =>
@@ -137,19 +139,24 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
             modelCommands.switchModel(ready.model.ref)
         case _ => tui.info("No provider added.")
 
-  /** Write `edits`, each to the file that owns it (or `into`), and reload the
-    * models. A change that leaves an invalid config is undone. */
+  /** The files `edits` go to, `into` or those [[ProviderEdits.files]] names, each with its edits. */
+  private def byFile(edits: List[ProviderEdits.Edit], into: Option[Path]): Map[Path, List[ProviderEdits.Edit]] =
+    val layers = models.configuration.layers
+    edits.flatMap(e => into.fold(ProviderEdits.files(layers, e, Config.globalPath))(List(_)).map(_ -> e))
+      .groupMap(_._1)(_._2)
+
+  /** Write `edits` to their files ([[byFile]]) and reload the models. A change that leaves an
+    * invalid config is undone. */
   private def applyEdits(edits: List[ProviderEdits.Edit], done: String, into: Option[Path] = None): Boolean =
-    val byFile = edits.groupBy: e =>
-      into.orElse(ProviderEdits.owner(models.configuration.layers, e.path).flatMap(_.path)).getOrElse(Config.globalPath)
+    val files = byFile(edits, into)
     try
-      ConfigCommands.editConfigs(app.cwd, Config.globalDir, byFile.keys.toList) {
-        byFile.foreach: (path, es) =>
+      ConfigCommands.editConfigs(app.cwd, Config.globalDir, files.keys.toList) {
+        files.foreach: (path, es) =>
           Config.editFile(path): text =>
             es.foldLeft(text)((t, e) => ObjectText.withMember(t, e.path, e.value, path.toString))
       } {
         modelCommands.reload()
-        tui.success(s"$done (saved to ${byFile.keys.map(PlatformPath.display).mkString(", ")})")
+        tui.success(s"$done (saved to ${files.keys.map(PlatformPath.display).mkString(", ")})")
       }
       true
     catch

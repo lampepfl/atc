@@ -1,10 +1,12 @@
 package atc.config
 
+import java.nio.file.Path
 import scala.collection.mutable
 
-/** The config changes `/providers` makes. Each goes to the file holding the
+/** The config changes `/providers` makes. A change goes to the file holding the
   * most of its path: layers merge a model entry as a whole, so writing part of
-  * an entry to another file would replace the entry defined there. */
+  * an entry to another file would replace the entry defined there. A removal
+  * goes to every file that holds the member ([[files]]). */
 object ProviderEdits:
   /** Set (`Some`) or remove (`None`) the member at `path`. */
   final case class Edit(path: List[String], value: Option[ujson.Value])
@@ -76,9 +78,21 @@ object ProviderEdits:
   /** The layer an edit of `path` belongs to: the last one holding the longest
     * prefix of it, at least `providers.<name>`. */
   def owner(layers: List[ConfigLayer], path: List[String]): Option[ConfigLayer] =
-    def depth(json: ujson.Value, rest: List[String]): Int = (json, rest) match
-      case (o: ujson.Obj, key :: more) if o.value.contains(key) => 1 + depth(o(key), more)
-      case _ => 0
     val scored = layers.map(l => l -> depth(l.json, path))
     val best = scored.map(_._2).maxOption.getOrElse(0)
     Option.when(best >= 2)(scored.filter(_._2 == best).last._1)
+
+  /** The files `edit` goes to. A change goes to the file of its [[owner]]. A removal goes to
+    * every layer that holds the member, since layers merge a provider's `models` and its
+    * `enabled` across files: one left in any file would keep what is removed. A layer without
+    * a file, the bundled starting config, stands for `global`, which is written from it. */
+  def files(layers: List[ConfigLayer], edit: Edit, global: Path): List[Path] =
+    def file(layer: ConfigLayer) = layer.path.getOrElse(global)
+    edit.value match
+      case Some(_) => List(owner(layers, edit.path).fold(global)(file))
+      case None => layers.filter(l => depth(l.json, edit.path) == edit.path.size).map(file).distinct
+
+  /** How many keys of `path`, from the start, `json` holds. */
+  private def depth(json: ujson.Value, path: List[String]): Int = (json, path) match
+    case (o: ujson.Obj, key :: more) if o.value.contains(key) => 1 + depth(o(key), more)
+    case _ => 0
