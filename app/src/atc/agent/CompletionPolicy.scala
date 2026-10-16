@@ -8,8 +8,9 @@ import atc.llm.{Completion, CompletionStop, Msg, ToolCall}
 private[atc] object CompletionPolicy:
   enum Next:
     case RunTools(calls: List[ToolCall])
-    /** Resume the model; an output-limit stop first needs a user-role bridge, this `continuation`. */
-    case Resume(continuation: Option[String])
+    /** Resume the model; an output-limit stop first needs a user-role bridge, this `continuation`.
+      * `truncatedCall` is set when the output limit cut a tool call. */
+    case Resume(continuation: Option[String], truncatedCall: Boolean = false)
     case Finish
     case Blocked
 
@@ -39,7 +40,8 @@ private[atc] object CompletionPolicy:
       case CompletionStop.Blocked => Next.Blocked
       case _ if calls.nonEmpty => Next.RunTools(calls)
       case CompletionStop.Resume => Next.Resume(None)
-      case CompletionStop.Truncated if raw.toolCalls.nonEmpty => Next.Resume(Some(AgentMessages.truncatedToolCall))
+      case CompletionStop.Truncated if raw.toolCalls.nonEmpty =>
+        Next.Resume(Some(AgentMessages.truncatedToolCall), truncatedCall = true)
       case CompletionStop.Truncated | CompletionStop.Incomplete =>
         Next.Resume(Some(AgentMessages.truncationContinuation))
       case CompletionStop.Complete => Next.Finish

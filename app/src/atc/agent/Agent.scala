@@ -209,7 +209,7 @@ final class Agent(
     val retained = retainedContext
     ui.status("Compacting context…")
     val result = request.run(cancelled) {
-      current.complete(ContextCompaction.prompt, input, Nil, StreamSink(_ => (), _ => (), _ => ()), cancelled)
+      current.complete(ContextCompaction.prompt, input, Nil, StreamSink(_ => ()), cancelled)
     }
     recordUsage(Agent.Compaction, result.usage)
     if cancelled() then throw CancelledException()
@@ -304,18 +304,17 @@ final class Agent(
                 else if budgetRejections > 0 then Done(TurnOutcome.LimitReached)
                 else if raw.text.trim.isEmpty then Done(TurnOutcome.Failed)
                 else Done(TurnOutcome.Finished)
-              case CompletionPolicy.Next.Resume(continuation) =>
-                val droppedCalls = raw.stop == CompletionStop.Truncated && raw.toolCalls.nonEmpty
+              case CompletionPolicy.Next.Resume(continuation, truncatedCall) =>
                 if cancelled() then interrupted()
                 else if raw.stop == CompletionStop.Incomplete && incompleteResumes >= Agent.MaxIncompleteResumes then
                   ui.warn(AgentMessages.incompleteStreamExhausted(model.alias, Agent.MaxIncompleteResumes))
                   Done(TurnOutcome.Failed)
-                else if droppedCalls && truncatedCalls >= Agent.MaxTruncatedCalls then
+                else if truncatedCall && truncatedCalls >= Agent.MaxTruncatedCalls then
                   ui.warn(AgentMessages.truncatedToolCallsExhausted(model.alias, Agent.MaxTruncatedCalls + 1))
                   Done(TurnOutcome.LimitReached)
                 else if resumes < Agent.MaxResumes then
                   if raw.stop == CompletionStop.Incomplete then incompleteResumes += 1
-                  if droppedCalls then truncatedCalls += 1
+                  if truncatedCall then truncatedCalls += 1
                   continuation.foreach(text => conversation.append(Msg.Continuation(text)))
                   resume()
                 else

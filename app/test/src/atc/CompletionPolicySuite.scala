@@ -41,7 +41,10 @@ class CompletionPolicySuite extends munit.FunSuite:
     assert(decision.message.text.contains("tool calls were not executed"), decision.message.text)
     assertEquals(decision.message.toolCalls, Nil)
     assertEquals(decision.message.native, None)
-    assertEquals(decision.next, CompletionPolicy.Next.Resume(Some(AgentMessages.truncatedToolCall)))
+    assertEquals(
+      decision.next,
+      CompletionPolicy.Next.Resume(Some(AgentMessages.truncatedToolCall), truncatedCall = true)
+    )
     assert(decision.warnings.exists(_.contains("ignored 1 tool call")), decision.warnings.toString)
     // with text before the cut call, the marker still says the call did not run
     val withText = CompletionPolicy(completion(

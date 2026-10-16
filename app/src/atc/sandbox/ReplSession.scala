@@ -307,7 +307,7 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
       ExecutionResult.failed(InterruptedMessage)
     else
       thrown match
-        case Some(e) => ExecutionResult(false, output, Option(e.getMessage).orElse(Some(e.toString)))
+        case Some(e) => ExecutionResult(false, output, Some(Option(e.getMessage).getOrElse(e.toString)))
         case None =>
           val compileFailed = res match
             case p: Parsed => p.reporter.hasErrors
