@@ -291,8 +291,8 @@ interface and host together, then verify their required capabilities.
 
 Every mode also supplies `user: UserIO^`, which is independent of the machine root, so
 output, questions, TODO updates and normal `chat` calls remain available in read-only mode.
-`Exec` and `Network` have no read-only view. Command operations require both `Exec^` and
-`FileSystem^`, including when redirection writes a file.
+Command operations require both `Exec^` and `FileSystem^`, including when redirection
+writes a file.
 
 Capability constructors are private to ATC. `Runtime` and `Derivations` provide the
 sandbox's internal bootstrap API and are marked `@rejectSafe`. Agent code cannot derive
@@ -430,11 +430,11 @@ separately as well as in the full suite: unrelated compiler sessions can populat
 shared wrapper-name table and hide this failure.
 
 REPL output capture retains at most 4 MiB and reports truncation. Top-level value echoes
-have a separate limit of 2000 characters. User-visible prints also enter the REPL capture; the TUI records
-a bounded prefix to subtract already-displayed output from result panels. Preserve leading
-whitespace in capture because subtraction uses exact text. For the same reason only the
-trace the REPL renders for an uncaught exception loses its host and runtime frames
-(`CappedRendering.renderError`); printed text, which can hold a command's own traces,
+have a separate limit of 2000 characters. User-visible prints also enter the REPL capture;
+the TUI records a bounded prefix to subtract already-displayed output from result panels.
+Preserve leading whitespace in capture because subtraction uses exact text. For the same
+reason only the trace the REPL renders for an uncaught exception loses its host and runtime
+frames (`CappedRendering.renderError`); printed text, which can hold a command's own traces,
 reaches the model unchanged.
 
 `/reset` and `/mode` reset the REPL and its spawned processes, `/mode` with the newly
@@ -536,10 +536,9 @@ holds the configured rules and the session grants; request scopes do not count. 
 `.gitignore` is judged by its target. A refusal lasts only until the session grants change,
 so a `.gitignore` applies from the first listing after the user grants access for the session.
 
-Commands use `*` globs; a pattern without `*` also matches a word prefix. Hosts are
-case-insensitive and normalize numeric IP literals. Deny rules are checked at use, even
-when a requested pattern was previously approved. A request is refused before the prompt
-when one of its patterns and a deny pattern match a common command line or host:
+Host patterns are case-insensitive and normalize numeric IP literals. Deny rules are checked
+at use, even when a requested pattern was previously approved. A request is refused before
+the prompt when one of its patterns and a deny pattern match a common command line or host:
 `git * --force` against `git push*`, which both match `git push --force`. Each permission
 decision is included in the tool result so the model knows whether approval was temporary,
 session-wide or denied.
@@ -878,14 +877,18 @@ directory is not one (`git diff .env /dev/null`), and `git blame` through `--con
 **Windows.** Use `/` separators in configuration on every platform: in JSON,
 `"C:/Users/alice/project"` (a native backslash starts a JSON escape, so the equivalent form
 needs doubled backslashes). The file API accepts native Windows input too, but renders
-Windows separators as `/`. Command availability is platform-specific: `./mill`, `ls`, `cat`
-and `bash` are not normal Windows commands; use an installed executable or the project's
-`mill.bat`. `exec` does not send its command line through a shell; an authorized
-`.cmd`/`.bat` launcher inherently uses the Windows command processor with strict argument
-checks, and built-ins such as `dir` or PowerShell cmdlets need an explicitly permitted
-shell, which grants that shell broad authority. Quote every argument containing spaces; a
-backslash remains a path separator, not a space escape. External programs choose their own
-newline and encoding conventions (commonly CRLF, sometimes BOM-marked UTF-16 on Windows).
+Windows separators as `/`. Every path the user or the agent types (agent paths, `-c`, `-C`,
+`/save`, `/resume`) goes through `PlatformPath.parse`, which expands `~` and on Windows
+refuses device namespaces, drive-relative paths, alternate data streams, reserved device
+names and names ending in a dot or space before `java.nio` sees them. Command availability
+is platform-specific: `./mill`, `ls`, `cat` and `bash` are not normal Windows commands; use
+an installed executable or the project's `mill.bat`. `exec` does not send its command line
+through a shell; an authorized `.cmd`/`.bat` launcher inherently uses the Windows command
+processor with strict argument checks, and built-ins such as `dir` or PowerShell cmdlets
+need an explicitly permitted shell, which grants that shell broad authority. Quote every
+argument containing spaces; a backslash remains a path separator, not a space escape.
+External programs choose their own newline and encoding conventions (commonly CRLF,
+sometimes BOM-marked UTF-16 on Windows).
 
 ## Models and providers
 
@@ -945,21 +948,21 @@ Provider SDK request construction remains in each adapter. Shared configuration 
 setup belong in `Providers`; model selection belongs in `ModelCatalog`. Every adapter builds
 its client with `Providers.key`: without a configured key, a provider with a `url` gets the
 placeholder key `none`, so the SDK's environment credentials reach only the provider's
-default endpoint. A streaming request has no limit on
-the whole call, since a long answer can stream for longer than `Providers.RequestTimeout`
-(15 minutes); connecting, and each read and write, keep their timeouts, and Ctrl-C cancels
-the call. One-shot calls keep the 15-minute limit.
+default endpoint. A streaming request has no limit on the whole call, since a long answer
+can stream for longer than `Providers.RequestTimeout` (15 minutes); connecting, and each
+read and write, keep their timeouts, and Ctrl-C cancels the call. One-shot calls keep the
+15-minute limit.
 
 A provider's `headers` are extra HTTP headers for every request to it. `KeyBindings.headers`
 resolves `${VAR}` values through the key bindings (an unset variable drops the header) and
 keeps the placeholder `${ATC_SESSION}` (`ProviderConfig.SessionRef`), which
 `Providers.headers(spec)` replaces per request with the conversation id, a UUID that
-`Agent.clear()` renews. The same
-call adds `User-Agent: atc/<version>` unless the config sets one, regardless of header-name
-case. The set goes on every request, model lists included: the OpenAI-shaped adapters add it
-with an OkHttp interceptor on the model's client, ahead of the ChatGPT authorization, and the
-Anthropic adapter with a wrapper around its SDK transport. Provider-specific headers such as
-OpenCode's `x-opencode-session` are configured explicitly.
+`Agent.clear()` renews. The same call adds `User-Agent: atc/<version>` unless the config
+sets one, regardless of header-name case. The set goes on every request, model lists
+included: the OpenAI-shaped adapters add it with an OkHttp interceptor on the model's
+client, ahead of the ChatGPT authorization, and the Anthropic adapter with a wrapper around
+its SDK transport. Provider-specific headers such as OpenCode's `x-opencode-session` are
+configured explicitly.
 
 Chat Completions requests set `stream_options.include_usage` so providers can report token
 counts for `/cost` and context calibration. Providers send usage on the finish chunk,
@@ -1306,17 +1309,15 @@ leaves paste mode after a pop-up, which may have read the paste's end. Enter cou
 300 ms after a menu opens (`ListMenu.EnterDelayNanos`), so a newline typed or pasted just
 before a permission request cannot choose its first row, Allow once.
 
-While the main prompt holds a single word starting with `/`, `PromptReader` lists the matching
-`SlashCommand.table` rows in JLine's `post` area under the buffer, with an exact name
-preselected. It sets `post` in a `redisplay` override, leaves it to other users (completion
-lists, history search) while they hold it, and skips it in the final display `doCleanup` draws.
-↑/↓ move the selection, Tab fills in the name (and a space for commands with arguments), and
-Enter replaces the word with the selected name before accepting. A line that ↑/↓ recalled from
-history is not listed until it is edited, so the arrows keep browsing history. Answers, block
-input and dumb terminals get no list. Enter runs the selection, so no alias may be a prefix
-of another command's name. A line is a command when its first word starts with `/` and holds
-no other `/`: a mistyped name is reported as an unknown command, and a line that starts with
-an absolute path goes to the agent.
+While the main prompt holds a single word starting with `/`, `PromptReader` lists the
+matching `SlashCommand.table` rows in JLine's `post` area under the buffer, with an exact
+name preselected. ↑/↓ move the selection, Tab fills in the name (and a space for commands
+with arguments), and Enter replaces the word with the selected name before accepting. A line
+that ↑/↓ recalled from history is not listed until it is edited, so the arrows keep browsing
+history. Answers, block input and dumb terminals get no list. Enter runs the selection, so
+no alias may be a prefix of another command's name. A line is a command when its first word
+starts with `/` and holds no other `/`: a mistyped name is reported as an unknown command,
+and a line that starts with an absolute path goes to the agent.
 
 During a turn, Enter submits a correction and unsent text is shown in the status line.
 Bracketed pastes keep their newlines and are collected without submitting individual lines,
@@ -1359,9 +1360,9 @@ they would land mid-line. Between turns they use `LineReader.printAbove` while t
 reads, so they do not overwrite the user's input.
 
 `Notifier` sends the `notifications` alert when a turn ends, a permission request or
-question opens, or the tool budget runs out. `Alerts` schedules it ten seconds ahead
-(`QuestionDelayMillis`; `TurnDelayMillis`, thirty, for a finished turn) unless the terminal
-is known to be focused, and drops it on focus coming back or on any key, answer or Ctrl-C:
+question opens, or the tool budget runs out. `Alerts` schedules it after
+`QuestionDelayMillis`, or `TurnDelayMillis` for a finished turn, unless the terminal is
+known to be focused, and drops it on focus coming back or on any key, answer or Ctrl-C:
 the turn's key reader, the prompt highlighter (a changed buffer) and the end of a pop-up
 count as input. The terminal's focus reports (`ESC[?1004h`) come through JLine's focus
 widgets at the prompt and through the key reader during a turn. Reporting is on only while
