@@ -13,14 +13,14 @@ import java.nio.file.Files
 class DialogsSuite extends munit.FunSuite:
 
   /** Dialogs on a `width`-column terminal that sends `input` and then ends; what it wrote. */
-  private def dialogs(input: String, width: Int = 80): (Dialogs, ByteArrayOutputStream) =
-    dialogsReading(ByteArrayInputStream(input.getBytes(UTF_8)), width)
+  private def dialogs(input: String, width: Int = 80, plain: Boolean = false): (Dialogs, ByteArrayOutputStream) =
+    dialogsReading(ByteArrayInputStream(input.getBytes(UTF_8)), width, plain)
 
-  private def dialogsReading(source: InputStream, width: Int): (Dialogs, ByteArrayOutputStream) =
+  private def dialogsReading(source: InputStream, width: Int, plain: Boolean): (Dialogs, ByteArrayOutputStream) =
     val out = ByteArrayOutputStream()
     val terminal = DumbTerminal("test", "xterm-256color", source, out, UTF_8)
     terminal.setSize(Size.of(width, 24): Sized)
-    val screen = Screen(terminal, plain = false, Glyphs.unicode)
+    val screen = Screen(terminal, plain, Glyphs.unicode)
     val alerts = Alerts(terminal, plain = false, _ => ())
     val keys = KeyReader(terminal, plain = false, alerts, () => (), _ => (), _ => ())
     val status = StatusLine(screen, () => true, () => true, () => 0)
@@ -68,5 +68,11 @@ class DialogsSuite extends munit.FunSuite:
     // Up from the first row reaches the last, the instructions; Enter with nothing typed goes back
     // to the menu, where Enter must not allow the request.
     val input = paced(700L -> "\u001b[A\r\r", 700L -> "\r", 0L -> "only run the tests\r")
-    val (d, _) = dialogsReading(input, width = 80)
+    val (d, _) = dialogsReading(input, width = 80, plain = false)
     assertEquals(d.permission(ExecRequest(List("npm test"), "run the tests")), Decision.Revise("only run the tests"))
+
+  test("a typed confirmation takes only y or yes"):
+    for (reply, expected) <- List("y" -> true, "YES" -> true, "yes, but later" -> false, "yolo" -> false, "" -> false)
+    do
+      val (d, _) = dialogs(s"$reply\r", plain = true)
+      assertEquals(d.confirm("Trust this project's config?"), expected, reply)

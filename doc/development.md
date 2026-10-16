@@ -1355,7 +1355,8 @@ preserved input-cancellation interrupt so the next menu can read normally.
 Plain prompts accept exact `y`/`yes` or
 `s`/`session` approvals, exact `n`/`no` denials, and treat other non-empty input as
 `Decision.Revise`. A qualified answer starting with “yes” or “skip” must not become an
-approval by prefix matching. EOF and empty plain replies deny the request.
+approval by prefix matching. EOF and empty plain replies deny the request. A plain yes/no
+confirmation (`Tui.confirm`) likewise takes only `y` or `yes`.
 
 Question menus always include a custom-answer option. Questions wrap with their continuation
 lines under the question text, like permission details. For multiple selections, chosen

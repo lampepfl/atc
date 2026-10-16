@@ -96,11 +96,11 @@ private[ui] final class Dialogs(
     decision
 
   /** A yes/no question from the app itself (setup, not the agent): a menu when there is a
-    * terminal, a `[y/N]` line otherwise. Cancelling means no. */
+    * terminal, a `[y/N]` line otherwise, where only `y` or `yes` means yes. Cancelling means no. */
   def confirm(question: String): Boolean =
     ask(question)
     val yes =
-      if plain then freeText(Under + styled("[y/N]: ", Cyan)).exists(_.toLowerCase(Locale.ROOT).startsWith("y"))
+      if plain then freeText(Under + styled("[y/N]: ", Cyan)).exists(a => Set("y", "yes")(a.toLowerCase(Locale.ROOT)))
       else menu(List(Menus.YesLabel, Menus.NoLabel), escape = "cancel").contains(Menus.YesLabel)
     if plain then
       write(Under + styled(s"${g.arrow} ${if yes then "yes" else "no"}", if yes then Green else Red) + "\n")
