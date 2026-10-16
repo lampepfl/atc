@@ -670,50 +670,57 @@ repository can ship them. Provider web search is an outbound channel that `hosts
 `denyHosts` do not govern. `ProjectTrust` records a SHA-256 fingerprint of exactly these per
 project root in `~/.atc/trusted-projects.json` (owner-only); web search enters it only when
 on, so fingerprints recorded without it still match. A `classifiedModel` enters with what the
-project's providers say about it, the entries of its alias and the providers turned off, so an
-edit that changes the provider, model id or settings it names is put to the user again.
-`Config.load` leaves them out while the fingerprint is not recorded, judging that on the same
-reading of the files that the layer and the keys come from, so every reload agrees with the
-decision. `Setup.load` shows every entry
-they grant, escaped like permission details, and offers Trust, Run without these grants, or
-Quit; it says whether the config is new or has changed since it was trusted. Trust records
-the fingerprint of what was shown, so a file that changed meanwhile stays untrusted. A `-p`
-run warns and goes without them unless `--approve-all` is given, which takes them unrecorded.
-Configs ATC writes itself (`--init`, the offered starter config) are trusted as they are
-written, unless the directory already waited for trust, such as for a `keys.properties` the
-repository shipped: the prompt then shows the starter config's grants with it. Neither writes
-the home directory's `.atc/config.json`, which is the global config, nor through a symbolic
-link at `.atc`, its `config.json` or its `.gitignore`. A `/model`, `/effort`,
-`/classifiedmodel`, `/config` or `/providers` save keeps a trusted project trusted. Other
-edits, such as a new `model`, do not change the fingerprint.
+project's providers say about it, the entries of its alias and the providers turned off, so
+an edit that changes the provider, model id or settings it names is put to the user again.
+`Config.load` leaves these grants out while the fingerprint is not recorded, judging that on
+the same reading of the files that the layer and the keys come from, so every reload agrees
+with the decision. `Setup.load` shows every entry they grant, escaped like permission
+details, and offers Trust, Run without these grants, or Quit; it says whether the config is
+new or has changed since it was trusted. Trust records the fingerprint of what was shown, so
+a file that changed meanwhile stays untrusted. A `-p` run warns and goes without them unless
+`--approve-all` is given, which takes them unrecorded. Configs ATC writes itself (`--init`,
+the offered starter config) are trusted as they are written, unless the directory already
+waited for trust, such as for a `keys.properties` the repository shipped: the prompt then
+shows the starter config's grants with it. Neither writes the home directory's
+`.atc/config.json`, which is the global config, nor through a symbolic link at `.atc`, its
+`config.json` or its `.gitignore`. Other edits, such as a new `model`, do not change the
+fingerprint.
 
 Only explicitly defined project settings narrow a value. `executionTimeoutMs` defaults to
 300000; a JSON `null` clears it and means no limit. Reading a layer
 (`ConfigValidation.requireExact`) refuses a `null` for a setting that is not optional, which
 the JSON reader would take as `null`, `0` or `false`, and a number that an integer setting
-would truncate or clamp, such as `1.5` or `1e10`.
-`Configuration.rules` is the complete rule list; do not build policy from `settings.files`,
-which contains only granting-layer entries. Configuration validation checks modes, limits,
-patterns, model references and provider settings before execution.
+would truncate or clamp, such as `1.5` or `1e10`. `Configuration.rules` is the complete rule
+list; do not build policy from `settings.files`, which contains only granting-layer entries.
+Configuration validation checks modes, limits, file rules, provider and model settings and
+the uniqueness of model references before execution; `model` and `classifiedModel` are
+resolved at the start (see [Models and providers](#models-and-providers)).
 
 `/config` (`ConfigCommands`) changes only `predictInput`, `notifications`, `webSearch`,
-`autoCompactThreshold` and `compactKeepRatio`: settings outside `PolicyKeys`, so none can
+`autoCompactThreshold` and `compactKeepRatio`. They are outside `PolicyKeys`, so none can
 loosen the sandbox, and a project config may set them; one that turns `webSearch` on needs
-trust. Every change goes into a `session`
-layer that `Models` keeps in memory and appends after the files on each reload, so a
-`/providers` edit does not drop it. Saving to the project config in force or to the global
-config also writes that file with `Config.setTopLevel`; a failed reload restores the file.
-The note on a saved value names a later file that sets the same key and wins at the next
-start. `App.useSettings` applies the combined settings to the agent, the notifier and the
-predictor, and `Models.reload` switches web search on the cached clients
-(`ChatModel.useWebSearch`); clients are not recreated, since a Claude Code client holds a
-CLI session. The sandbox keeps the policy it started with.
+trust. A change goes into a `session` layer that `Models` keeps in memory and appends after
+the files on each reload, so a `/providers` edit does not drop it. That layer merges as a
+narrowing layer: a policy key in it could only tighten, and its other settings win in layer
+order. Saving to the project config in force or to the global config also writes that file
+with `Config.setTopLevel`, and the note on a saved value names a later file that sets the
+same key and wins at the next start. `App.useSettings` applies the combined settings to the
+agent, the notifier and the predictor, and `Models.reload` switches web search on the cached
+clients (`ChatModel.useWebSearch`); clients are not recreated, since a Claude Code client
+holds a CLI session. The sandbox keeps the policy it started with.
+
+Every config edit ATC makes (`/config`, `/providers`, and the `/model`, `/effort` and
+`/classifiedmodel` saves) goes through `ConfigCommands.editConfigs`: it writes the files,
+trusts a project again when it was trusted before, so the user's own edit does not make it
+ask, and then reloads. When writing or reloading fails, the files get their text back, files
+it created are deleted, and trust is restored the same way.
 
 `Configuration.combine` first merges ordinary settings in layer order, then obtains policy
-settings from granting layers and applies project restrictions. Numeric restrictions use
-minimum; enabled safety flags use logical OR. These operations are order-independent for
-narrowing layers. A field omitted from a project JSON object is not an explicit request
-for its case-class default, which is why `ConfigLayer.defines` participates in tightening.
+settings from granting layers and applies the narrowing layers' restrictions. Numeric
+restrictions use minimum; enabled safety flags use logical OR. These operations are
+order-independent for narrowing layers. A field omitted from a project JSON object is not an
+explicit request for its case-class default, which is why `ConfigLayer.defines` participates
+in tightening.
 
 Key bindings are separate from settings. Lookup uses project files, global files, then the
 live process environment; blank values are skipped. New key files use owner-only POSIX
@@ -722,11 +729,11 @@ Windows uses the directory's inherited NTFS ACL, which ATC does not rewrite or a
 the file under the private profile and check it with `icacls` on a shared machine.
 
 `Config.setTopLevel` preserves surrounding JSON formatting, BOMs and line endings, and
-`Config.editFile` leaves a file alone when an edit changes nothing. The
-`ObjectText` scanner operates only after JSON validation. Duplicate keys update the final
-occurrence, matching ujson's lookup, and a removal drops every occurrence. Writes use a
-temporary file and atomic replacement where supported, preserving POSIX permissions and
-resolving a configured symlink target.
+`Config.editFile` leaves a file alone when an edit changes nothing. The `ObjectText` scanner
+operates only after JSON validation. Duplicate keys update the final occurrence, matching
+ujson's lookup, and a removal drops every occurrence. Writes use a temporary file and atomic
+replacement where supported, preserving POSIX permissions and resolving a configured symlink
+target.
 
 ### Configuration reference
 
@@ -736,14 +743,15 @@ The user-facing settings not covered by the README.
 through `url`), `openai` (Chat Completions: Ollama, vLLM, OpenRouter, …), `chatgpt` (the
 models of a ChatGPT plan, signed in through the browser; see
 [Models and providers](#models-and-providers)), `claude-code` (the models of a Claude plan,
-through the user's signed-in Claude Code CLI; same section) or `echo` (keyless, for smoke tests). `key` is a literal or `${VAR}`, and `keyEnv` names a variable;
-variables resolve from the project's `.atc/keys.properties` (once the project is trusted),
-then `~/.atc/keys.properties`, then the environment. When neither `key` nor `keyEnv`
-resolves, the SDK's own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) applies only when
-`url` is unset; a gateway at a `url` that needs that key names it, as in
-`"key": "${ANTHROPIC_API_KEY}"`. `headers` are extra HTTP headers for every request; a value may be a
-`${VAR}` or `${ATC_SESSION}`, a random id of the conversation (renewed by `/new`) for
-gateways that route by session, such as OpenCode
+through the user's signed-in Claude Code CLI; same section) or `echo` (keyless, for smoke
+tests). `key` is a literal or `${VAR}`, and `keyEnv` names a variable; variables resolve from
+the project's `.atc/keys.properties` (once the project is trusted), then
+`~/.atc/keys.properties`, then the environment. When neither `key` nor `keyEnv` resolves, the
+SDK's own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) applies only when `url` is unset
+(`Providers.key`); a gateway at a `url` that needs that key names it, as in
+`"key": "${ANTHROPIC_API_KEY}"`. `headers` are extra HTTP headers for every request, model
+lists included; a value may be a `${VAR}` or `${ATC_SESSION}`, a random id of the
+conversation (renewed by `/new`) for gateways that route by session, such as OpenCode
 (`"x-opencode-session": "${ATC_SESSION}"`). Requests identify ATC as `atc/<version>` unless
 `headers` sets `User-Agent`.
 
@@ -776,10 +784,10 @@ or `reasoning` fields of a delta streams as reasoning whatever the style says.
 lists its own, each named `provider/model-id`: the last list each provider returned is kept
 in `~/.atc/model-lists.json`, a new one is fetched in the background once a session has
 started, and a provider that cannot be reached, or whose configured key is unset, is
-skipped. Anthropic's and DeepSeek's lists supply context windows and effort levels (DeepSeek's
-also the default effort), OpenRouter's and vLLM's the context window. A listed output limit
-is not taken, since it would be sent with every request and reserved from the window. Without `-m` or `model`, a session starts with the model last chosen with
-`/model`.
+skipped. Anthropic's and DeepSeek's lists supply context windows and effort levels
+(DeepSeek's also the default effort), OpenRouter's and vLLM's the context window. A listed
+output limit is not taken, since it would be sent with every request and reserved from the
+window. Without `-m` or `model`, a session starts with the model last chosen with `/model`.
 
 **First run.** An interactive start without `~/.atc/config.json` or `-c` runs `FirstRun`:
 the user chooses one of the `atc/providers.json` presets, gives its key unless one is
@@ -798,32 +806,31 @@ hides it; a disabled provider is never listed. `/providers` edits these switches
 model entries in place (`ObjectText.withMember` keeps the file's formatting). Choosing models
 for a provider that lists its own writes the ticked ones as entries with the display name,
 context window, efforts, default effort (`reasoning`) and `thinking` support the list
-reported, which makes them its shortlist;
-*Offer every model it lists* drops the entries again. A listed id with `/` gets an alias
-without one (`ProviderEdits.aliasFor`). A change goes to the last layer holding the
-longest part of its path (`ProviderEdits.owner`), because layers merge a model entry as a
-whole. A removal, such as dropping the entries or turning a provider back on, goes to every
-layer that holds the member (`ProviderEdits.files`), because layers merge a provider's
-`models` and `enabled` across files; dropping the entries names those files when it asks. A
-new provider goes to the global config. The configuration is then loaded again
-(a failure restores the files and loads them again) and the catalog rebuilt; a model in use
-that the change renamed moves to its new name. A provider or model in use, by the session or
-as `model`/`classifiedModel`, cannot be turned off, and a provider with a model in use keeps
-its entries. A `chatgpt` provider also offers *Sign in with ChatGPT*, which replaces the
-saved sign-in.
+reported, which makes them its shortlist; *Offer every model it lists* drops the entries
+again. A listed id with `/` gets an alias without one (`ProviderEdits.aliasFor`). A change
+goes to the last layer holding the longest part of its path (`ProviderEdits.owner`), because
+layers merge a model entry as a whole. A removal, such as dropping the entries or turning a
+provider back on, goes to every layer that holds the member (`ProviderEdits.files`), because
+layers merge a provider's `models` and `enabled` across files; dropping the entries names
+those files when it asks. A new provider goes to the global config. The catalog is rebuilt
+after the reload, and a model in use that the change renamed moves to its new name. A
+provider or model in use, by the session or as `model`/`classifiedModel`, cannot be turned
+off, and a provider with a model in use keeps its entries. A `chatgpt` provider also offers
+*Sign in with ChatGPT*, which replaces the saved sign-in.
 
 **Efforts.** `reasoning` is the effort a session starts with; `efforts` lists the ones the
 model accepts (by default every effort its api knows: `low` to `max` for Anthropic, `none`
 to `max` for OpenAI). `/effort [level]` switches the agent model's effort, and `default`
-sends no effort. The choice is saved as the top-level `effort` of the working directory's project
-config (when it has one, like `/model`'s `model`), which replaces the starting model's
-`reasoning` in later sessions; an effort that model does not take is ignored with a
+sends no effort. The choice is saved as the top-level `effort` of the working directory's
+project config (when it has one, like `/model`'s `model`), which replaces the starting
+model's `reasoning` in later sessions; an effort that model does not take is ignored with a
 warning. `/model` starts the new model at its configured effort and removes `effort`.
 
 **Web search.** A model's `webSearch` turns on the provider's own search tool; the
 top-level `webSearch` does so for every model that does not set its own. It applies in full
-mode only (`Models.useMode`), since read-only and local mode keep the agent off the network. It is best effort:
-when a provider rejects the tool, the model continues without it for the session.
+mode only (`Models.useMode`), since read-only and local mode keep the agent off the network.
+It is best effort: when a provider rejects the tool, the model continues without it for the
+session.
 
 **Notifications.** `notifications` is `auto` (the default: the terminal's own notifications
 in kitty, iTerm2, WezTerm, Ghostty and foot, a desktop notification on a local machine, the
@@ -837,12 +844,12 @@ Each file rule has a `path` pattern and may specify `access` (`none|read|write`)
 `classified`, and `locked`. Patterns follow gitignore-style conventions. A pattern without
 `/` matches a path **component** anywhere (`.env`, `*.pem`, `node_modules`). A relative
 pattern containing `/` is resolved against the working directory, or the project directory
-in a project configuration, and may contain `*`, `**`, `?`, or `[…]`. Absolute paths and
-paths beginning with `~/` remain absolute; `.` denotes the working directory itself. A
-rule applies to the matched path **and its entire subtree**. Effective access is the
-**minimum** granted by all matching rules, and no match means no access. A path is
-classified or locked if any matching rule says so, and a deeper rule can only make access
-more restrictive.
+in a project configuration, and may contain `*`, `**`, `?`, `[…]` or `{a,b}`. Absolute paths
+and paths beginning with `~/` remain absolute; `.` denotes the working directory itself. A
+rule applies to the matched path **and its entire subtree**. Every matching rule with an
+`access` caps the access at that level, so the strictest one wins; no match means no access,
+and a project rule grants only inside its project ([Policy algebra](#policy-algebra)). A
+path is classified or locked if any matching rule says so.
 
 **Classified** content is only observable as `Classified[String]`, and a classified
 directory's structure is classified too (listing it needs `childrenClassified`/`walkClassified`;
@@ -854,8 +861,9 @@ readable by name.
 
 `commands` contains patterns matched against the complete command line. `*` is a wildcard,
 and a pattern without `*` matches by word prefix (`"git status"` allows `git status --short`
-but not `git statusx`). A command also needs read access to the directory it runs in. A
-pre-approved command runs with the user's privileges and is *not* subject to the file rules.
+but not `git statusx`). Its working directory and redirected files still need file access
+([Host operations](#host-operations)), but a pre-approved command runs with the user's
+privileges and its own file access is *not* subject to the file rules.
 `hosts` are glob patterns on host names; only `http`/`https` URLs are accepted and redirects
 are not followed. `denyCommands` and `denyHosts` use the same syntax: a deny rule overrides
 every allow rule, including a session grant, an open `request*` scope, and `--approve-all`.
