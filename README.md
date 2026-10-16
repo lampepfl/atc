@@ -374,7 +374,7 @@ loosen the limits the global config sets, and cannot change a provider's address
 What it adds beyond its own files (pre-approved commands and hosts, a classified model,
 provider web search, the keys in its `.atc/keys.properties`) applies only after ATC has
 shown it to you and you chose to trust it; ATC asks again when that part changes.
-`/config` changes the settings that leave the sandbox alone (input prediction,
+`/config` changes the settings that cannot loosen the sandbox (input prediction,
 notifications, web search, compaction) for the session or in either file. The exact merge
 rules are in [doc/development.md](doc/development.md#configuration-semantics).
 
@@ -412,10 +412,12 @@ rules are in [doc/development.md](doc/development.md#configuration-semantics).
 `models`; leave `models` out and ATC lists the provider's own. `/providers` turns providers
 and their models on or off, or adds a provider. `/model` switches the model and `/effort`
 its reasoning effort, both remembered in the project config; `webSearch` turns on the
-provider's web search where it has one. **Keys** never go in a config: `"key": "${DEEPSEEK_API_KEY}"` names a variable set
-in `.atc/keys.properties` or in the environment. Set `classifiedModel` only for a model that
-runs in an isolated environment with no outward connection; without one, the default,
-classified data goes to no model. `/classifiedmodel` chooses one, or `none`. Every setting is described in
+provider's web search where it has one. **Keep real keys out of config files:**
+`"key": "${DEEPSEEK_API_KEY}"` names a variable set in `.atc/keys.properties` or in the
+environment, and a literal suits only a placeholder such as Ollama's. Set `classifiedModel`
+only for a model that runs in an isolated environment with no outward connection; without
+one, the default, classified data goes to no model. `/classifiedmodel` chooses one, or
+`none`. Every setting is described in
 [doc/development.md](doc/development.md#configuration-reference).
 
 **Files, commands and hosts.** A file rule has a gitignore-style `path` pattern (a bare
@@ -428,8 +430,9 @@ access. `commands` are patterns over the whole command line (`"git status"` also
 `denyCommands` and `denyHosts` use the same syntax and override every allow, session grant
 and open scope. A pre-approved command runs with your privileges and outside the file
 rules, so pre-approve the subcommands you mean rather than `git *`, and check their options:
-`git diff` and `git blame` can print any file, and `git log --output` can write one. Pattern details and
-Windows notes are in [doc/development.md](doc/development.md#file-rules-and-command-patterns).
+`git diff` and `git blame` can print any file, and `git log --output` can write one. Pattern
+details and Windows notes are in
+[doc/development.md](doc/development.md#file-rules-and-command-patterns).
 
 ## Security model
 
@@ -495,16 +498,16 @@ and the configured permissions.
 ## The terminal
 
 `/help` lists the slash commands, and typing `/` lists them under the prompt (↑/↓ select,
-Tab fills in, Enter runs). Ctrl-C interrupts the turn. Finished code runs fold
-to a summary (`/output <n>` shows one in full), and Ctrl-O switches to writing code, output
-and reasoning out in full, Shift-Tab cycles the mode, and Shift+Enter adds a line. While the
-agent is working, type a correction and press Enter: it reaches the agent before its next
-tool call. Sessions are saved after every turn, and the next start in the same directory
+Tab fills in, Enter runs). Ctrl-C interrupts the turn, Shift-Tab cycles the mode, and
+Shift-Enter adds a line. Finished code runs fold to a summary, and `/output <n>` shows one
+in full. Ctrl-O switches to writing code, output and reasoning out in full. While the agent
+is working, type a correction and press Enter: it reaches the agent before its next tool
+call. Sessions are saved after every turn, and the next start in the same directory
 offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
 reports whether it is working, waiting or done to terminals that track program status.
 
-Without a terminal (`-p` in a pipe) nothing asks: a permission the configuration does not
-grant fails instead of waiting, so use `--approve-all` only in a trusted setup.
+A `-p` run asks nothing: a permission the configuration does not grant fails instead of
+waiting. `--approve-all` approves such requests instead; use it only in a trusted setup.
 
 ## License
 
