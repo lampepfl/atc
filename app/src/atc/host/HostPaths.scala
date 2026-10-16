@@ -117,6 +117,14 @@ private[host] trait HostPaths:
         s"Access denied: '${PlatformPath.portable(path)}' is not a classified path; writing classified content there would declassify it."
       )
     ensureParent(path)
+    // `exists` works on classified paths, so the target is created before the
+    // computation is inspected: neither its failure nor content that cannot be
+    // encoded may decide whether the file exists afterwards.
+    try
+      if !Files.exists(path) then
+        Files.createFile(path)
+        ()
+    catch case NonFatal(_) => ()
     content match
       case Success(value) =>
         // Once the classified computation has been inspected, neither an I/O
@@ -124,15 +132,7 @@ private[host] trait HostPaths:
         // success/failure bit, and an exception can quote the content.
         try Files.writeString(path, value, StandardCharsets.UTF_8)
         catch case NonFatal(_) => classifiedSinkFailed(s"writing '$path'")
-      case Failure(_) =>
-        // Create the file as the successful branch would, since `exists` works
-        // on classified paths and would otherwise reveal the failure.
-        try
-          if !Files.exists(path) then
-            Files.createFile(path)
-            ()
-        catch case NonFatal(_) => ()
-        classifiedSinkFailed(s"writing '$path'")
+      case Failure(_) => classifiedSinkFailed(s"writing '$path'")
 
   /** Visible children paired with whether the original directory entry was a
     * symlink. Policy checks use canonical paths; gitignore checks use the entry. */

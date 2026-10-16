@@ -247,6 +247,20 @@ class ClassifiedSuite extends munit.FunSuite:
     assertEquals(env.agentOut.toString, "")
     assertEquals(env.userOut.toString.linesIterator.count(_.contains("writing")), 2)
 
+  test("writeClassified creates a new target even when the content cannot be encoded"):
+    // A lone surrogate fails UTF-8 encoding before the file is opened. Were the
+    // target created only on success, `exists` would reveal the secret predicate.
+    env.clearOutput()
+    def written(rel: String, prefix: String): Boolean =
+      val content =
+        readClassified("secrets/data.txt").map(s => if s.startsWith(prefix) then 0xd800.toChar.toString else "ok")
+      writeClassified(rel, content)
+      exists(rel)
+    assert(written("secrets/unencodable.txt", "TOP"))
+    assert(written("secrets/encodable.txt", "NOT"))
+    assertEquals(env.contents("secrets/encodable.txt"), "ok")
+    assertEquals(env.agentOut.toString, "")
+
   test("readClassified of an unreadable path fails inside the Classified"):
     val outside = TestEnv.outsideDir("nope")
     val c = readClassified(s"$outside/o.txt")

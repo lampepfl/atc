@@ -315,7 +315,9 @@ checking behavior.
 HTTP calls with classified headers or bodies return classified responses, preventing a
 server from reflecting a secret into ordinary output. Validate public parameters and
 permissions before inspecting classified values, and keep subsequent failures inside the
-classified result or user-only output.
+classified result or user-only output. Public state must not depend on the value either:
+`writeClassified` creates its target before inspecting the content, so `exists` gives the
+same answer when the computation failed or its text cannot be encoded.
 
 The data-flow argument relies on both parts of the API. `map` does not expose a plain
 result, and its callback cannot capture a full output capability. Deriving a Boolean from a
