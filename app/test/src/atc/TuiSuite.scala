@@ -57,14 +57,14 @@ class TuiSuite extends munit.FunSuite:
 
   test("cancelling a text answer clears JLine's interrupt before returning to the menu"):
     try
-      val answer = PromptReader.readAnswer {
+      val answer = PromptReader.answerOf {
         Thread.currentThread().interrupt()
         throw org.jline.reader.UserInterruptException("unfinished")
       }
       assertEquals(answer, None)
       assert(!Thread.currentThread().isInterrupted)
-      assertEquals(PromptReader.readAnswer(" revised instructions "), Some("revised instructions"))
-      assertEquals(PromptReader.readAnswer(throw org.jline.reader.EndOfFileException()), None)
+      assertEquals(PromptReader.answerOf(" revised instructions "), Some("revised instructions"))
+      assertEquals(PromptReader.answerOf(throw org.jline.reader.EndOfFileException()), None)
     finally Thread.interrupted()
 
   test("plain permission prompts require an exact approval and preserve qualified answers as instructions"):

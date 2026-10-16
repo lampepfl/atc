@@ -135,7 +135,7 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
     private val commandRows: java.util.function.Supplier[AttributedString] = () =>
       val (rows, index) = listState()
       val size = getTerminal.getSize
-      PromptReader.renderCommands(rows, index, screen.g.todo, size.getColumns, (size.getRows / 2).max(3).min(12))
+      PromptReader.renderCommands(rows, index, screen.g.pointer, size.getColumns, (size.getRows / 2).max(3).min(12))
     override protected def redisplay(flush: Boolean): Unit =
       if post == null || (post eq commandRows) then
         post = if !closing && listState()._1.nonEmpty then commandRows else null
@@ -159,88 +159,84 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
   // line-drawing escapes.
   reader.setVariable(LineReader.SECONDARY_PROMPT_PATTERN, "%P " + screen.styled("| ", Cyan, Bold))
 
-  if !plain then
+  /** The key map the bindings below go into. */
+  private val keyMap = reader.getKeyMaps.get(LineReader.MAIN)
+
+  if !plain && keyMap != null then
     val cycle: Widget = () =>
       if reader.getBuffer.length == 0 then
         reader.getBuffer.write(PromptReader.CycleModeLine)
         reader.callWidget(LineReader.ACCEPT_LINE)
       true
     reader.getWidgets.put("atc-cycle-mode", cycle)
-    // Shift-Tab: `kcbt` from the terminfo when present, plus the usual CSI Z sequence.
-    val keyMap = reader.getKeyMaps.get(LineReader.MAIN)
-    if keyMap != null then
-      val seqs =
-        (Option(KeyMap.key(terminal, InfoCmp.Capability.back_tab)).toList
-          :+ "\u001b[Z").distinct.filter(_.nonEmpty)
-      keyMap.bind(Reference("atc-cycle-mode"), seqs*)
-      def fallback(previous: Binding | Null): Boolean = previous match
-        case r: Reference => reader.callWidget(r.name); true
-        case w: Widget => w.apply()
-        case _ => true
-      /** Bind `keys` to `action`; when it declines, they do what they did before. */
-      def intercept(name: String, keys: List[String], previous: Binding | Null)(action: () => Boolean): Unit =
-        reader.getWidgets.put(name, (() => action() || fallback(previous)): Widget)
-        keyMap.bind(Reference(name), keys.distinct.filter(_.nonEmpty)*)
-      def key(capability: InfoCmp.Capability, fallbacks: String*): List[String] =
-        Option(KeyMap.key(terminal, capability)).toList ++ fallbacks
-      // Tab fills in the selected command while the command list is shown;
-      // Tab and → accept the ghost text (when the cursor is at the end and
-      // there is some); otherwise they do what they did before.
-      def acceptGhost(): Boolean =
-        val buf = reader.getBuffer
-        ghost(buf.toString) match
-          case Some(rest) if buf.cursor == buf.length => buf.write(rest); true
-          case _ => false
-      intercept("atc-accept-suggestion-tab", List("\t"), keyMap.getBound("\t")): () =>
-        fillSelected(withSpace = true) || acceptGhost()
-      intercept(
-        "atc-accept-suggestion-right",
-        key(InfoCmp.Capability.key_right, "\u001b[C", "\u001bOC"),
-        Reference(LineReader.FORWARD_CHAR),
-      )(() => acceptGhost())
-      // ↑ and ↓ move through the command list while it is shown, and otherwise
-      // browse the history as before.
-      def arrow(name: String, keys: List[String], delta: Int): Unit =
-        val previous = keyMap.getBound(keys.head)
-        intercept(name, keys, previous): () =>
-          moveSelection(delta) || {
-            fallback(previous)
-            listState()
-            recalled = true
-            true
-          }
-      arrow("atc-command-up", key(InfoCmp.Capability.key_up, "\u001b[A", "\u001bOA"), -1)
-      arrow("atc-command-down", key(InfoCmp.Capability.key_down, "\u001b[B", "\u001bOB"), 1)
+    /** What `capability` sends according to the terminfo, when it says, then the usual `fallbacks`. */
+    def key(capability: InfoCmp.Capability, fallbacks: String*): List[String] =
+      (Option(KeyMap.key(terminal, capability)).toList ++ fallbacks).distinct.filter(_.nonEmpty)
+    keyMap.bind(Reference("atc-cycle-mode"), key(InfoCmp.Capability.back_tab, "\u001b[Z")*) // Shift-Tab
+    def fallback(previous: Binding | Null): Boolean = previous match
+      case r: Reference => reader.callWidget(r.name); true
+      case w: Widget => w.apply()
+      case _ => true
+    /** Bind `keys` to `action`; when it declines, they do what they did before. */
+    def intercept(name: String, keys: List[String], previous: Binding | Null)(action: () => Boolean): Unit =
+      reader.getWidgets.put(name, (() => action() || fallback(previous)): Widget)
+      keyMap.bind(Reference(name), keys*)
+    // Tab fills in the selected command while the command list is shown;
+    // Tab and → accept the ghost text (when the cursor is at the end and
+    // there is some); otherwise they do what they did before.
+    def acceptGhost(): Boolean =
+      val buf = reader.getBuffer
+      ghost(buf.toString) match
+        case Some(rest) if buf.cursor == buf.length => buf.write(rest); true
+        case _ => false
+    intercept("atc-accept-suggestion-tab", List("\t"), keyMap.getBound("\t")): () =>
+      fillSelected(withSpace = true) || acceptGhost()
+    intercept(
+      "atc-accept-suggestion-right",
+      key(InfoCmp.Capability.key_right, "\u001b[C", "\u001bOC"),
+      Reference(LineReader.FORWARD_CHAR),
+    )(() => acceptGhost())
+    // ↑ and ↓ move through the command list while it is shown, and otherwise
+    // browse the history as before.
+    def arrow(name: String, keys: List[String], delta: Int): Unit =
+      val previous = keyMap.getBound(keys.head)
+      intercept(name, keys, previous): () =>
+        moveSelection(delta) || {
+          fallback(previous)
+          listState()
+          recalled = true
+          true
+        }
+    arrow("atc-command-up", key(InfoCmp.Capability.key_up, "\u001b[A", "\u001bOA"), -1)
+    arrow("atc-command-down", key(InfoCmp.Capability.key_down, "\u001b[B", "\u001bOB"), 1)
 
   // Multi-line input by key (the parser handles open brackets, block mode and
   // pastes): Enter on a line ending in `\` turns the backslash into a newline
   // (typed by hand, or how terminals set up to send `\`+Enter for Shift+Enter
   // arrive), and a Shift+Enter / Alt+Enter the terminal reports as such
   // inserts one directly. Bound in every mode: piped input uses it too.
-  locally:
-    val keyMap = reader.getKeyMaps.get(LineReader.MAIN)
-    if keyMap != null then
-      val newline: Widget = () => { reader.getBuffer.write("\n"); true }
-      val enter: Widget = () =>
-        val buf = reader.getBuffer
-        if buf.length > 0 && buf.atChar(buf.length - 1) == '\\' then
-          buf.cursor(buf.length)
-          buf.backspace()
-          buf.write("\n")
-          // VS Code's Shift+Enter (as Claude Code's terminal setup binds it)
-          // sends `\`, CR, LF: drop the LF, or it would submit the new empty line.
-          if reader.getLastBinding == "\r" && reader.peekCharacter(50) == '\n' then reader.readCharacter()
-          true
-        else
-          fillSelected(withSpace = false)
-          reader.callWidget(LineReader.ACCEPT_LINE)
-          true
-      reader.getWidgets.put("atc-newline", newline)
-      reader.getWidgets.put("atc-enter", enter)
-      keyMap.bind(Reference("atc-enter"), "\r", "\n")
-      // Shift+Enter as CSI u (kitty, Ghostty, WezTerm, foot, iTerm2 with it
-      // on), as xterm's modifyOtherKeys, and Alt/Option+Enter as ESC CR.
-      keyMap.bind(Reference("atc-newline"), "\u001b[13;2u", "\u001b[27;2;13~", "\u001b\r")
+  if keyMap != null then
+    val newline: Widget = () => { reader.getBuffer.write("\n"); true }
+    val enter: Widget = () =>
+      val buf = reader.getBuffer
+      if buf.length > 0 && buf.atChar(buf.length - 1) == '\\' then
+        buf.cursor(buf.length)
+        buf.backspace()
+        buf.write("\n")
+        // VS Code's Shift+Enter (as Claude Code's terminal setup binds it)
+        // sends `\`, CR, LF: drop the LF, or it would submit the new empty line.
+        if reader.getLastBinding == "\r" && reader.peekCharacter(50) == '\n' then reader.readCharacter()
+        true
+      else
+        fillSelected(withSpace = false)
+        reader.callWidget(LineReader.ACCEPT_LINE)
+        true
+    reader.getWidgets.put("atc-newline", newline)
+    reader.getWidgets.put("atc-enter", enter)
+    keyMap.bind(Reference("atc-enter"), "\r", "\n")
+    // Shift+Enter as CSI u (kitty, Ghostty, WezTerm, foot, iTerm2 with it
+    // on), as xterm's modifyOtherKeys, and Alt/Option+Enter as ESC CR.
+    keyMap.bind(Reference("atc-newline"), "\u001b[13;2u", "\u001b[27;2;13~", "\u001b\r")
 
   // Called in raw mode: after `readLine` enters it (and installs its SIGINT
   // handler, which it restores on leaving), and on Enter before it leaves it.
@@ -285,11 +281,11 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
 
   /** Read a typed answer, kept out of the prompt history; `None` when it is empty or cancelled. */
   def readAnswer(prompt: String): Option[String] =
-    withoutHistory(PromptReader.readAnswer(read(prompt, "", commands = false)))
+    withoutHistory(PromptReader.answerOf(read(prompt, "", commands = false)))
 
   /** Read a secret: echoed as `*` and kept out of the history. */
   def readSecret(prompt: String): Option[String] =
-    try withoutHistory(PromptReader.readAnswer(reader.readLine(prompt, Character.valueOf('*'))))
+    try withoutHistory(PromptReader.answerOf(reader.readLine(prompt, Character.valueOf('*'))))
     finally alerts.reportFocus(false)
 
   private def withoutHistory[T](body: => T): T =
@@ -356,8 +352,9 @@ private[atc] object PromptReader:
       text.append(line.toAttributedString.nn.columnSubSequence(0, (width - 1).max(1)))
     text.toAttributedString.nn
 
-  /** Cancel the input field and consume JLine's interrupt before another prompt reads. */
-  private[atc] def readAnswer(read: => String): Option[String] =
+  /** What `read` returns, trimmed; `None` when it is empty or cancelled. A cancelled read's
+    * interrupt is consumed, so another prompt can read. */
+  private[atc] def answerOf(read: => String): Option[String] =
     try Some(read).map(_.trim).filter(_.nonEmpty)
     catch
       case _: UserInterruptException =>
