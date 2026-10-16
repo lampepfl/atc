@@ -1,7 +1,7 @@
 package atc
 
 import atc.config.*
-import atc.perms.{Access, Decision, GlobMatcher, Policy}
+import atc.perms.{Access, Decision, GlobMatcher, Mode, Policy}
 
 import java.nio.file.{Files, Path}
 
@@ -479,6 +479,12 @@ class ConfigSuite extends munit.FunSuite:
     val c = upickle.default.read[Config](ujson.read(json))
     assert(c.providers.nonEmpty, "template should define providers")
     assert(c.files.nonEmpty, "template should define file rules")
+
+  test("the settings the starting config shows are the code defaults"):
+    val start = ConfigLayer.bundled.config
+    assertEquals(start.mode, Some(Mode.Full.label), "the mode an unset one stands for")
+    val shown = start.copy(providers = Map.empty, files = Nil, denyCommands = Nil, denyHosts = Nil, mode = None)
+    assertEquals(shown, Config())
 
   // ── editing a config in place (`/model` remembers the choice) ───
 
