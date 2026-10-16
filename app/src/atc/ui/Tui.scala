@@ -598,7 +598,7 @@ object Tui:
     * when Windows redirects stdin/stdout (as CI and normal pipelines do).
     * There is no grapheme-cluster probing: it sends a DECRQM query to the terminal
     * and waits for a reply, which swallows early input on ptys that do not answer. */
-  private[atc] def openTerminal(
+  private[ui] def openTerminal(
     nonInteractive: Boolean,
     input: InputStream = System.in.nn,
     output: OutputStream = System.out.nn,
@@ -608,7 +608,7 @@ object Tui:
 
   /** Choose safe layout characters. Dumb/non-interactive terminals may report
     * no encoding at all, in which case ASCII is the only sound default. */
-  private[atc] def glyphs(encoding: Charset | Null, forceAscii: Boolean): Glyphs =
+  private[ui] def glyphs(encoding: Charset | Null, forceAscii: Boolean): Glyphs =
     if !forceAscii && Option(encoding).exists(_.name.nn.toUpperCase(Locale.ROOT).contains("UTF")) then Glyphs.unicode
     else Glyphs.ascii
 

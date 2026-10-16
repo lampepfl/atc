@@ -153,13 +153,13 @@ private[ui] final class StatusLine(
     screen.synchronized(screen.flush())
     footer.foreach(_.close())
 
-private[atc] object StatusLine:
+private[ui] object StatusLine:
   /** A Program Status Protocol report's fields. */
   private type Program = (state: String, kind: String, message: String)
 
   /** A Program Status Protocol report (OSC 7501): `key=value` pairs, the message on one
     * line and Base64-encoded. Terminals without the protocol ignore it. */
-  private[atc] def programStatus(state: String, kind: String, message: String): String =
+  private[ui] def programStatus(state: String, kind: String, message: String): String =
     val text = Base64.getEncoder.nn.encodeToString(Notifier.clean(message).getBytes(UTF_8)).nn
     List("state" -> state, "kind" -> kind, "app" -> "atc", "msg" -> text)
       .collect { case (key, value) if value.nonEmpty => s"$key=$value" }
@@ -170,6 +170,6 @@ private[atc] object StatusLine:
     * writer, and a terminal honouring mode 2026 (xterm.js/VS Code, iTerm2, kitty, Ghostty,
     * WezTerm) keeps rendering frozen until something else flushes: each footer repainted
     * from the input-poll clock would stall the whole window for up to a poll interval. */
-  private[atc] def draw(terminal: Terminal, status: Status, text: String): Unit =
+  private[ui] def draw(terminal: Terminal, status: Status, text: String): Unit =
     status.update(List(AttributedString(text)).asJava)
     terminal.writer().flush()

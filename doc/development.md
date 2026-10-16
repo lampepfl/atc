@@ -1328,7 +1328,7 @@ menus and answer fields replace it with the applicable keyboard controls.
 Every footer update goes through `StatusLine.draw`, which flushes the terminal writer after
 JLine's `Status.update`: JLine leaves the closing synchronized-output sequence
 (`ESC[?2026l`) buffered, and a terminal that honours mode 2026 freezes rendering until it
-arrives (`TuiSuite` checks the closer is written). Before a clear (`/new`, Ctrl-L),
+arrives (`StatusLineSuite` checks the closer is written). Before a clear (`/new`, Ctrl-L),
 `Screen.beforeClear` lifts the footer's scroll region and erases its row, because VS Code
 moves a cleared window into the scrollback and only the rows inside the scroll region.
 
@@ -1348,7 +1348,7 @@ with newlines shown as spaces, since a row that wrapped would take two terminal 
 shift every later redraw. `Screen.fit` stops scanning once the row is full, so a very long
 output line costs no more than a short one. Live regions erase lines, never to the end of
 the screen, so updating one cannot erase the footer. Footer work runs on state changes and
-the input loop's clock; writing text does not redraw the footer. `TuiSuite` checks preview
+the input loop's clock; writing text does not redraw the footer. `ScreenSuite` checks preview
 growth, replacement, shrinkage and clearing while preserving a footer outside the owned
 rows. Process events wait while a pop-up is open, and during a turn until a tool block
 opens, where they join its output, or the turn ends, since written into streaming prose

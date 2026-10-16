@@ -149,9 +149,9 @@ private[ui] final class KeyReader(
             reading = false
             pauseLock.notifyAll()
 
-private[atc] object KeyReader:
+private[ui] object KeyReader:
   /** Consume CSI/SS3 bytes after ESC, stopping on a final byte, EOF or timeout. */
-  private[atc] def readEscapeSequence(read: () => Int): String =
+  private[ui] def readEscapeSequence(read: () => Int): String =
     val result = StringBuilder()
     def next(): Int =
       try

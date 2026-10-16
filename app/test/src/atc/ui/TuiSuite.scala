@@ -1,6 +1,6 @@
-package atc
+package atc.ui
 
-import atc.ui.{Ansi, Format, Glyphs, TailBuffer, Tui}
+import atc.TestEnv
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.nio.charset.StandardCharsets
@@ -151,7 +151,7 @@ class TuiSuite extends munit.FunSuite:
 
   // ── multi-line input (Continuation) ───────────────────────────────
 
-  import atc.ui.Continuation.{pending, unclosed}
+  import Continuation.{pending, unclosed}
 
   test("unclosed: brackets nest, innermost first; balanced code leaves nothing open"):
     assertEquals(unclosed("foo(a, List(1"), List(")", ")"))

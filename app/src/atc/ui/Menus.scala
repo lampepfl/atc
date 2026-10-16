@@ -21,7 +21,7 @@ private[atc] object Menus:
   val BackLabel = "Back"
 
   /** Plain permission prompts accept exact approvals; every other answer is feedback. */
-  private[atc] def permissionReply(answer: Option[String]): Decision =
+  private[ui] def permissionReply(answer: Option[String]): Decision =
     answer.map(_.trim).filter(_.nonEmpty) match
       case None => Decision.Deny
       case Some(text) => text.toLowerCase(Locale.ROOT) match

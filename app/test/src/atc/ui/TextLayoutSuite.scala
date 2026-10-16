@@ -1,6 +1,4 @@
-package atc
-
-import atc.ui.{Ansi, Screen, TextLayout}
+package atc.ui
 
 class TextLayoutSuite extends munit.FunSuite:
   private def plain(text: String): String = Ansi.Sgr.replaceAllIn(text, "")

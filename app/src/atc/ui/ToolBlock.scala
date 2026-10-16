@@ -301,7 +301,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       outputStarted = false
       shownFrom = output.lineCount
 
-private[atc] object ToolBlock:
+private[ui] object ToolBlock:
   /** Rows of code and of output tail a running block shows in the compact view. */
   private val CodePreviewRows = 8
   private val OutputTailRows = 10
@@ -310,7 +310,7 @@ private[atc] object ToolBlock:
     * what the REPL wrote besides the agent's own prints. A compiler diagnostic's
     * heading (`-- [E007] Type Mismatch Error: ----`) loses its rule, and one without
     * an error code (`-- Error: ----`) gives way to its first message line. */
-  private[atc] def firstProblem(r: ExecutionResult, printed: String): Option[String] =
+  private[ui] def firstProblem(r: ExecutionResult, printed: String): Option[String] =
     def first(text: String): Option[String] =
       val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toList
       lines.headOption.map: line =>

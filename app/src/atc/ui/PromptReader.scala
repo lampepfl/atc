@@ -307,18 +307,18 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
     try reader.getHistory.save()
     catch case _: Exception => ()
 
-private[atc] object PromptReader:
+private[ui] object PromptReader:
   /** The line `readLine` returns when the user presses Shift-Tab on an empty
     * prompt: the app treats it as the `/mode` command (cycle the sandbox mode). */
   val CycleModeLine: String = "/mode"
 
   /** The command a usage line names: `/model` for `/model [ref]`. */
-  private[atc] def commandName(usage: String): String = usage.takeWhile(_ != ' ')
+  private[ui] def commandName(usage: String): String = usage.takeWhile(_ != ' ')
 
   /** The rows of `commands` (usage, description) to list under a prompt holding
     * `buffer`: those whose name starts with it, while it is a single word
     * starting with `/`. */
-  private[atc] def matchingCommands(buffer: String, commands: List[(String, String)]): List[(String, String)] =
+  private[ui] def matchingCommands(buffer: String, commands: List[(String, String)]): List[(String, String)] =
     if !buffer.startsWith("/") || buffer.exists(_.isWhitespace) then Nil
     else
       val typed = buffer.toLowerCase(Locale.ROOT)
@@ -326,7 +326,7 @@ private[atc] object PromptReader:
 
   /** At most `height` of `rows`, scrolled to show `selected`, in aligned columns
     * cut to `width`; the selected row is highlighted and marked with `marker`. */
-  private[atc] def renderCommands(
+  private[ui] def renderCommands(
     rows: List[(String, String)],
     selected: Int,
     marker: String,
@@ -356,7 +356,7 @@ private[atc] object PromptReader:
 
   /** What `read` returns, trimmed; `None` when it is empty or cancelled. A cancelled read's
     * interrupt is consumed, so another prompt can read. */
-  private[atc] def answerOf(read: => String): Option[String] =
+  private[ui] def answerOf(read: => String): Option[String] =
     try Some(read).map(_.trim).filter(_.nonEmpty)
     catch
       case _: UserInterruptException =>
@@ -368,7 +368,7 @@ private[atc] object PromptReader:
     * make it owner-only on POSIX systems: user prompts can contain secrets.
     * Returning a path under the resolved parent also prevents a parent symlink
     * from being swapped after this check. */
-  private[atc] def secureHistoryFile(path: Path): Path =
+  private[ui] def secureHistoryFile(path: Path): Path =
     val absolute = path.toAbsolutePath.nn.normalize.nn
     val parent = Option(absolute.getParent).getOrElse(
       throw IllegalArgumentException(s"history path has no parent: $path")

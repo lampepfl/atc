@@ -1,6 +1,5 @@
-package atc
+package atc.ui
 
-import atc.ui.Notifier
 import atc.ui.Notifier.Osc
 
 class NotifierSuite extends munit.FunSuite:
@@ -59,7 +58,6 @@ class NotifierSuite extends munit.FunSuite:
 
   test("turn alerts lead with the reply, or say why the turn stopped"):
     import atc.agent.TurnOutcome
-    import atc.ui.{Alerts, Tui}
     def stats(outcome: TurnOutcome) = Tui.TurnStats(42, 3, 100, 1000, None, outcome)
     assertEquals(Alerts.turnText(stats(TurnOutcome.Finished), "All **tests** pass.", ""), "All tests pass.")
     assertEquals(Alerts.turnText(stats(TurnOutcome.Finished), "", ""), "Finished in 42 s")

@@ -1,8 +1,7 @@
-package atc
+package atc.ui
 
-import atc.ui.ToolHistory
-import atc.sandbox.ExecutionResult
 import atc.host.FileChange
+import atc.sandbox.ExecutionResult
 
 class ToolHistorySuite extends munit.FunSuite:
   test("retained output and file previews remain available without rerunning tools"):

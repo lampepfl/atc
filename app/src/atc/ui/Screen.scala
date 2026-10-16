@@ -203,7 +203,7 @@ private[ui] final class Screen(val terminal: Terminal, val plain: Boolean, val g
 object Screen:
   /** Replace owned rows with the cursor initially just below them. Leave everything below
     * that region intact and finish immediately below the replacement. */
-  private[atc] def replaceRows(before: List[String], after: List[String], force: Boolean = false): String =
+  private[ui] def replaceRows(before: List[String], after: List[String], force: Boolean = false): String =
     val prefix = if force then 0 else before.zip(after).takeWhile((a, b) => a == b).size
     val update = StringBuilder()
     if before.size > prefix then update.append(s"\r${Ansi.Esc}[${before.size - prefix}A")
@@ -266,7 +266,7 @@ object Screen:
     w
 
   /** The end of the SGR sequence (`ESC [ … m`) starting at `i`, or -1 when there is none. */
-  private[atc] def sgrEnd(s: String, i: Int): Int =
+  private[ui] def sgrEnd(s: String, i: Int): Int =
     if i + 1 < s.length && s.charAt(i) == '\u001b' && s.charAt(i + 1) == '[' then
       var k = i + 2
       while k < s.length && (s.charAt(k).isDigit || s.charAt(k) == ';') do k += 1

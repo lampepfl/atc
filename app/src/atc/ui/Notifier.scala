@@ -80,7 +80,7 @@ object Notifier:
   /** The OSC sequence the running terminal is known to display, from the
     * variables terminals set. Inside tmux these name the outer terminal only
     * when the session was started from it, which is the common case. */
-  private[atc] def terminalOsc(env: String => Option[String]): Option[Osc] =
+  private[ui] def terminalOsc(env: String => Option[String]): Option[Osc] =
     val program = env("TERM_PROGRAM").getOrElse("").toLowerCase(Locale.ROOT)
     val term = env("TERM").getOrElse("")
     if env("KITTY_WINDOW_ID").isDefined || term == "xterm-kitty" then Some(Osc.Kitty)
@@ -90,7 +90,7 @@ object Notifier:
 
   /** Markdown as plain prose for a notification: code blocks, heading and
     * list markers, emphasis and backticks removed, lines joined. */
-  private[atc] def plainText(markdown: String): String =
+  private[ui] def plainText(markdown: String): String =
     var inFence = false
     markdown.linesIterator
       .filter: line =>
@@ -103,7 +103,7 @@ object Notifier:
       .mkString(" ")
 
   /** The text as one line with single spaces, without control characters or anything past [[MaxChars]]. */
-  private[atc] def clean(text: String): String =
+  private[ui] def clean(text: String): String =
     val line = Ansi.sanitize(text).replaceAll("\\s+", " ").nn.trim
     if line.length <= MaxChars then line else line.take(MaxChars - 1) + "…"
 
@@ -116,7 +116,7 @@ object Notifier:
   /** The command that shows a system notification. The text travels as
     * arguments (macOS, Linux) or inside a Base64-encoded script (Windows), so
     * nothing is interpreted by a shell. */
-  private[atc] def systemCommand(title: String, body: String): List[String] =
+  private[ui] def systemCommand(title: String, body: String): List[String] =
     if Platform.isMac then
       List(
         "osascript",

@@ -4,7 +4,7 @@ import org.jline.utils.AttributedString
 
 /** Width-aware wrapping for complete terminal lines. SGR styles, the only sequences in
   * text that reaches the screen, do not consume columns. */
-private[atc] object TextLayout:
+private[ui] object TextLayout:
   /** `text` in rows of at most `columns` cells. Every row is written from screen column
     * `origin`, after a gutter or indent, and the terminal's tab stops count from column 0. */
   def wrap(text: String, columns: Int, origin: Int = 0): List[String] =

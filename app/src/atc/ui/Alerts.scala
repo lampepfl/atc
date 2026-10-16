@@ -109,7 +109,7 @@ private[ui] final class Alerts(
     take()
     reportFocus(false)
 
-private[atc] object Alerts:
+private[ui] object Alerts:
   /** How long a question or permission request waits for input or focus before it notifies the user. */
   val QuestionDelayMillis: Long = 10_000L
   /** The same for a finished turn, whose answer may take a while to read. */
@@ -120,7 +120,7 @@ private[atc] object Alerts:
   /** The alert text for an ended turn: the start of the agent's last reply,
     * after the outcome unless the turn finished normally, or the error that
     * ended it. The outcome and duration alone when there is neither. */
-  private[atc] def turnText(stats: Tui.TurnStats, prose: String, error: String): String =
+  private[ui] def turnText(stats: Tui.TurnStats, prose: String, error: String): String =
     val outcome = stats.outcome.label.capitalize
     val reply = Notifier.plainText(prose)
     stats.outcome match

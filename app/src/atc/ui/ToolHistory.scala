@@ -4,7 +4,7 @@ import atc.host.FileChange
 import atc.sandbox.ExecutionResult
 
 /** Recent model-visible output and file previews. Classified terminal text is never stored. */
-private[atc] final class ToolHistory(maxChars: Int = 8 * 1024 * 1024, maxEntries: Int = 20):
+private[ui] final class ToolHistory(maxChars: Int = 8 * 1024 * 1024, maxEntries: Int = 20):
   import ToolHistory.Entry
   require(maxChars > 0 && maxEntries > 0, "Tool history limits must be positive")
 
@@ -38,7 +38,7 @@ private[atc] final class ToolHistory(maxChars: Int = 8 * 1024 * 1024, maxEntries
   def latest: Option[Entry] = entries.lastOption
   def clear(): Unit = entries = Vector.empty
 
-private[atc] object ToolHistory:
+private[ui] object ToolHistory:
   final case class Entry(
     id: Int,
     code: String,

@@ -5,9 +5,9 @@ import atc.platform.Platform
 
 import java.nio.file.{Files, Path}
 
-/** Small native-tool checks kept apart from the portable process contract in
-  * [[PermissionSuite]]. */
-class UnixProcessIntegrationSuite extends munit.FunSuite:
+/** Native-tool checks for one platform each, kept apart from the portable process
+  * contract in [[PermissionSuite]]. */
+class PlatformProcessSuite extends munit.FunSuite:
   test("a real Unix pipeline is connected and reports pipefail"):
     assume(!Platform.isWindows)
     val env = TestEnv(commands = List("printf", "tr", "cat", "false"))
@@ -15,7 +15,6 @@ class UnixProcessIntegrationSuite extends munit.FunSuite:
     assertEquals(env.host.exec("printf hello | tr a-z A-Z | cat").stdout, "HELLO")
     assertEquals(env.host.exec("false | cat").exitCode, 1)
 
-class WindowsProcessIntegrationSuite extends munit.FunSuite:
   test("the low-level process boundary always enables strict Windows quoting"):
     assume(Platform.isWindows)
     System.setProperty("jdk.lang.Process.allowAmbiguousCommands", "true")
