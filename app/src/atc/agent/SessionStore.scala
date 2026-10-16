@@ -66,23 +66,26 @@ private[atc] object SessionStore:
     if bytes.length > MaxBytes then throw IllegalArgumentException("Saved session exceeds the 8 MiB limit")
     decode(String(bytes, UTF_8))
 
+  /** A neutral message as saved sessions and the compaction transcript write it, without
+    * native replay payloads or the internal `needsReplan` flag. */
+  private[agent] def messageJson(message: Msg): ujson.Obj = message match
+    case Msg.User(text) => ujson.Obj("role" -> "user", "text" -> text)
+    case Msg.Continuation(text) => ujson.Obj("role" -> "continuation", "text" -> text)
+    case Msg.Assistant(text, calls, _) =>
+      val entries = calls.map(call => ujson.Obj("id" -> call.id, "name" -> call.name, "arguments" -> call.arguments))
+      ujson.Obj("role" -> "assistant", "text" -> text, "calls" -> ujson.Arr.from(entries))
+    case Msg.ToolResults(results) =>
+      val entries =
+        results.map(result => ujson.Obj("id" -> result.callId, "output" -> result.output, "error" -> result.isError))
+      ujson.Obj("role" -> "tools", "results" -> ujson.Arr.from(entries))
+
   private[atc] def encode(session: SessionSnapshot): String =
     def strings(values: List[String]): ujson.Arr = ujson.Arr.from(values)
-    val messages = session.history.map:
-      case Msg.User(text) => ujson.Obj("role" -> "user", "text" -> text)
-      case Msg.Continuation(text) => ujson.Obj("role" -> "continuation", "text" -> text)
-      case Msg.Assistant(text, calls, _) =>
-        val entries = calls.map(call => ujson.Obj("id" -> call.id, "name" -> call.name, "arguments" -> call.arguments))
-        ujson.Obj("role" -> "assistant", "text" -> text, "calls" -> ujson.Arr.from(entries))
-      case Msg.ToolResults(results) =>
-        val entries =
-          results.map(result => ujson.Obj("id" -> result.callId, "output" -> result.output, "error" -> result.isError))
-        ujson.Obj("role" -> "tools", "results" -> ujson.Arr.from(entries))
     ujson.write(
       ujson.Obj(
         "version" -> 1,
         "model" -> session.model,
-        "history" -> ujson.Arr.from(messages),
+        "history" -> ujson.Arr.from(session.history.map(messageJson)),
         "pendingNotes" -> strings(session.pendingNotes),
         "userRequests" -> strings(session.userRequests),
         "task" -> ujson.Obj(

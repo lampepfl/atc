@@ -16,16 +16,8 @@ private[agent] object ContextCompaction:
       "Include relevant earlier summaries. Be concise, aim for at most 1000 words, and omit bulky output."
 
   def transcript(history: List[Msg], focus: String): List[Msg] =
-    val entries = history.map:
-      case Msg.User(text) => ujson.Obj("role" -> "user", "text" -> text)
-      case Msg.Continuation(text) => ujson.Obj("role" -> "continuation", "text" -> text)
-      case Msg.Assistant(text, calls, _) =>
-        val entries = calls.map(c => ujson.Obj("id" -> c.id, "name" -> c.name, "arguments" -> c.arguments))
-        ujson.Obj("role" -> "assistant", "text" -> text, "calls" -> ujson.Arr.from(entries))
-      case Msg.ToolResults(results) =>
-        val entries = results.map(r => ujson.Obj("id" -> r.callId, "output" -> r.output, "isError" -> r.isError))
-        ujson.Obj("role" -> "tool", "results" -> ujson.Arr.from(entries))
-    List(Msg.User(s"Summary focus: $focus\n\nTranscript:\n${ujson.write(ujson.Arr.from(entries))}"))
+    val entries = ujson.Arr.from(history.map(SessionStore.messageJson))
+    List(Msg.User(s"Summary focus: $focus\n\nTranscript:\n${ujson.write(entries)}"))
 
   def replacement(summary: String, retained: String): List[Msg] = List(
     Msg.User(
