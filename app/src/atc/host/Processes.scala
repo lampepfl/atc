@@ -50,7 +50,7 @@ object Processes:
     * result) and a background `spawn` (talk to it, read as it goes) are built on it. */
   final class ManagedProcess private (
     procs: List[java.lang.Process],
-    val stageLines: List[String],
+    stageLines: List[String],
     val line: String,
     private val stdoutBuf: OutputBuffer,
     private val stderrBufs: List[OutputBuffer],
@@ -246,12 +246,6 @@ object Processes:
       thread.setDaemon(true)
       thread.start()
       thread
-
-  /** Start `pb`, capture both streams (capped), enforce the timeout; with `live`,
-    * show the output as it comes once the command has run for [[LiveAfterMs]].
-    * Single-stage convenience over the pipeline form. */
-  def run(pb: ProcessBuilder, name: String, timeoutMs: Long, live: Option[LiveOutput] = None): ProcessResult =
-    run(List(pb), List(name), name, timeoutMs, live, "")
 
   /** Run a pipeline to completion: start the stages (see [[ManagedProcess.start]]),
     * feed `stdin` to the first and close it, wait at most `timeoutMs` for every

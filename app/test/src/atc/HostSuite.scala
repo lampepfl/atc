@@ -693,7 +693,7 @@ class HostSuite extends munit.FunSuite:
       def begin(): Unit = begun += System.nanoTime()
       def output(text: String): Unit = seen.synchronized(seen.append(text))
     def sh(script: String) =
-      Processes.run(ProcessBuilder("sh", "-c", script), "sh", 10_000L, Some(live))
+      ProcessFixture.run(ProcessBuilder("sh", "-c", script), "sh", 10_000L, Some(live))
     val quick = sh("echo quick")
     assertEquals(quick.stdout, "quick\n")
     assertEquals(begun.size, 0) // done before the live threshold: nothing shown

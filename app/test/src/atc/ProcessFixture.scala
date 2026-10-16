@@ -1,6 +1,7 @@
 package atc
 
-import atc.host.CommandLine
+import atc.host.{CommandLine, Processes}
+import atc.lib.ProcessResult
 import atc.platform.Platform
 
 import java.io.InputStream
@@ -66,3 +67,7 @@ object ProcessFixture:
   def command(mode: String, args: String*): String = line((base ++ (mode +: args))*)
 
   def pattern(mode: String): String = CommandLine.parsePipeline(command(mode)).stages.head.line
+
+  /** Run one process to completion with [[Processes.run]]. */
+  def run(pb: ProcessBuilder, name: String, timeoutMs: Long, live: Option[Processes.LiveOutput] = None): ProcessResult =
+    Processes.run(List(pb), List(name), name, timeoutMs, live, "")

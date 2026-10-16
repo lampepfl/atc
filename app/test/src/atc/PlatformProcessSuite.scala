@@ -1,6 +1,6 @@
 package atc
 
-import atc.host.{CommandLine, Processes, WindowsExecutable}
+import atc.host.{CommandLine, WindowsExecutable}
 import atc.lib.{Exec, FileSystem}
 import atc.platform.Platform
 
@@ -23,7 +23,7 @@ class WindowsProcessIntegrationSuite extends munit.FunSuite:
     assume(Platform.isWindows)
     System.setProperty("jdk.lang.Process.allowAmbiguousCommands", "true")
     val argv = CommandLine.parseCommandLine(ProcessFixture.command("echo", "strict"))
-    val result = Processes.run(ProcessBuilder(argv*), "test process", 10_000L)
+    val result = ProcessFixture.run(ProcessBuilder(argv*), "test process", 10_000L)
     assertEquals(result.stdout.trim, "strict")
     assertEquals(System.getProperty("jdk.lang.Process.allowAmbiguousCommands"), "false")
 
