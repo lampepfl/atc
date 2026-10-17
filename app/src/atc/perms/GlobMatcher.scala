@@ -50,40 +50,6 @@ object GlobMatcher:
     else if p.contains('*') then matches(command, p)
     else command == p || command.startsWith(p + " ")
 
-  /** Whether some command line matches both patterns under [[matchesCommand]]. A pattern
-    * without `*` stands for its own text and for that text followed by a space and anything. */
-  def commandsOverlap(a: String, b: String): Boolean =
-    def forms(pattern: String): List[(String, Boolean)] =
-      val p = normalizeCommand(pattern.trim)
-      if p.isEmpty then Nil
-      else if p.contains('*') then List((p, false))
-      else List((p, false), (p + " ", true))
-    forms(a).exists((x, xOpen) => forms(b).exists((y, yOpen) => globsOverlap(x, xOpen, y, yOpen)))
-
-  /** Whether some host name matches both patterns under [[matchesHost]]. */
-  def hostsOverlap(a: String, b: String): Boolean = globsOverlap(normalizeHost(a), false, normalizeHost(b), false)
-
-  /** Whether some string matches both globs under [[matches]]. An open glob also matches
-    * any continuation of what it matches, line terminators included. `reached(i)(j)` holds
-    * when one string can take `a` up to index `i` and `b` up to `j`; a `*` at `i` or `j` may
-    * then still consume characters. */
-  private def globsOverlap(a: String, aOpen: Boolean, b: String, bOpen: Boolean): Boolean =
-    def star(s: String, k: Int) = k < s.length && s.charAt(k) == '*'
-    // A character that a `*` of the other glob may consume.
-    def plain(s: String, k: Int) = !star(s, k) && !regexLineTerminator(s.charAt(k))
-    val reached = Array.ofDim[Boolean](a.length + 1, b.length + 1)
-    for i <- 0 to a.length; j <- 0 to b.length do
-      reached(i)(j) =
-        (i == 0 && j == 0) ||
-          (i > 0 && star(a, i - 1) && reached(i - 1)(j)) ||
-          (j > 0 && star(b, j - 1) && reached(i)(j - 1)) ||
-          (i > 0 && j > 0 && !star(a, i - 1) && a.charAt(i - 1) == b.charAt(j - 1) && reached(i - 1)(j - 1)) ||
-          (j > 0 && star(a, i) && plain(b, j - 1) && reached(i)(j - 1)) ||
-          (i > 0 && star(b, j) && plain(a, i - 1) && reached(i - 1)(j))
-    (0 to a.length).exists: i =>
-      (0 to b.length).exists: j =>
-        reached(i)(j) && ((i == a.length && (j == b.length || aOpen)) || (j == b.length && bOpen))
-
   /** Win32 command names and extensions are case-insensitive. The standard executable and script
     * suffixes are spelling details too, so a deny on `git push*` cannot be bypassed as
     * `GIT.EXE push`. Explicit paths stay explicit and must still be granted as such. */

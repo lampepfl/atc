@@ -537,11 +537,9 @@ holds the configured rules and the session grants; request scopes do not count. 
 so a `.gitignore` applies from the first listing after the user grants access for the session.
 
 Host patterns are case-insensitive and normalize numeric IP literals. Deny rules are checked
-at use, even when a requested pattern was previously approved. A request is refused before
-the prompt when one of its patterns and a deny pattern match a common command line or host:
-`git * --force` against `git push*`, which both match `git push --force`. Each permission
-decision is included in the tool result so the model knows whether approval was temporary,
-session-wide or denied.
+at use, even when a requested pattern was previously approved. Each permission decision is
+included in the tool result so the model knows whether approval was temporary, session-wide
+or denied.
 
 ### Request blocks from the agent's side
 

@@ -224,7 +224,7 @@ final class Policy(
     val parent = scope(parentId)
     if !mode.allowsExec then
       throw SecurityException(s"Access denied: the sandbox is in ${mode.label} mode; commands cannot be run")
-    refuseDenied("command", commands, denyCommands, GlobMatcher.commandsOverlap)
+    refuseDenied("command", commands, denyCommands, GlobMatcher.matchesCommand)
     // A pattern counts as held when its own spelling is permitted, which does not make
     // it a subset: `./run.sh` is held under `*.sh` yet would also permit `./run.sh -x`.
     // The scope therefore holds only the patterns the user approved.
@@ -251,7 +251,7 @@ final class Policy(
     val parent = scope(parentId)
     if !mode.allowsNetwork then
       throw SecurityException(s"Access denied: the sandbox is in ${mode.label} mode; the network is not reachable")
-    refuseDenied("host", hosts, denyHosts, GlobMatcher.hostsOverlap)
+    refuseDenied("host", hosts, denyHosts, GlobMatcher.matchesHost)
     // Coverage is by glob/canonical-host matching, not textual equality. In
     // particular, a standing `*` grant needs no prompt for a concrete host and
     // an exact `::1` grant covers the equivalent expanded IPv6 spelling.
@@ -268,21 +268,22 @@ final class Policy(
 
   /** Refuse a `request*` whose patterns collide with the deny list, before the
     * user is asked: a request is a widening, and the deny list is exactly what
-    * may not be widened into. Two patterns collide when some command line or
-    * host name matches both. With `denyCommands: ["git push*"]` that refuses
-    * `git push origin`, `git*` and `git * --force`, since each permits a command
-    * line the deny pattern refuses. */
+    * may not be widened into. Two patterns collide when either one, read as a
+    * concrete command line or host name, matches the other. With
+    * `denyCommands: ["rm *"]` that refuses `requestExec(Set("rm -rf build"))`,
+    * which the deny pattern covers, and `requestExec(Set("rm*"))`, which would
+    * cover the deny pattern. */
   private def refuseDenied(
     what: String,
     requested: List[String],
     denied: List[String],
-    overlap: (String, String) => Boolean
+    matches: (String, String) => Boolean
   ): Unit =
     val hits =
       for
         requestedPattern <- requested
         deniedPattern <- denied
-        if overlap(requestedPattern, deniedPattern)
+        if matches(requestedPattern, deniedPattern) || matches(deniedPattern, requestedPattern)
       yield s"'$requestedPattern' (deny pattern '$deniedPattern')"
     if hits.nonEmpty then
       throw SecurityException(
