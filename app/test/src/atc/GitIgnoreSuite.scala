@@ -43,6 +43,10 @@ class GitIgnoreSuite extends munit.FunSuite:
     val root = repo("src/a**b\n", "src/axb" -> "", "src/a/b" -> "", "src/ab" -> "")
     assertEquals(ignoredIn(root, "src/axb", "src/a/b", "src/ab"), List(true, false, true))
 
+  test("a longer run of stars is `**` when it is a whole name"):
+    val root = repo("***/gen\nsrc/a***b\n", "gen" -> "", "x/y/gen" -> "", "src/axyb" -> "", "src/a/b" -> "")
+    assertEquals(ignoredIn(root, "gen", "x/y/gen", "src/axyb", "src/a/b"), List(true, true, true, false))
+
   test("a character class matches one character of a name, never `/`"):
     val root = repo("a[!x]b\nc[+-0]d\n", "a/b" -> "", "ayb" -> "", "c/d" -> "", "c+d" -> "")
     assertEquals(ignoredIn(root, "a/b", "ayb", "c/d", "c+d"), List(false, true, false, true))
