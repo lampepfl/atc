@@ -1,5 +1,6 @@
 package atc
 
+import atc.host.CommandLine
 import atc.perms.*
 import atc.platform.{Platform, PlatformPath}
 
@@ -359,6 +360,9 @@ class PolicySuite extends munit.FunSuite:
     assert(GlobMatcher.matchesHost("API.GitHub.com", "*.github.com"))
     assert(!GlobMatcher.matchesHost("github.com", "*.github.com"))
     assert(GlobMatcher.matchesHost("127.0.0.1", "127.*"))
+    // The rendering escapes \n but not U+2028, which a `*` must still cross.
+    val line = CommandLine.parsePipeline("git push -o \"\u2028\" origin main").stages.head.line
+    assert(GlobMatcher.matchesCommand(line, "git push*"), line)
 
   test("normalizeHost canonicalises equivalent spellings so a deny rule cannot be dodged"):
     // Lowercase a hostname and drop a trailing dot; never resolve it.
@@ -384,7 +388,7 @@ class PolicySuite extends munit.FunSuite:
     assertEquals(GlobMatcher.normalizeHost("[::1]"), "0:0:0:0:0:0:0:1")
     assertEquals(GlobMatcher.normalizeHost("::FFFF:127.0.0.1"), "127.0.0.1")
 
-  test("glob matching agrees with the regex that reads `*` as `.*` and quotes the rest"):
+  test("glob matching agrees with the regex that reads `*` as `(?s).*` and quotes the rest"):
     def strings(alphabet: List[Char], maxLength: Int): List[String] =
       def exact(length: Int): List[String] =
         if length == 0 then List("")
@@ -394,7 +398,7 @@ class PolicySuite extends munit.FunSuite:
     val patterns = strings(List('a', '*', '.', '\\', '\n'), 3)
     val values = strings(List('a', 'b', '.', '\\', '\n', '\r', '\u0085', '\u2028', '\u2029'), 3)
     patterns.foreach: pattern =>
-      val reference = Regex(pattern.split("\\*", -1).map(Regex.quote).mkString(".*"))
+      val reference = Regex("(?s)" + pattern.split("\\*", -1).map(Regex.quote).mkString(".*"))
       values.foreach: value =>
         assertEquals(
           GlobMatcher.matches(value, pattern),

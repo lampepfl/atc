@@ -11,8 +11,9 @@ import scala.util.Try
 object GlobMatcher:
   private val WindowsExecutableSuffixes = List(".exe", ".com", ".cmd", ".bat")
 
-  /** Full-string glob matching without regex compilation. Like Java regex `.`, a `*` does not
-    * match a line terminator; policy inputs do not normally contain one. */
+  /** Full-string glob matching without regex compilation. A `*` matches any characters, line
+    * terminators included: a rendered argument may hold U+2028, and a deny pattern must still
+    * match past it. */
   def matches(value: String, pattern: String): Boolean =
     var valueIndex = 0
     var patternIndex = 0
@@ -27,7 +28,7 @@ object GlobMatcher:
       else if patternIndex < pattern.length && pattern.charAt(patternIndex) == value.charAt(valueIndex) then
         patternIndex += 1
         valueIndex += 1
-      else if starIndex >= 0 && !regexLineTerminator(value.charAt(retryValueIndex)) then
+      else if starIndex >= 0 then
         retryValueIndex += 1
         valueIndex = retryValueIndex
         patternIndex = starIndex + 1
@@ -35,9 +36,6 @@ object GlobMatcher:
 
     while patternIndex < pattern.length && pattern.charAt(patternIndex) == '*' do patternIndex += 1
     patternIndex == pattern.length
-
-  private inline def regexLineTerminator(char: Char): Boolean =
-    char == '\n' || char == '\r' || char == '\u0085' || char == '\u2028' || char == '\u2029'
 
   /** Command-line matching. A pattern containing `*` matches as a glob. One without `*` matches
     * the command line it equals and any command line it is a word prefix of: `"ls"` permits
