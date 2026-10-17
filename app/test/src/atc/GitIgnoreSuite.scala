@@ -106,6 +106,13 @@ class GitIgnoreSuite extends munit.FunSuite:
     assert(gi.ignores(root.resolve("sub/a.log")))
     assert(!gi.ignores(root.resolve("sub/b.txt")))
 
+  test("a working directory reached through a link uses the repository it leads to"):
+    // Listings pass canonical paths, so the root must be canonical too.
+    val root = repo("*.log\n", "a.log" -> "")
+    val link = TestEnv.tempDir("atc-gitignore-link").resolve("project").nn
+    assume(TestEnv.trySymbolicLink(link, root), "symbolic links are unavailable")
+    assert(GitIgnore(link, policyOn(root)).ignores(root.resolve("a.log")))
+
   test("a missing or unreadable .gitignore ignores nothing but `.git`"):
     val root = TestEnv.tempDir("atc-gitignore-none").toRealPath().nn
     Files.createDirectories(root.resolve(".git"))

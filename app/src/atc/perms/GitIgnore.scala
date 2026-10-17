@@ -23,8 +23,9 @@ object GitIgnore:
     * ones included, deeper files taking precedence), and always ignores `.git`.
     * Files are read on first use and then cached for the session. Their rules
     * decide which names a listing shows, so a `.gitignore` is read only when the
-    * base scope may read its canonical target and the target is not classified. */
-  def apply(cwd: Path, policy: Policy): GitIgnore = Rules(repoRoot(cwd), policy)
+    * base scope may read its canonical target and the target is not classified. The root is
+    * canonical, like the listed paths it is compared with. */
+  def apply(cwd: Path, policy: Policy): GitIgnore = Rules(repoRoot(PlatformPath.canonical(cwd)), policy)
 
   /** The nearest ancestor of `dir` holding a `.git` entry, `dir` itself if there is none. A
     * `.gitignore` above the working directory still applies. */
