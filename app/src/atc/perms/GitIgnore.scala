@@ -23,8 +23,9 @@ object GitIgnore:
     * ones included, deeper files taking precedence), and always ignores `.git`.
     * Files are read on first use and then cached for the session. Their rules
     * decide which names a listing shows, so a `.gitignore` is read only when the
-    * base scope may read its canonical target and the target is not classified. */
-  def apply(cwd: Path, policy: Policy): GitIgnore = Rules(repoRoot(cwd), policy)
+    * base scope may read its canonical target and the target is not classified. The root is
+    * canonical, like the listed paths it is compared with. */
+  def apply(cwd: Path, policy: Policy): GitIgnore = Rules(repoRoot(PlatformPath.canonical(cwd)), policy)
 
   /** The nearest ancestor of `dir` holding a `.git` entry, `dir` itself if there is none. A
     * `.gitignore` above the working directory still applies. */
@@ -141,29 +142,28 @@ object GitIgnore:
     private def unescapeLead(p: String): String =
       if p.startsWith("\\#") || p.startsWith("\\!") then p.drop(1) else p
 
-    /** Git glob to regex over a `/`-separated relative path: `*` and `?` stop at a separator, `**`
-      * crosses them, `[…]` is a character class. Unlike [[atc.platform.PathGlob]] it follows git:
-      * `**` inside a name is two single stars, `\` escapes a character, an unclosed `[` is
-      * literal and braces have no meaning. */
+    /** Git glob to regex over a `/`-separated relative path: `*`, `?` and a `[…]` class stop at a
+      * separator, `**` crosses them. Unlike [[atc.platform.PathGlob]] it follows git: a run of two
+      * or more stars acts as `**` when it is a whole name and as one `*` otherwise, `\` escapes a
+      * character, an unclosed `[` is literal and braces have no meaning. */
     private def toRegex(glob: String): String =
       val out = StringBuilder()
       var i = 0
       while i < glob.length do
         glob.charAt(i) match
-          case '*' if i + 1 < glob.length && glob.charAt(i + 1) == '*' =>
-            val atSegmentStart = i == 0 || glob.charAt(i - 1) == '/'
-            if atSegmentStart && i + 2 < glob.length && glob.charAt(i + 2) == '/' then
-              out ++= "(?:.*/)?" // `**/` matches zero or more directories
-              i += 3
-            else if atSegmentStart && i + 2 == glob.length then
-              out ++= ".*" // a trailing `/**` matches everything inside
-              i += 2
-            else
-              out ++= "[^/]*" // `**` inside a name is two ordinary stars (git's rule)
-              i += 2
           case '*' =>
-            out ++= "[^/]*"
-            i += 1
+            var end = i + 1
+            while end < glob.length && glob.charAt(end) == '*' do end += 1
+            val wholeName = end - i >= 2 && (i == 0 || glob.charAt(i - 1) == '/')
+            if wholeName && end < glob.length && glob.charAt(end) == '/' then
+              out ++= "(?:.*/)?" // `**/` matches zero or more directories
+              i = end + 1
+            else if wholeName && end == glob.length then
+              out ++= ".*" // a trailing `/**` matches everything inside
+              i = end
+            else
+              out ++= "[^/]*"
+              i = end
           case '?' =>
             out ++= "[^/]"
             i += 1
@@ -174,7 +174,7 @@ object GitIgnore:
               i += 1
             else
               val cls = glob.substring(i, end + 1).nn
-              out ++= (if cls.startsWith("[!") then "[^" + cls.substring(2) else cls)
+              out ++= "(?!/)" + (if cls.startsWith("[!") then "[^" + cls.substring(2) else cls)
               i = end + 1
           case '\\' if i + 1 < glob.length =>
             out ++= Regex.quote(glob.charAt(i + 1).toString)

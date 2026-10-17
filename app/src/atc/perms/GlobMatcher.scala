@@ -11,8 +11,9 @@ import scala.util.Try
 object GlobMatcher:
   private val WindowsExecutableSuffixes = List(".exe", ".com", ".cmd", ".bat")
 
-  /** Full-string glob matching without regex compilation. Like Java regex `.`, a `*` does not
-    * match a line terminator; policy inputs do not normally contain one. */
+  /** Full-string glob matching without regex compilation. A `*` matches any characters, line
+    * terminators included: a rendered argument may hold U+2028, and a deny pattern must still
+    * match past it. */
   def matches(value: String, pattern: String): Boolean =
     var valueIndex = 0
     var patternIndex = 0
@@ -27,7 +28,7 @@ object GlobMatcher:
       else if patternIndex < pattern.length && pattern.charAt(patternIndex) == value.charAt(valueIndex) then
         patternIndex += 1
         valueIndex += 1
-      else if starIndex >= 0 && !regexLineTerminator(value.charAt(retryValueIndex)) then
+      else if starIndex >= 0 then
         retryValueIndex += 1
         valueIndex = retryValueIndex
         patternIndex = starIndex + 1
@@ -35,9 +36,6 @@ object GlobMatcher:
 
     while patternIndex < pattern.length && pattern.charAt(patternIndex) == '*' do patternIndex += 1
     patternIndex == pattern.length
-
-  private inline def regexLineTerminator(char: Char): Boolean =
-    char == '\n' || char == '\r' || char == '\u0085' || char == '\u2028' || char == '\u2029'
 
   /** Command-line matching. A pattern containing `*` matches as a glob. One without `*` matches
     * the command line it equals and any command line it is a word prefix of: `"ls"` permits
@@ -49,40 +47,6 @@ object GlobMatcher:
     if p.isEmpty then false
     else if p.contains('*') then matches(command, p)
     else command == p || command.startsWith(p + " ")
-
-  /** Whether some command line matches both patterns under [[matchesCommand]]. A pattern
-    * without `*` stands for its own text and for that text followed by a space and anything. */
-  def commandsOverlap(a: String, b: String): Boolean =
-    def forms(pattern: String): List[(String, Boolean)] =
-      val p = normalizeCommand(pattern.trim)
-      if p.isEmpty then Nil
-      else if p.contains('*') then List((p, false))
-      else List((p, false), (p + " ", true))
-    forms(a).exists((x, xOpen) => forms(b).exists((y, yOpen) => globsOverlap(x, xOpen, y, yOpen)))
-
-  /** Whether some host name matches both patterns under [[matchesHost]]. */
-  def hostsOverlap(a: String, b: String): Boolean = globsOverlap(normalizeHost(a), false, normalizeHost(b), false)
-
-  /** Whether some string matches both globs under [[matches]]. An open glob also matches
-    * any continuation of what it matches, line terminators included. `reached(i)(j)` holds
-    * when one string can take `a` up to index `i` and `b` up to `j`; a `*` at `i` or `j` may
-    * then still consume characters. */
-  private def globsOverlap(a: String, aOpen: Boolean, b: String, bOpen: Boolean): Boolean =
-    def star(s: String, k: Int) = k < s.length && s.charAt(k) == '*'
-    // A character that a `*` of the other glob may consume.
-    def plain(s: String, k: Int) = !star(s, k) && !regexLineTerminator(s.charAt(k))
-    val reached = Array.ofDim[Boolean](a.length + 1, b.length + 1)
-    for i <- 0 to a.length; j <- 0 to b.length do
-      reached(i)(j) =
-        (i == 0 && j == 0) ||
-          (i > 0 && star(a, i - 1) && reached(i - 1)(j)) ||
-          (j > 0 && star(b, j - 1) && reached(i)(j - 1)) ||
-          (i > 0 && j > 0 && !star(a, i - 1) && a.charAt(i - 1) == b.charAt(j - 1) && reached(i - 1)(j - 1)) ||
-          (j > 0 && star(a, i) && plain(b, j - 1) && reached(i)(j - 1)) ||
-          (i > 0 && star(b, j) && plain(a, i - 1) && reached(i - 1)(j))
-    (0 to a.length).exists: i =>
-      (0 to b.length).exists: j =>
-        reached(i)(j) && ((i == a.length && (j == b.length || aOpen)) || (j == b.length && bOpen))
 
   /** Win32 command names and extensions are case-insensitive. The standard executable and script
     * suffixes are spelling details too, so a deny on `git push*` cannot be bypassed as

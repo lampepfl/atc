@@ -2,9 +2,9 @@ package atc.platform
 
 import java.util.regex.{Pattern, PatternSyntaxException}
 
-/** Slash-based path globs shared by configuration rules and host searches: `*` and `?` stay within
-  * one component, `**` crosses components, `[…]`/`[!…]` are character classes and `{a,b}` are
-  * alternatives. Matching is case-insensitive where file names are (Windows and macOS). */
+/** Slash-based path globs shared by configuration rules and host searches: `*`, `?` and the
+  * character classes `[…]`/`[!…]` stay within one component, `**` crosses components and `{a,b}`
+  * are alternatives. Matching is case-insensitive where file names are (Windows and macOS). */
 private[atc] object PathGlob:
   def pattern(glob: String): Pattern =
     // A malformed class or brace group surfaces as an error about the glob, not the regex.
@@ -36,7 +36,7 @@ private[atc] object PathGlob:
           case '?' => result.append("[^/]")
           case '[' =>
             inClass = true
-            result.append('[')
+            result.append("(?!/)[")
             if glob.startsWith("[!", index) then
               result.append('^')
               index += 1

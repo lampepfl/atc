@@ -43,6 +43,14 @@ class GitIgnoreSuite extends munit.FunSuite:
     val root = repo("src/a**b\n", "src/axb" -> "", "src/a/b" -> "", "src/ab" -> "")
     assertEquals(ignoredIn(root, "src/axb", "src/a/b", "src/ab"), List(true, false, true))
 
+  test("a longer run of stars is `**` when it is a whole name"):
+    val root = repo("***/gen\nsrc/a***b\n", "gen" -> "", "x/y/gen" -> "", "src/axyb" -> "", "src/a/b" -> "")
+    assertEquals(ignoredIn(root, "gen", "x/y/gen", "src/axyb", "src/a/b"), List(true, true, true, false))
+
+  test("a character class matches one character of a name, never `/`"):
+    val root = repo("a[!x]b\nc[+-0]d\n", "a/b" -> "", "ayb" -> "", "c/d" -> "", "c+d" -> "")
+    assertEquals(ignoredIn(root, "a/b", "ayb", "c/d", "c+d"), List(false, true, false, true))
+
   test("anchored patterns are relative to the .gitignore's directory"):
     val root = repo("/out\nbuild/gen\n", "out/x" -> "", "src/out/y" -> "", "build/gen/z" -> "", "src/build/gen/w" -> "")
     assertEquals(
@@ -97,6 +105,13 @@ class GitIgnoreSuite extends munit.FunSuite:
     val gi = GitIgnore(root.resolve("sub").nn, policyOn(root))
     assert(gi.ignores(root.resolve("sub/a.log")))
     assert(!gi.ignores(root.resolve("sub/b.txt")))
+
+  test("a working directory reached through a link uses the repository it leads to"):
+    // Listings pass canonical paths, so the root must be canonical too.
+    val root = repo("*.log\n", "a.log" -> "")
+    val link = TestEnv.tempDir("atc-gitignore-link").resolve("project").nn
+    assume(TestEnv.trySymbolicLink(link, root), "symbolic links are unavailable")
+    assert(GitIgnore(link, policyOn(root)).ignores(root.resolve("a.log")))
 
   test("a missing or unreadable .gitignore ignores nothing but `.git`"):
     val root = TestEnv.tempDir("atc-gitignore-none").toRealPath().nn
