@@ -361,6 +361,7 @@ class HostSuite extends munit.FunSuite:
     assert(glob("**/test/*.py")("test/a.py") && glob("**/test/*.py")("x/y/test/a.py"))
     assert(glob("a/[!x]*.{md,txt}")("a/b.md") && !glob("a/[!x]*.{md,txt}")("a/x.md"))
     assert(!glob("a/*.md")("a/b/c.md"))
+    assert(!glob("a[!x]b")("a/b") && !glob("a[+-0]b")("a/b")) // a class stays within one name
     assert(glob("{a,{b,c}}")("c"))
     for bad <- List("a/{b,c", "[abc", "[]]") do
       assert(intercept[IllegalArgumentException](PathGlob.pattern(bad)).getMessage.nn.contains("bad glob"), bad)

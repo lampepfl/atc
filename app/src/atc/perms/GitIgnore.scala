@@ -141,8 +141,8 @@ object GitIgnore:
     private def unescapeLead(p: String): String =
       if p.startsWith("\\#") || p.startsWith("\\!") then p.drop(1) else p
 
-    /** Git glob to regex over a `/`-separated relative path: `*` and `?` stop at a separator, `**`
-      * crosses them, `[…]` is a character class. Unlike [[atc.platform.PathGlob]] it follows git:
+    /** Git glob to regex over a `/`-separated relative path: `*`, `?` and a `[…]` class stop at a
+      * separator, `**` crosses them. Unlike [[atc.platform.PathGlob]] it follows git:
       * `**` inside a name is two single stars, `\` escapes a character, an unclosed `[` is
       * literal and braces have no meaning. */
     private def toRegex(glob: String): String =
@@ -174,7 +174,7 @@ object GitIgnore:
               i += 1
             else
               val cls = glob.substring(i, end + 1).nn
-              out ++= (if cls.startsWith("[!") then "[^" + cls.substring(2) else cls)
+              out ++= "(?!/)" + (if cls.startsWith("[!") then "[^" + cls.substring(2) else cls)
               i = end + 1
           case '\\' if i + 1 < glob.length =>
             out ++= Regex.quote(glob.charAt(i + 1).toString)
