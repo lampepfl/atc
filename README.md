@@ -134,6 +134,7 @@ scripts, use `atc.cmd`, or allow local scripts with
 its models; the key is saved in `~/.atc/keys.properties`, readable only by you. With a
 ChatGPT plan you can sign in through the browser instead of giving a key, and with a
 Claude plan ATC can use your signed-in [Claude Code](https://claude.com/claude-code) CLI.
+Any other OpenAI- or Anthropic-compatible server, such as a local Ollama, is set up by its URL.
 To set up providers by hand instead, choose *Configure providers myself*: ATC writes
 `~/.atc/config.json` and exits. On Windows, `~/.atc` is `%USERPROFILE%\.atc`.
 
@@ -430,7 +431,10 @@ access. `commands` are patterns over the whole command line (`"git status"` also
 `denyCommands` and `denyHosts` use the same syntax and override every allow, session grant
 and open scope. A pre-approved command runs with your privileges and outside the file
 rules, so pre-approve the subcommands you mean rather than `git *`, and check their options:
-`git diff` and `git blame` can print any file, and `git log --output` can write one. Pattern
+`git diff` and `git blame` can print any file, and `git log --output` can write one. A
+variable the agent sets for a command is permitted separately, as `NAME=value command`
+(`"RUST_LOG=*"` allows any `RUST_LOG` on commands allowed anyway); grant `PATH`,
+`LD_PRELOAD` or `GIT_CONFIG_*` only as you would the code they can make a command run. Pattern
 details and Windows notes are in
 [doc/development.md](doc/development.md#file-rules-and-command-patterns).
 

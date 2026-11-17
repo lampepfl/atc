@@ -96,8 +96,7 @@ class ProviderCancellationSuite extends munit.FunSuite:
         exchange.getRequestBody.nn.readAllBytes()
         try
           val first = count.incrementAndGet() == 1
-          auth.set(exchange.getRequestHeaders.nn.getFirst(if api == "anthropic" then "x-api-key"
-          else "Authorization"))
+          auth.set(exchange.getRequestHeaders.nn.getFirst("Authorization"))
           if first && !duringStream then
             entered.countDown()
             release.await(5, TimeUnit.SECONDS)
@@ -137,7 +136,7 @@ class ProviderCancellationSuite extends munit.FunSuite:
         caller.start()
         try
           assert(entered.await(5, TimeUnit.SECONDS))
-          assertEquals(auth.get(), if api == "anthropic" then "test" else "Bearer test")
+          assertEquals(auth.get(), "Bearer test")
           if duringStream then
             assert(streamed.await(5, TimeUnit.SECONDS))
             Thread.sleep(50)

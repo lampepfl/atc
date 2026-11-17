@@ -35,6 +35,7 @@ object TestProcess:
     case "unsorted" :: Nil => write("c\nb\na\n")
     case "pwd" :: Nil => write(Path.of("").toAbsolutePath.nn.normalize.nn.toString + "\n")
     case "env" :: name :: Nil => write(Option(System.getenv(name)).fold("<unset>")(_ => "<set>") + "\n")
+    case "value" :: name :: Nil => write(Option(System.getenv(name)).getOrElse("<unset>") + "\n")
     case "cat" :: Nil => copy(System.in)
     case "cat" :: files => files.foreach(file => System.out.write(Files.readAllBytes(Path.of(file)).nn))
     case "upper" :: Nil =>

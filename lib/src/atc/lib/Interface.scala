@@ -147,7 +147,8 @@ abstract class Network private[atc] () extends caps.ExclusiveCapability
  *  cannot be used inside `Classified.map`. It lives until it exits, you `kill()`
  *  it, or the session ends; `runningProcesses` finds the live ones again. One
  *  spawned inside a `requestExec` block is also killed when that block ends,
- *  however the user answered, so start a long-lived process outside such a block.
+ *  however the user answered, so start a long-lived process outside such a block;
+ *  one spawned inside `withEnv` keeps running.
  *  `readUntil` throws `RuntimeException` on timeout and keeps the output
  *  available for a later `read()`. `waitFor` returns `None` on timeout.
  *
@@ -493,11 +494,35 @@ trait Interface:
   def requestExec[T](commands: Iterable[String])(op: Exec^ ?=> T)(using UserIO^, Exec^): T
   def requestExec[T](commands: Iterable[String], reason: String)(op: Exec^ ?=> T)(using UserIO^, Exec^): T
 
+  /** Set environment variables for the commands run inside `op`: every `exec`,
+   *  `execOutput` and `spawn` there, and each stage of a pipeline, starts with
+   *  `vars` added to the environment it would otherwise get. Values are passed
+   *  literally (`"$HOME/bin"` stays as written), and nothing reads the environment
+   *  back. A nested block adds to the outer one and wins on a shared name. Names
+   *  are letters, digits and `_`, not starting with a digit.
+   *
+   *  A command needs its own permission and, for each variable, one for
+   *  `NAME=value command`: running `cargo test` with `RUST_LOG=debug` needs
+   *  `cargo test` and `RUST_LOG=debug cargo test` (`RUST_LOG=* cargo *` permits any
+   *  value). A refusal names the patterns to request. A process spawned here keeps
+   *  its variables and outlives the block, but its handle cannot leave the block:
+   *  find it again with `runningProcesses`.
+   *
+   *  {{{
+   *  withEnv(Map("RUST_LOG" -> "debug")) {
+   *    requestExec(Set("cargo test", "RUST_LOG=debug cargo test"), "debug logs") {
+   *      println(exec("cargo test").stderr)
+   *    }
+   *  }
+   *  }}} */
+  def withEnv[T](vars: Map[String, String])(op: Exec^ ?=> T)(using Exec^): T
+
   /** Run a command without a general shell. A one-line `command` honours quotes
    *  and supports pipelines with `|`, input `<`, output `>` / `>>`, and `2>&1`.
    *  `&&`, `;`, `||`, `&`, `$(...)`, globs and `$VAR` are not interpreted; run
-   *  separate steps in Scala. With an explicit `args` sequence, `command` must be
-   *  one program and every argument is passed verbatim.
+   *  separate steps in Scala. A leading `NAME=value` is refused: use `withEnv`.
+   *  With an explicit `args` sequence, `command` must be one program and every
+   *  argument is passed verbatim.
    *
    *  Each pipeline stage needs command permission. Redirections use the normal
    *  file permissions and reject classified files. The result uses pipefail-style

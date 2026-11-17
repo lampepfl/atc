@@ -58,7 +58,12 @@ final case class ExecRequest(commands: List[String], reason: String) extends Per
   def title: String = "Run commands"
   protected def fields: List[(String, String)] =
     commands.zipWithIndex.map((command, index) => s"command ${index + 1}" -> command) ++
-      Option.when(commands.exists(_.contains('*')))("note" -> "* matches any arguments; for an interpreter, any code")
+      Option.when(commands.exists(_.contains('*')))("note" ->
+        "* matches any arguments; for an interpreter, any code") ++
+      Option.when(commands.exists(GlobMatcher.startsWithAssignment))(
+        "note" ->
+          "NAME=value sets a variable for the command; PATH, LD_PRELOAD or GIT_CONFIG_* can make it run other code"
+      )
 
 final case class NetRequest(hosts: List[String], reason: String) extends PermissionRequest:
   def title: String = "Network access"

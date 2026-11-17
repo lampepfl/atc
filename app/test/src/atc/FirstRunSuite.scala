@@ -23,6 +23,9 @@ class FirstRunSuite extends munit.FunSuite:
     def askSecret(question: String): Option[String] =
       shown += s"secret: $question"
       pending.dequeue()
+    def askText(question: String): Option[String] =
+      shown += s"text: $question"
+      pending.dequeue()
     def info(text: String): Unit = shown += s"info: $text"
     def error(text: String): Unit = shown += s"error: $text"
     def done(): Unit = assert(pending.isEmpty, s"unused answers: $pending")
@@ -35,7 +38,7 @@ class FirstRunSuite extends munit.FunSuite:
   /** A provider whose list needs the key `good`. */
   private def listing(asked: mutable.ListBuffer[Option[String]])(spec: ModelSpec): List[ModelSpec] =
     asked += spec.apiKey
-    if spec.apiKey.contains("good") || spec.provider == "ollama" then
+    if spec.apiKey.contains("good") || spec.provider == "local" then
       List("model-a", "model-b").map(id => spec.copy(alias = id, modelId = id))
     else throw RuntimeException("401: invalid x-api-key")
 
@@ -77,14 +80,62 @@ class FirstRunSuite extends munit.FunSuite:
     val escaped = Script(None)
     assertEquals(FirstRun.run(escaped, presets, KeyBindings.empty, listing(asked), noSignIn), Outcome.NotNow)
 
-  test("a keyless provider that cannot be reached goes back to the providers without asking for a key"):
-    val ui = Script(Some(preset("ollama").label), Some(FirstRun.NotNowLabel))
+  private val openAiServer = FirstRun.CustomServers.find(_.api == "openai").get
+  private val anthropicServer = FirstRun.CustomServers.find(_.api == "anthropic").get
+
+  test("a custom server without a key: its name, its address and a model"):
+    val asked = mutable.ListBuffer[Option[String]]()
+    val ui =
+      Script(Some(openAiServer.label), Some("local"), Some(" http://localhost:11434/v1/ "), None, Some("model-a"))
+    FirstRun.run(ui, presets, KeyBindings.empty, listing(asked), noSignIn) match
+      case Outcome.Ready(provider, key, endpoint, _, model) =>
+        assertEquals(provider.config, ProviderConfig(api = Some("openai"), url = Some("http://localhost:11434/v1")))
+        assertEquals(key, None)
+        assertEquals(endpoint.baseUrl, Some("http://localhost:11434/v1"))
+        assertEquals(model.ref, "local/model-a")
+      case other => fail(s"unexpected $other")
+    ui.done()
+    assertEquals(asked.toList, List(None))
+
+  test("a custom server's name and address are asked again until usable, and its key gets a variable of its own"):
+    val asked = mutable.ListBuffer[Option[String]]()
+    // A variable bound for another service is neither replaced nor sent to the new address.
+    val keys = KeyBindings(List(Path.of("keys.properties") -> Map("GATEWAY_API_KEY" -> "other")))
+    val ui = Script(
+      Some(anthropicServer.label),
+      Some("1st"),
+      Some("Anthropic"),
+      Some("gateway"),
+      Some("gw.example.com"),
+      Some("https://gw.example.com/anthropic"),
+      Some("good"),
+      Some("model-b"),
+    )
+    FirstRun.run(ui, presets, keys, listing(asked), noSignIn) match
+      case Outcome.Ready(provider, key, _, _, model) =>
+        assertEquals(provider.config.api, Some("anthropic"))
+        assertEquals(provider.config.url, Some("https://gw.example.com/anthropic"))
+        assertEquals(provider.config.key, Some("${GATEWAY_API_KEY_2}"))
+        assertEquals(provider.keyVariable, Some("GATEWAY_API_KEY_2"))
+        assertEquals(key, Some("good"))
+        assertEquals(model.ref, "gateway/model-b")
+      case other => fail(s"unexpected $other")
+    ui.done()
+    assertEquals(asked.toList, List(Some("good")))
+    val errors = ui.shown.result().filter(_.startsWith("error:"))
+    assertEquals(errors.size, 3, errors)
+    assert(errors(1).contains("taken"), errors)
+    assert(ui.shown.result().exists(_.contains("saved as GATEWAY_API_KEY_2")), ui.shown.result())
+
+  test("a keyless provider that cannot be reached goes back to the providers without asking for a key again"):
+    val ui =
+      Script(Some(openAiServer.label), Some("local"), Some("http://localhost:1/v1"), None, Some(FirstRun.NotNowLabel))
     assertEquals(
       FirstRun.run(ui, presets, KeyBindings.empty, _ => throw RuntimeException("Connection refused"), noSignIn),
       Outcome.NotNow
     )
     ui.done()
-    assert(!ui.shown.result().exists(_.startsWith("secret:")))
+    assertEquals(ui.shown.result().count(_.startsWith("secret:")), 1, "only the optional key")
 
   test("ChatGPT is signed in to instead of asking for a key, and a failed sign-in goes back to the providers"):
     val label = preset("chatgpt").label

@@ -144,5 +144,6 @@ object Setup:
   def firstRunUi(tui: Tui): FirstRun.Ui = new FirstRun.Ui:
     def choose(title: String, options: List[String]): Option[String] = tui.choose(title, options)
     def askSecret(question: String): Option[String] = tui.askSecret(question)
+    def askText(question: String): Option[String] = tui.askText(question)
     def info(text: String): Unit = tui.info(text)
     def error(text: String): Unit = tui.error(text)

@@ -26,7 +26,32 @@ private[host] trait HostProcesses:
     requestExec(commands, "")(op)
 
   def requestExec[T](commands: Iterable[String], reason: String)(op: Exec ?=> T)(using user: UserIO, parent: Exec): T =
-    inScope(policy.requestExec(scopeOf(parent), commands.toList, reason))(id => op(using ExecImpl(id)))
+    inScope(policy.requestExec(scopeOf(parent), commands.toList, reason))(id => op(using ExecImpl(id, envOf(parent))))
+
+  /** The block's capability keeps its parent's scope: it grants nothing, since every
+    * command it runs is authorized with its variables at use (`authorizeCommands`). */
+  def withEnv[T](vars: Map[String, String])(op: Exec ?=> T)(using parent: Exec): T =
+    for (name, value) <- vars do
+      if !CommandLine.isVariableName(name) then
+        throw IllegalArgumentException(
+          s"withEnv: ${ScalaSource.stringLiteral(name)} is not a variable name (letters, digits and _, not starting with a digit)"
+        )
+      if value.contains('\u0000') then throw IllegalArgumentException(s"withEnv: the value of $name contains NUL")
+    if Platform.isWindows then
+      vars.keys.groupBy(_.toUpperCase(Locale.ROOT)).values.find(_.sizeIs > 1).foreach: names =>
+        throw IllegalArgumentException(s"withEnv: ${names.toList.sorted.mkString(" and ")} are one variable on Windows")
+    op(using ExecImpl(scopeOf(parent), withVariables(envOf(parent), vars)))
+
+  private def envOf(ex: Exec): Map[String, String] = ex match
+    case impl: ExecImpl => impl.env
+    case _ => Map.empty
+
+  /** `vars` over `base`, where a name replaces any spelling of itself that Windows treats as equal. */
+  private def withVariables(base: Map[String, String], vars: Map[String, String]): Map[String, String] =
+    val kept =
+      if Platform.isWindows then base.filterNot((name, _) => vars.keys.exists(_.equalsIgnoreCase(name)))
+      else base
+    kept ++ vars
 
   def exec(command: String)(using Exec, FileSystem): ProcessResult = exec(command, Nil, ExecOptions())
 
@@ -51,22 +76,31 @@ private[host] trait HostProcesses:
         "exec(command, args, ...): `command` must be one program when args are given; write a pipeline or redirection in the one-line form exec(\"...\")"
       )
 
-  private def authorizeCommands(pipeline: CommandLine.Pipeline, scope: ScopeId): Unit =
-    for stage <- pipeline.stages; pattern <- policy.commandDenied(stage.line) do
+  /** Every stage must be permitted by itself and, for each of the `assignments` it runs
+    * with, as `NAME=value stage`. One variable at a time: a pattern's `*` could otherwise
+    * reach over a second assignment, and a grant of `NAME=value` alone, a word prefix of
+    * every such line, would permit any command. */
+  private def authorizeCommands(pipeline: CommandLine.Pipeline, scope: ScopeId, assignments: List[String]): Unit =
+    val lines = pipeline.stages.flatMap(stage => stage.line :: assignments.map(a => s"$a ${stage.line}"))
+    for line <- lines; pattern <- policy.commandDenied(line) do
       throw SecurityException(
-        s"Access denied: command '${stage.line}' is refused by the configuration (denyCommands pattern '$pattern'). It cannot be granted; do not retry it or work around it, tell the user instead."
+        s"Access denied: command '$line' is refused by the configuration (denyCommands pattern '$pattern'). It cannot be granted; do not retry it or work around it, tell the user instead."
       )
 
-    val missing = pipeline.stages.filterNot(stage => policy.commandAllowed(scope, stage.line))
+    val missing = lines.filterNot(policy.commandAllowed(scope, _)).distinct
     if missing.nonEmpty then
+      val listed = missing.map(line => s"'$line'").mkString(", ")
       val target =
-        if pipeline.stages.lengthIs == 1 then s"command '${missing.head.line}'"
-        else
-          val stages = missing.map(stage => s"'${stage.line}'").mkString(", ")
-          s"stage${if missing.lengthIs > 1 then "s" else ""} $stages of the pipeline"
-      val patterns = missing.map(stage => ScalaSource.stringLiteral(stage.line)).mkString(", ")
+        if pipeline.stages.lengthIs > 1 then s"stage${if missing.lengthIs > 1 then "s" else ""} $listed of the pipeline"
+        else if missing.lengthIs == 1 then s"command $listed"
+        else s"commands $listed"
+      val verb = if missing.lengthIs == 1 then "matches" else "match"
+      val variables =
+        if assignments.isEmpty then ""
+        else " A command run with withEnv needs its own permission and one `NAME=value command` for each variable."
+      val patterns = missing.map(ScalaSource.stringLiteral).mkString(", ")
       throw SecurityException(
-        s"Access denied: $target matches no permitted pattern. Use requestExec(Set($patterns), reason) { ... } to ask the user."
+        s"Access denied: $target $verb no permitted pattern.$variables Use requestExec(Set($patterns), reason) { ... } to ask the user."
       )
 
   private def commandDirectory(path: String, fs: FileSystem): Path =
@@ -85,18 +119,27 @@ private[host] trait HostProcesses:
     ensureParent(target)
     target
 
-  private def processBuilders(pipeline: CommandLine.Pipeline, dir: Path): List[ProcessBuilder] =
+  private def processBuilders(
+    pipeline: CommandLine.Pipeline,
+    dir: Path,
+    env: Map[String, String]
+  ): List[ProcessBuilder] =
     val keys = keyVariables()
     pipeline.stages.map: stage =>
       val argv = WindowsExecutable.resolve(stage.argv, dir)
       val builder = ProcessBuilder(argv.asJava).directory(dir.toFile).nn
+      val environment = builder.environment().nn
       // Windows launchers may carry the original command line (including a prompt)
       // in these variables, and the key variables hold ATC's credentials. They belong
       // to ATC, not to commands the agent starts, which could print them. Windows names
       // ignore case, but this map's keys keep the system's spelling (`Path`, not `PATH`).
-      builder.environment().nn.keySet().nn.removeIf: name =>
+      environment.keySet().nn.removeIf: name =>
         LauncherEnvironment.isInternal(name) ||
           keys.exists(key => if Platform.isWindows then key.equalsIgnoreCase(name) else key == name)
+      // The agent's own variables come last: a value it sets reveals nothing of what it
+      // replaces. On Windows an inherited `Path` must go before `PATH` is put beside it.
+      if Platform.isWindows then environment.keySet().nn.removeIf(name => env.keys.exists(_.equalsIgnoreCase(name)))
+      environment.putAll(env.asJava)
       if stage.mergeErr then builder.redirectErrorStream(true)
       builder
 
@@ -109,17 +152,20 @@ private[host] trait HostProcesses:
       throw IllegalArgumentException(
         "exec: both ExecOptions(stdin = ...) and '< file' would feed the command; use one of them"
       )
-    authorizeCommands(pipeline, scopeOf(ex))
+    val env = envOf(ex)
+    val assignments = env.toList.sorted.map(CommandLine.assignment)
+    authorizeCommands(pipeline, scopeOf(ex), assignments)
 
     val dir = commandDirectory(options.workingDir, fs)
     val stdinFile = pipeline.stdinFile.map(inputRedirect(_, fs))
     val stdoutFile = pipeline.stdoutFile.map(outputRedirect(_, fs))
-    val pbs = processBuilders(pipeline, dir)
+    val pbs = processBuilders(pipeline, dir, env)
     stdinFile.foreach(path => pbs.head.redirectInput(path.toFile))
     stdoutFile.foreach: path =>
       val file = path.toFile
       pbs.last.redirectOutput(if pipeline.append then Redirect.appendTo(file) else Redirect.to(file))
-    Prepared(pbs, pipeline.stages.map(_.line), pipeline.line)
+    // The user sees the variables once, in front; they apply to every stage.
+    Prepared(pbs, pipeline.stages.map(_.line), (assignments :+ pipeline.line).mkString(" "))
 
   def exec(command: String, args: Seq[String], options: ExecOptions)(using ex: Exec, fs: FileSystem): ProcessResult =
     if options.timeoutMs <= 0 then

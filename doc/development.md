@@ -502,7 +502,9 @@ compiler's lifetime checks and the host's scope IDs therefore enforce complement
 the same request contract.
 
 Permission requests display numbered command or host rows, and a `note` row when a command
-pattern holds `*`, which allows any arguments and so, for an interpreter, any code. The
+pattern holds `*`, which allows any arguments and so, for an interpreter, any code, and
+another when one sets a variable (`NAME=value command`), which can change what the command
+runs. The
 policy sorts and deduplicates requested patterns so the displayed order agrees with decision
 notes. `Policy.sessionGrants` provides the current grant list; `/perms revoke` selects from it
 and `Policy.revoke` removes the selected grant from future checks. Configuration rules and
@@ -609,6 +611,14 @@ command that prints its environment would hand them to the model. They lose the 
 variables even when a key is configured, because a key whose variable is unset lets the SDK
 read them. They also lose the `ATC_INTERNAL_*` variables in which the Windows launchers pass
 the original command line.
+
+`withEnv` hands its block an `ExecImpl` with the parent's scope and the merged variables, and
+`requestExec` passes them on to its child capability. It opens no scope: every command is
+authorized with its variables at use ([command patterns](#file-rules-and-command-patterns)),
+so nothing depends on the capability staying in its block, and a process spawned inside keeps
+running after it. The variables are put after the key and launcher variables are removed, and
+on Windows replace any inherited spelling of the same name. Values are passed as given, and
+no operation reads the environment back.
 
 `Processes` drains stdout and stderr concurrently into buffers of at most 8 Mi characters
 each; `TextSink` decodes UTF-8 and BOM-marked UTF-16 output incrementally. Foreground
@@ -798,6 +808,13 @@ list and records the model as the last one, so the session starts without anothe
 *Not now* or Esc runs on the built-in starting config. `-p` runs and terminals without
 menus never ask.
 
+The first run and `/providers` → *Add a provider* also offer a custom OpenAI-compatible
+(`api` `openai`, Chat Completions) or Anthropic-compatible server (`FirstRun.custom`): a name
+that no configured provider or preset has, a base URL, and a key unless left empty, then the
+model list as for a preset. The key goes into a variable of its own, `NAME_API_KEY`, numbered
+while that one is bound already, so it replaces no other provider's key and no key bound
+before is sent to the new address. A local server such as Ollama is set up this way.
+
 **Turning providers and models on and off.** `"enabled": false` on a provider or a model
 hides it; a disabled provider is never listed. `/providers` edits these switches and the
 model entries in place (`ObjectText.withMember` keeps the file's formatting). Choosing models
@@ -861,6 +878,19 @@ and a pattern without `*` matches by word prefix (`"git status"` allows `git sta
 but not `git statusx`). Its working directory and redirected files still need file access
 ([Host operations](#host-operations)), but a pre-approved command runs with the user's
 privileges and its own file access is *not* subject to the file rules.
+
+A command run inside `withEnv` is checked by itself and then once per variable, as
+`NAME=value command` with the value rendered like an argument; allow and deny rules apply to
+every one of these lines. One variable at a time keeps a `*` from reaching over a second
+assignment (`GIT_TRACE=* git *` must not cover `LD_PRELOAD=…`), and requiring the bare command
+keeps a grant of `NAME=value` alone, a word prefix of every such line, from permitting any
+command. Only an allow pattern that itself begins with `NAME=` permits such a line, so `*`
+or `*.sh` permits commands but no variable; deny patterns match either way. So `"RUST_LOG=*"`
+permits any value of that variable on commands permitted anyway, and
+`"denyCommands": ["LD_PRELOAD=*"]` refuses that variable everywhere. A program word of
+the form `NAME=…` is refused, which keeps these lines distinct from command lines. On Windows
+the name in such a line ignores case and the command after it is normalized like a bare one.
+
 `hosts` are glob patterns on host names; only `http`/`https` URLs are accepted and redirects
 are not followed. `denyCommands` and `denyHosts` use the same syntax: a deny rule overrides
 every allow rule, including a session grant, an open `request*` scope, and `--approve-all`.

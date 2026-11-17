@@ -290,6 +290,7 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
       "write classified" -> """classify("s").map(s => { writeClassified(s, classify(s)); s })""",
       "run a command" -> """classify("s").map(s => exec("echo", List(s)).stdout)""",
       "run a command (execOutput)" -> """classify("s").map(s => execOutput(s))""",
+      "set a variable for a command" -> """classify("s").map(s => withEnv(Map("A" -> s)) { execOutput("echo") })""",
       "spawn a process" -> """classify("s").map(s => spawn(s).id)""",
       "talk to a spawned process" -> """classify("s").map(s => { spawned.sendLine(s); s })""",
       "http GET" -> """classify("s").map(s => httpGet(s))""",

@@ -364,6 +364,18 @@ class PolicySuite extends munit.FunSuite:
     val line = CommandLine.parsePipeline("git push -o \"\u2028\" origin main").stages.head.line
     assert(GlobMatcher.matchesCommand(line, "git push*"), line)
 
+  test("a variable assignment matches as NAME=value before the command it applies to"):
+    val quoted = CommandLine.assignment("MSG", "a \"b\" c")
+    assertEquals(quoted, "MSG=\"a \\\"b\\\" c\"")
+    assert(GlobMatcher.matchesCommand(s"$quoted git status", "MSG=* git status"))
+    assert(!GlobMatcher.matchesCommand("RUST_LOG=Debug cargo test", "RUST_LOG=debug cargo"), "values keep their case")
+    if Platform.isWindows then
+      // The name ignores case like the variable itself; the command after it is normalized,
+      // so a deny pattern that names one cannot be dodged as `GIT.EXE`.
+      assert(GlobMatcher.matchesCommand("Path=x git status", "PATH=*"))
+      assert(GlobMatcher.matchesCommand("GIT_DIR=x GIT.EXE push", "GIT_DIR=* git push*"))
+      assert(GlobMatcher.matchesCommand(s"$quoted GIT.EXE status", "MSG=* git status"))
+
   test("normalizeHost canonicalises equivalent spellings so a deny rule cannot be dodged"):
     // Lowercase a hostname and drop a trailing dot; never resolve it.
     assertEquals(GlobMatcher.normalizeHost("Example.COM"), "example.com")

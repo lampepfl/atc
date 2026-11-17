@@ -58,6 +58,13 @@ class DialogsSuite extends munit.FunSuite:
     val (d, _) = dialogsReading(input, width = 80, plain = false)
     assertEquals(d.permission(ExecRequest(List("npm test"), "run the tests")), Decision.Revise("only run the tests"))
 
+  test("a line of setup text is read under its question, and empty means none"):
+    val (d, out) = dialogs("http://localhost:11434/v1\r")
+    assertEquals(d.text("Its base URL"), Some("http://localhost:11434/v1"))
+    assert(written(out).contains("? Its base URL"), written(out))
+    val (empty, _) = dialogs("\r")
+    assertEquals(empty.text("A name for it"), None)
+
   test("a typed confirmation takes only y or yes"):
     for (reply, expected) <- List("y" -> true, "YES" -> true, "yes, but later" -> false, "yolo" -> false, "" -> false)
     do

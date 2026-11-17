@@ -54,20 +54,51 @@ object GlobMatcher:
   private def normalizeCommand(value: String): String =
     if !Platform.isWindows then value
     else
-      val boundary =
-        if value.startsWith("\"") then
-          value.indexOf('"', 1) match
-            case -1 => value.length
-            case n => n + 1
-        else
-          value.indexOf(' ') match
-            case -1 => value.length
-            case n => n
-      val command = value.substring(0, boundary).toLowerCase(Locale.ROOT).replace('\\', '/')
-      val suffix = value.substring(boundary)
-      val plainName = !command.exists(c => c == '/' || c == '\\' || c == '*' || c == '?')
-      val executableSuffix = if plainName then WindowsExecutableSuffixes.find(command.endsWith) else None
-      executableSuffix.fold(command)(extension => command.dropRight(extension.length)) + suffix
+      assignmentEnd(value) match
+        case Some(end) =>
+          // `NAME=value command`, how a variable is permitted: the name ignores case,
+          // the value keeps it, and the command after it is normalized as usual.
+          val equals = value.indexOf('=')
+          val assignment = value.substring(0, equals).toUpperCase(Locale.ROOT) + value.substring(equals, end)
+          if end >= value.length then assignment else assignment + " " + normalizeCommand(value.substring(end + 1))
+        case None => normalizeProgram(value)
+
+  /** Whether a command line or pattern begins with a `NAME=` word: how a variable a command
+    * runs with is matched. */
+  def startsWithAssignment(value: String): Boolean = assignmentEnd(value.trim).isDefined
+
+  /** Where a leading `NAME=value` word ends (at the space after it, or the end): the
+    * value as `CommandLine.assignment` renders it, plain or in `"..."` with `\` escapes.
+    * A program word never has that shape; the command parser refuses it. */
+  private def assignmentEnd(value: String): Option[Int] =
+    val equals = value.indexOf('=')
+    if equals <= 0 || !value.substring(0, equals).matches("[A-Za-z_][A-Za-z0-9_]*") then None
+    else
+      var index = equals + 1
+      var quoted = false
+      while index < value.length && (quoted || value.charAt(index) != ' ') do
+        value.charAt(index) match
+          case '\\' if quoted => index += 1
+          case '"' => quoted = !quoted
+          case _ => ()
+        index += 1
+      Some(index.min(value.length))
+
+  private def normalizeProgram(value: String): String =
+    val boundary =
+      if value.startsWith("\"") then
+        value.indexOf('"', 1) match
+          case -1 => value.length
+          case n => n + 1
+      else
+        value.indexOf(' ') match
+          case -1 => value.length
+          case n => n
+    val command = value.substring(0, boundary).toLowerCase(Locale.ROOT).replace('\\', '/')
+    val suffix = value.substring(boundary)
+    val plainName = !command.exists(c => c == '/' || c == '\\' || c == '*' || c == '?')
+    val executableSuffix = if plainName then WindowsExecutableSuffixes.find(command.endsWith) else None
+    executableSuffix.fold(command)(extension => command.dropRight(extension.length)) + suffix
 
   /** Normalize a concrete host or host pattern without resolving DNS names. Exact numeric literals
     * are canonicalized; globs keep their shape. Both policy patterns and request hosts pass

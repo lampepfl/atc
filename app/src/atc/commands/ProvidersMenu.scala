@@ -34,7 +34,7 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
           ProviderEdits.offered(p, stored.getOrElse(Nil))
       s"${name.padTo(width, ' ')}  ${if p.enabled then "on " else "off"}  $offered" -> (() => actions(name))
     val addable = ProviderPreset.all.filterNot(p => settings.providers.contains(p.name))
-    providers ++ Option.when(addable.nonEmpty)("Add a provider" -> (() => add(addable)))
+    providers :+ ("Add a provider" -> (() => add(addable)))
 
   /** The actions on one provider, until one of them is carried out (back to the
     * provider list, which shows the change) or the user goes back. An action
@@ -124,10 +124,19 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
               true
             else applyEdits(edits, s"$name: ${chosen.size} model${if chosen.size == 1 then "" else "s"} on")
 
+  /** The presets not configured yet, then a server at an address the user gives. A custom
+    * server's name may be neither a configured provider's nor a preset's, which stays addable. */
   private def add(addable: List[ProviderPreset]): Unit =
-    tui.chooseOrBack("Add a provider", addable.map(_.label)).flatMap(addable.lift).foreach: preset =>
+    val labels = addable.map(_.label) ++ FirstRun.CustomServers.map(_.label)
+    tui.chooseOrBack("Add a provider", labels).foreach: index =>
       val ui = Setup.firstRunUi(tui)
-      FirstRun.provider(ui, preset, models.configuration.keys, ChatModel.listModels, Setup.signIn(again = false)) match
+      val keys = models.configuration.keys
+      val outcome = addable.lift(index) match
+        case Some(preset) => FirstRun.provider(ui, preset, keys, ChatModel.listModels, Setup.signIn(again = false))
+        case None =>
+          val taken = models.configuration.settings.providers.keySet ++ ProviderPreset.all.map(_.name)
+          FirstRun.custom(ui, FirstRun.CustomServers(index - addable.size), taken, keys, ChatModel.listModels)
+      outcome match
         case Some(ready) =>
           Setup.saveKeyAndModels(ready)
           val edit = ProviderEdits.Edit(List("providers", ready.provider.name), Some(writeJs(ready.provider.config)))

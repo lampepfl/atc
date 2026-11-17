@@ -98,7 +98,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
     def addUserText(text: String, mark: Boolean): Unit =
       val block = TextBlockParam.builder().text(text)
       if mark then block.cacheControl(cache)
-      b.addUserMessageOfBlockParams(List(ContentBlockParam.ofText(block.build())).asJava)
+      b.addUserMessageOfContentBlockParams(List(ContentBlockParam.ofText(block.build())).asJava)
     // Only a user-role block can carry the breakpoint, and a round resumed after a
     // server-side pause re-sends a history that ends with an assistant message.
     val last = AnthropicModel.cacheBreakpoint(history)
@@ -123,14 +123,14 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
               val content = blocks.result()
               if content.nonEmpty then
                 b.addMessage(
-                  MessageParam.builder().role(MessageParam.Role.ASSISTANT).contentOfBlockParams(content.asJava).build()
+                  MessageParam.ofAssistantOfContentBlockParams(content.asJava)
                 )
         case Msg.ToolResults(results) =>
           val blocks = results.zipWithIndex.map: (r, j) =>
             val block = ToolResultBlockParam.builder().toolUseId(r.callId).content(r.output).isError(r.isError)
             if mark && j == results.length - 1 then block.cacheControl(cache)
             ContentBlockParam.ofToolResult(block.build())
-          b.addUserMessageOfBlockParams(blocks.asJava)
+          b.addUserMessageOfContentBlockParams(blocks.asJava)
     b.build()
 
   private def extract(m: Message): Completion =

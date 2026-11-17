@@ -475,6 +475,9 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   /** Ask for a secret such as an API key (see [[Dialogs.secret]]). */
   def askSecret(question: String): Option[String] = popupBlock("auth", question)(dialogs.secret(question))
 
+  /** Ask for a line of text in setup (see [[Dialogs.text]]). */
+  def askText(question: String): Option[String] = popupBlock("question", question)(dialogs.text(question))
+
   /** Ask the user a question on behalf of the agent (see [[Dialogs.answer]]). */
   def askUser(question: String, options: List[String], multiple: Boolean): Option[String] =
     popupBlock("question", question):
