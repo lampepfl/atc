@@ -82,7 +82,7 @@ private[llm] abstract class OpenAIShapedModel(spec: ModelSpec) extends SpecModel
     client.models().list(options).items().asScala.toList.map: m =>
       // Gemini's compatible list names models `models/<id>`; its chat endpoint takes the bare id.
       val id = m.id().stripPrefix("models/")
-      val extra = m._additionalProperties().asScala
+      val extra = m._allProperties().asScala
       def number(key: String) = extra.get(key).flatMap(_.asNumber().toScala).map(_.longValue)
       val window =
         number("context_length").orElse(number("max_model_len")).orElse(number("context_window")).flatMap(Tokens.from)

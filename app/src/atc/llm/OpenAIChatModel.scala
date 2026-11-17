@@ -112,7 +112,7 @@ final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
               // Reasoning is not part of the official schema: DeepSeek sends `reasoning_content`,
               // OpenRouter `reasoning`. A mixed chunk ends reasoning before starting the answer.
               List("reasoning_content", "reasoning").iterator
-                .flatMap(key => Option(delta._additionalProperties().get(key)).flatMap(_.asString().toScala))
+                .flatMap(key => Option(delta._allProperties().get(key)).flatMap(_.asString().toScala))
                 .filter(_.nonEmpty)
                 .nextOption().foreach(sink.thinking)
               delta.content().toScala.filter(_.nonEmpty).foreach: text =>
@@ -256,7 +256,7 @@ object OpenAIChatModel:
               if f.id().isPresent || calls == 0 then calls += 1
               (calls - 1, f.toBuilder().index(calls - 1).build())
           calls = calls.max(i + 1)
-          Option(f._additionalProperties().get("extra_content")).foreach(extra => extras(i) = extra)
+          Option(f._allProperties().get("extra_content")).foreach(extra => extras(i) = extra)
           numberedFragment
         if fragments.lazyZip(fixed).forall(_ eq _) then choice
         else choice.toBuilder().delta(choice.delta().toBuilder().toolCalls(fixed.asJava).build()).build()

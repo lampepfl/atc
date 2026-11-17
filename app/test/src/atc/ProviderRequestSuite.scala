@@ -349,8 +349,9 @@ class ProviderRequestSuite extends munit.FunSuite:
       withServer(_ => (200, "application/json", """{"data":[],"has_more":false}""")): (url, requests) =>
         assertEquals(ChatModel.listModels(endpoint("anthropic", url).copy(apiKey = None)), Nil)
         val sent = requests().head.headers
-        assertEquals(sent.get("x-api-key"), Some("none"))
-        assertEquals(sent.get("authorization"), None)
+        // Since anthropic-java 3.0 the SDK sends every static key as a bearer token.
+        assertEquals(sent.get("authorization"), Some("Bearer none"))
+        assertEquals(sent.get("x-api-key"), None)
     finally
       if previous == null then System.clearProperty("anthropic.apiKey")
       else System.setProperty("anthropic.apiKey", previous)
