@@ -274,6 +274,123 @@ class PermissionSuite extends munit.FunSuite:
     assert(env.host.runningProcesses.exists(_.id == cat.id))
     env.host.killProcesses()
 
+  // ── Environment variables (withEnv) ─────────────────────────────
+
+  private val valuePattern = ProcessFixture.pattern("value")
+  private def stageLine(command: String): String = CommandLine.parsePipeline(command).stages.head.line
+
+  test("withEnv sets its variables literally for every stage the block runs, and nowhere else"):
+    val env = TestEnv(commands = List(valuePattern, "GREETING=*"))
+    import env.given
+    val show = fixture("value", "GREETING")
+    val literal = "$HOME and 'quotes'"
+    assertEquals(env.host.withEnv(Map("GREETING" -> literal)) { env.host.exec(show).stdout.trim }, literal)
+    // The last stage of a pipeline prints what it got, and each stage is checked with it.
+    assertEquals(env.host.withEnv(Map("GREETING" -> "both")) { env.host.exec(s"$show | $show").stdout.trim }, "both")
+    assertEquals(env.host.exec(show).stdout.trim, "<unset>")
+
+  test("a variable needs its own permission beside the command's, and the refusal names it"):
+    val env = TestEnv(commands = List(valuePattern))
+    import env.given
+    val show = fixture("value", "LEVEL")
+    val pattern = s"LEVEL=debug ${stageLine(show)}"
+    val e = intercept[SecurityException](env.host.withEnv(Map("LEVEL" -> "debug")) { env.host.exec(show) })
+    assert(e.getMessage.nn.contains(s"requestExec(Set(${ScalaSource.stringLiteral(pattern)})"), e.getMessage)
+    env.decisions = List(Decision.AllowOnce)
+    val out = env.host.withEnv(Map("LEVEL" -> "debug")) {
+      env.host.requestExec(Set(pattern), "debug logs") { env.host.exec(show).stdout.trim }
+    }
+    assertEquals(out, "debug")
+    val request = env.requests.head
+    assertEquals(request.asInstanceOf[ExecRequest].commands, List(pattern))
+    assert(request.details.exists(_.contains("NAME=value sets a variable")), request.details)
+
+  test("a grant for an assignment alone permits no command"):
+    // `LEVEL=debug` is a word prefix of `LEVEL=debug <any command>`; the bare command must pass by itself.
+    val env = TestEnv(commands = List("LEVEL=debug"))
+    import env.given
+    val show = fixture("value", "LEVEL")
+    val e = intercept[SecurityException](env.host.withEnv(Map("LEVEL" -> "debug")) { env.host.exec(show) })
+    assert(e.getMessage.nn.contains(ScalaSource.stringLiteral(stageLine(show))), e.getMessage)
+
+  test("each variable is matched alone, so a star cannot cover a second assignment"):
+    val env = TestEnv(commands = List(valuePattern, s"LEVEL=* $valuePattern *"))
+    import env.given
+    val show = fixture("value", "LEVEL")
+    assertEquals(env.host.withEnv(Map("LEVEL" -> "info")) { env.host.exec(show).stdout.trim }, "info")
+    val e = intercept[SecurityException]:
+      env.host.withEnv(Map("LEVEL" -> "info", "OTHER" -> "x")) { env.host.exec(show) }
+    assert(e.getMessage.nn.contains(s"'OTHER=x ${stageLine(show)}'"), e.getMessage)
+
+  test("only a pattern that begins with NAME= permits a variable"):
+    // `*` and `*value*` match every assignment line too; they permit commands, not variables.
+    val env = TestEnv(commands = List("*", s"*value *"))
+    import env.given
+    val show = fixture("value", "OTHER")
+    assertEquals(env.host.exec(show).stdout.trim, "<unset>")
+    val e = intercept[SecurityException](env.host.withEnv(Map("OTHER" -> "x")) { env.host.exec(show) })
+    assert(e.getMessage.nn.contains(s"'OTHER=x ${stageLine(show)}'"), e.getMessage)
+    // Nor do they make a request for one look already held: the user is asked.
+    env.decisions = List(Decision.AllowOnce)
+    val out = env.host.withEnv(Map("OTHER" -> "x")) {
+      env.host.requestExec(Set(s"OTHER=x ${stageLine(show)}")) { env.host.exec(show).stdout.trim }
+    }
+    assertEquals(out, "x")
+    assertEquals(env.requests.size, 1)
+
+  test("denyCommands reach the variables, at use and before a prompt"):
+    val env = TestEnv(commands = List("*"), denyCommands = List("LD_PRELOAD=*"))
+    import env.given
+    val show = fixture("value", "LD_PRELOAD")
+    val e = intercept[SecurityException](env.host.withEnv(Map("LD_PRELOAD" -> "/x.so")) { env.host.exec(show) })
+    assert(e.getMessage.nn.contains("denyCommands pattern 'LD_PRELOAD=*'"), e.getMessage)
+    intercept[SecurityException](env.host.requestExec(Set(s"LD_PRELOAD=/x.so ${stageLine(show)}")) { () })
+    assert(env.requests.isEmpty)
+
+  test("variables carry into requestExec blocks, and a nested withEnv adds to and overrides the outer"):
+    val env = TestEnv(commands = List(valuePattern, "A=*", "B=*"))
+    import env.given
+    def show(name: String)(using Exec) = env.host.exec(fixture("value", name)).stdout.trim
+    val seen = env.host.withEnv(Map("A" -> "outer", "B" -> "kept")) {
+      val inner = env.host.withEnv(Map("A" -> "inner")) { (show("A"), show("B")) }
+      val requested = env.host.requestExec(Set(valuePattern)) { show("A") }
+      (inner, requested, show("A"))
+    }
+    assertEquals(seen, (("inner", "kept"), "outer", "outer"))
+    assertEquals(env.host.requestExec(Set(valuePattern)) { env.host.withEnv(Map("A" -> "x")) { show("A") } }, "x")
+
+  test("withEnv refuses names that are not portable and values with NUL; exec refuses NAME=value"):
+    val env = TestEnv(commands = List(valuePattern))
+    import env.given
+    for name <- List("", "1A", "A-B", "A=B", "A B") do
+      intercept[IllegalArgumentException](env.host.withEnv(Map(name -> "x")) { () })
+    intercept[IllegalArgumentException](env.host.withEnv(Map("A" -> "a\u0000b")) { () })
+    val duplicate = scala.util.Try(env.host.withEnv(Map("Path" -> "a", "PATH" -> "b")) { () })
+    assertEquals(duplicate.isFailure, Platform.isWindows, "one variable on Windows, two elsewhere")
+    for command <- List(s"A=1 ${fixture("value", "A")}", s"'A=1' ${fixture("value", "A")}") do
+      val e = intercept[IllegalArgumentException](env.host.exec(command))
+      assert(e.getMessage.nn.contains("withEnv(Map(\"A\" -> ...))"), e.getMessage)
+
+  test("a variable replaces the inherited one, also after the key variables are stripped"):
+    val plain = TestEnv(commands = List(valuePattern, "PATH=*"))
+    val keyed = Host(plain.policy, plain.root, plain.output, plain.llm, plain.ui, keyVariables = () => Set("PATH"))
+    import plain.given
+    val show = fixture("value", "PATH")
+    // On Windows the inherited variable is spelled `Path`; it must not stay beside `PATH`.
+    assertEquals(plain.host.withEnv(Map("PATH" -> "chosen")) { plain.host.exec(show).stdout.trim }, "chosen")
+    assertEquals(keyed.withEnv(Map("PATH" -> "chosen")) { keyed.exec(show).stdout.trim }, "chosen")
+
+  test("a process spawned in withEnv is shown with its variables and outlives the block"):
+    val env = TestEnv(commands = List(valuePattern, ProcessFixture.pattern("cat"), "GREETING=*"))
+    import env.given
+    val (cat, printer) = env.host.withEnv(Map("GREETING" -> "hi there")) {
+      (env.host.spawn(fixture("cat")), env.host.spawn(fixture("value", "GREETING")))
+    }
+    assertEquals(printer.waitFor(10_000).map(_.stdout.trim), Some("hi there"))
+    assert(env.host.runningProcesses.exists(_.id == cat.id))
+    assert(env.processEvents.exists(_.startsWith(s"p${cat.id} started: GREETING=\"hi there\" ")), env.processEvents)
+    env.host.killProcesses()
+
   // ── Network, at the host level ──────────────────────────────────
 
   test("httpGet returns the body when the host is allowed"):
@@ -642,6 +759,28 @@ class PermissionSuite extends munit.FunSuite:
         s"""requestExec(Set(${ujson.write(pwdPattern)}), "inspect cwd") { exec(${ujson.write(pwd)}).exitCode }"""
       )
       assert(granted.success, granted.error.toString)
+
+  test("REPL: withEnv sets a variable for the commands of its block"):
+    val show = fixture("value", "GREETING")
+    withSession(commands = List(valuePattern, "GREETING=*")): (env, s) =>
+      val r = s.run(s"""withEnv(Map("GREETING" -> "from-repl")) { println(execOutput(${ujson.write(show)}).trim) }""")
+      assert(r.success, r.render)
+      assert(env.agentOut.toString.contains("from-repl"), env.agentOut.toString)
+
+  test("REPL: a process spawned in withEnv is found again with runningProcesses"):
+    val cat = fixture("cat")
+    withSession(commands = List(ProcessFixture.pattern("cat"), "GREETING=*")): (env, s) =>
+      // The handle carries the block's capability, so it cannot leave the block.
+      val escaped = s.run(s"""val leaked = withEnv(Map("GREETING" -> "hi")) { spawn(${ujson.write(cat)}) }""")
+      assert(!escaped.success, escaped.render)
+      val found = s.run(
+        s"""withEnv(Map("GREETING" -> "hi")) { spawn(${ujson.write(cat)}); () }
+           |val p: Process^{ex} = runningProcesses.last
+           |p.sendLine("back"); println(p.readUntil("back\\n", 5000).trim); p.kill()""".stripMargin
+      )
+      assert(found.success, found.render)
+      assert(found.output.contains("back"), found.output)
+      env.host.killProcesses()
 
   test("REPL: a rejected command inside a granted scope still throws at runtime"):
     val echoPattern = ProcessFixture.pattern("echo")

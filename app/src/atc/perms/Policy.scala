@@ -216,8 +216,16 @@ final class Policy(
     denyCommands.find(GlobMatcher.matchesCommand(commandLine, _))
 
   def commandAllowed(scopeId: ScopeId, commandLine: String): Boolean =
-    mode.allowsExec && commandDenied(commandLine).isEmpty &&
-      commandPatterns(scope(scopeId)).exists(GlobMatcher.matchesCommand(commandLine, _))
+    mode.allowsExec && commandDenied(commandLine).isEmpty && permits(commandPatterns(scope(scopeId)), commandLine)
+
+  /** A line that sets a variable (`NAME=value command`) is permitted only by a pattern that
+    * names one too: `*` or `*.sh` permits commands, and would otherwise match any assignment
+    * in front of them. Deny patterns match without this restriction. */
+  private def permits(patterns: List[String], commandLine: String): Boolean =
+    val assigning = GlobMatcher.startsWithAssignment(commandLine)
+    patterns.exists(p =>
+      (!assigning || GlobMatcher.startsWithAssignment(p)) && GlobMatcher.matchesCommand(commandLine, p)
+    )
 
   def requestExec(parentId: ScopeId, requested: List[String], reason: String): ScopeId =
     val commands = normalized(requested)
@@ -228,7 +236,7 @@ final class Policy(
     // A pattern counts as held when its own spelling is permitted, which does not make
     // it a subset: `./run.sh` is held under `*.sh` yet would also permit `./run.sh -x`.
     // The scope therefore holds only the patterns the user approved.
-    val missing = commands.filterNot(command => commandPatterns(parent).exists(GlobMatcher.matchesCommand(command, _)))
+    val missing = commands.filterNot(permits(commandPatterns(parent), _))
     if missing.nonEmpty then
       decide(ExecRequest(missing, reason), s"commands ${missing.mkString(", ")}") {
         base.synchronized(base.commands ++= missing)

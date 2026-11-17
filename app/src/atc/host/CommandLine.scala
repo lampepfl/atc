@@ -51,6 +51,16 @@ private[atc] object CommandLine:
     case Word(text: String)
     case Pipe, In, Out, Append, MergeErr
 
+  /** A name `withEnv` accepts: the portable shell form, so `NAME=` ends at the first `=`. */
+  private val VariableName = "[A-Za-z_][A-Za-z0-9_]*".r
+
+  def isVariableName(name: String): Boolean = VariableName.matches(name)
+
+  /** How a variable a command runs with is matched and shown: `NAME=value`, the value
+    * rendered like an argument. Program words of that shape are refused, so this rendering
+    * stays distinct from every command line. */
+  def assignment(name: String, value: String): String = s"$name=${renderArg(value)}"
+
   private def renderArg(arg: String): String =
     val plain = arg.nonEmpty && arg.forall: char =>
       (char >= 'a' && char <= 'z') ||
@@ -190,6 +200,14 @@ private[atc] object CommandLine:
 
     def endStage(why: String): Unit =
       if arguments.isEmpty then throw IllegalArgumentException(s"exec: empty command $why in: $line")
+      val program = arguments.head
+      program.indexOf('=') match
+        case end if end > 0 && isVariableName(program.substring(0, end)) =>
+          throw IllegalArgumentException(
+            s"exec runs no shell: the variable assignment '$program' in \"$line\" is not supported; " +
+              s"set it with withEnv(Map(\"${program.substring(0, end)}\" -> ...)) { exec(...) }"
+          )
+        case _ => ()
       stages += Stage(arguments.toList, mergeErr)
       arguments.clear()
       mergeErr = false
