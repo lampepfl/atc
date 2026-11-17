@@ -808,6 +808,13 @@ list and records the model as the last one, so the session starts without anothe
 *Not now* or Esc runs on the built-in starting config. `-p` runs and terminals without
 menus never ask.
 
+The first run and `/providers` → *Add a provider* also offer a custom OpenAI-compatible
+(`api` `openai`, Chat Completions) or Anthropic-compatible server (`FirstRun.custom`): a name
+that no configured provider or preset has, a base URL, and a key unless left empty, then the
+model list as for a preset. The key goes into a variable of its own, `NAME_API_KEY`, numbered
+while that one is bound already, so it replaces no other provider's key and no key bound
+before is sent to the new address. A local server such as Ollama is set up this way.
+
 **Turning providers and models on and off.** `"enabled": false` on a provider or a model
 hides it; a disabled provider is never listed. `/providers` edits these switches and the
 model entries in place (`ObjectText.withMember` keeps the file's formatting). Choosing models

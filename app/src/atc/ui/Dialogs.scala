@@ -100,6 +100,14 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
     ask(question)
     answerField(prompt.readSecret(Under + styled("key> ", Cyan)))
 
+  /** A line of text the app asks for in setup, such as a provider's name or address. `None`
+    * when empty or cancelled. */
+  def text(question: String): Option[String] =
+    ask(question)
+    val reply = freeText(Under + styled("> ", Cyan))
+    reply.foreach(a => write(Under + styled(s"${g.arrow} ${Ansi.sanitize(a)}", Green) + "\n"))
+    reply
+
   /** A question from the agent. Options render as a menu (or checkboxes when `multiple`),
     * always with a custom-answer entry; no options give a free-text line. `None` on
     * Ctrl-C/Ctrl-D. */
