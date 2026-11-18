@@ -111,9 +111,12 @@ object ToolOutput:
       case (Decision.Revise(instructions), what) =>
         s"the user requested changes to $what (no permission granted). User instructions: ${ujson.write(instructions)}. " +
           "Revise the plan to follow these instructions and request only the permissions still needed; this is not a blanket denial"
-      // Not the user's no: they are probably away, and every request would wait out the time again.
+      // Not the user's no: they are probably away, so the agent carries on without asking again.
       case (Decision.TimedOut, what) =>
         s"nobody answered the request for $what in time, so it was denied automatically (the user did not decide " +
-          "and is probably away: do not repeat it or make other permission requests in this turn; finish what " +
-          "needs no new permission, then end the turn saying which permissions you need and why)"
+          "and is probably away). Do not repeat this request, and avoid other permission requests and `ask` " +
+          "questions in this turn: a request would wait the full time again, and a question until the user " +
+          "returns. Continue the task with an approach that works within the permissions you already have; if it " +
+          "truly cannot be finished without this permission, do everything else you can and say at the end which " +
+          "permission you need and why"
     s"[permissions: ${parts.mkString("; ")}]"

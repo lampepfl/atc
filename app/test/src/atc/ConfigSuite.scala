@@ -54,7 +54,7 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(c.model, None)
     assertEquals(c.safeMode, true)
     assertEquals(c.executionTimeoutMs, Some(300000L))
-    assertEquals(c.permissionTimeoutSeconds, 0) // a permission pop-up waits for ever
+    assertEquals(c.permissionTimeoutSeconds, 60) // then a permission pop-up denies on its own
     assertEquals(c.maxToolCalls, 200)
     assertEquals(c.maxToolOutputChars, 40000)
     assert(c.files.isEmpty && c.commands.isEmpty && c.hosts.isEmpty)
@@ -235,9 +235,13 @@ class ConfigSuite extends munit.FunSuite:
       )
     assert(loadError("""{ "permissionTimeoutSeconds": null }""").endsWith("permissionTimeoutSeconds must not be null"))
     assert(loadError("""{ "permissionTimeoutSeconds": 2.5 }""").contains("must be a whole number in range"))
-    // The starting global config names it, at the default.
-    assertEquals(upickle.default.read[Config](ujson.read(Config.globalTemplate)).permissionTimeoutSeconds, 0)
-    assert(Config.globalTemplate.contains("\"permissionTimeoutSeconds\": 0"))
+    // The starting global config names it, at the default, and the default applies without any config.
+    assertEquals(upickle.default.read[Config](ujson.read(Config.globalTemplate)).permissionTimeoutSeconds, 60)
+    assert(Config.globalTemplate.contains("\"permissionTimeoutSeconds\": 60"))
+    val nowhere = tempDir()
+    assertEquals(load(nowhere, None).settings.permissionTimeoutSeconds, 60)
+    val bundled = Config.load(nowhere, None, nowhere.resolve("no-such-global.json").nn, bundledGlobal = true)
+    assertEquals((bundled.bundledGlobal, bundled.settings.permissionTimeoutSeconds), (true, 60))
 
   test("a null for a setting that is not optional, or a fraction for a whole number, is rejected with its file"):
     def rejected(json: String): String =

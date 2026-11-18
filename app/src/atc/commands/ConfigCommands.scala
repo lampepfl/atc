@@ -121,8 +121,8 @@ final class ConfigCommands(app: App):
           value.num.toInt != models.configuration.settings.permissionTimeoutSeconds
         then
           tui.warn(
-            s"${setting.key} stays $shown: a config in force sets a shorter limit, and a project config or " +
-              "this session can only shorten one, never lengthen it or turn it off"
+            s"${setting.key} stays $shown: a project config or this session can only shorten the time the global " +
+              s"config sets (${Config().permissionTimeoutSeconds} by default), never lengthen it or turn it off"
           )
     catch case NonFatal(e) => tui.error(s"Nothing changed: ${Debug.message(e)}")
 

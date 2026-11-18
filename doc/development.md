@@ -554,15 +554,18 @@ JSON-quoted instructions after the bounded execution output. A revision is disti
 `Deny`: the model should change its plan and may submit a narrower permission request.
 Neither decision adds a permanent deny rule; configured deny rules remain unchanged.
 
-`Decision.TimedOut` is the pop-up's own answer when `permissionTimeoutSeconds` passes before
-anyone answers it. It is a denial (the request throws `Access denied: nobody answered the
-permission request for … in time, so it was denied automatically`), recorded apart from
-`Deny` because the user did not decide: the tool result's decision note says nobody
-answered, that the user is probably away, and that the model should not repeat the request
-or make other permission requests in that turn, but finish what needs no new permission and
-end the turn saying which permissions it needs. Each further request would otherwise wait out
-the time again, and a model reading a plain denial might try other routes. Like `Deny`, it
-does not set `needsReplan`.
+`Decision.TimedOut` is the pop-up's own answer when `permissionTimeoutSeconds` (60 by
+default) passes before anyone answers it, so an agent left alone is not blocked. It is a
+denial (the request throws `Access denied: nobody answered the permission request for … in
+time, so it was denied automatically`), recorded apart from `Deny` because the user did not
+decide. The tool result's decision note says that the user is probably away; that the model
+should not repeat the request, and should avoid other permission requests and `ask`
+questions in that turn, since a request would wait the full time again and a question until
+the user returns; and that it should continue the task within the permissions it already
+has and, if the task truly needs this one, do everything else it can and say at the end
+which permission it needs and why. The note arrives with every call that timed out, even when
+the snippet caught the exception, so the system prompt does not describe timeouts. Like
+`Deny`, it does not set `needsReplan`: the rest of the batch runs.
 
 File patterns match a path or an ancestor. Component globs match at any depth; relative
 patterns with separators use the layer's base; absolute patterns and `~` use an absolute
@@ -771,10 +774,13 @@ global config is the user's own and is written through a link they made. Other e
 as a new `model`, do not change the fingerprint.
 
 Only explicitly defined project settings narrow a value. `executionTimeoutMs` defaults to
-300000; a JSON `null` clears it and means no limit. `permissionTimeoutSeconds` defaults to 0,
-also no limit, so a narrowing layer's value applies when it is shorter or the granting layers
-set none, and its 0 removes nothing; a later granting layer (`-c`) may lengthen or remove the
-global config's. `ConfigValidation.validateLayer` checks it in every layer, 0 or 5 to 86400
+300000; a JSON `null` clears it and means no limit. `permissionTimeoutSeconds` defaults to 60
+as a case-class default, so it applies whenever no granting layer sets the key, as in a global
+config written before the setting existed or with no config at all; the starting config
+spells out the same 60. Its 0 means no limit, which only a granting layer can set: a
+narrowing layer's value applies when it is shorter, or when the granting layers set 0, and
+its own 0 removes nothing. A later granting layer (`-c`) may lengthen or remove the global
+config's. `ConfigValidation.validateLayer` checks it in every layer, 0 or 5 to 86400
 (`ConfigValidation.PermissionTimeouts`), so a value out of range is reported with its file
 even where a stricter one wins. Reading a layer
 (`ConfigValidation.requireExact`) refuses a key that is not a setting, which the JSON reader
@@ -798,9 +804,9 @@ that turns `webSearch` on needs trust. `permissionTimeoutSeconds` is a policy ke
 the sandbox alone: it only lets the pop-ups deny on their own. A change goes into a `session`
 layer that `Models` keeps in memory and appends after the files on each reload, so a
 `/providers` edit does not drop it. That layer merges as a narrowing layer: a policy key in
-it could only tighten, and its other settings win in layer order. So the session may set or
-shorten a permission timeout, and turn off one it set itself, but not lengthen or turn off one
-a file sets; `/config` warns when the value in force stays shorter than the one chosen.
+it could only tighten, and its other settings win in layer order. So the session may shorten
+the permission timeout, but not lengthen it or turn it off unless the granting layers set 0;
+`/config` warns when the value in force stays shorter than the one chosen.
 Saving to the project config in force or to the global config also writes that file
 with `Config.setTopLevel`, and the note on a saved value names a later file that sets the
 same key and wins at the next start. `App.useSettings` applies the combined settings to the
@@ -947,8 +953,10 @@ which the user neither typed nor had the terminal focused: ten seconds for a que
 permission request, thirty for a finished turn.
 
 **Permission timeout.** `permissionTimeoutSeconds` is how long a permission pop-up waits
-for the user before it denies the request as `Decision.TimedOut`: 0 (the default) waits for
-ever, otherwise 5 to 86400 seconds. The time counts from when the pop-up shows, not while it
+for the user before it denies the request as `Decision.TimedOut`: 5 to 86400 seconds, 60 by
+default, or 0, which waits for ever and only the global config or `-c` can set. The default
+keeps an agent left alone working: denied, it carries on with another approach. The time
+counts from when the pop-up shows, not while it
 waits for another pop-up to close (`Tui.askPermission` starts its `Countdown` inside
 `popupBlock`), and the snippet's `executionTimeoutMs` clock is paused meanwhile, as for every
 pop-up. The menu's footer ends with `auto-deny in <time left>`; the first key the menu acts

@@ -112,7 +112,7 @@ class AgentSuite extends munit.FunSuite:
     assert(!lastToolText.contains("granted"), lastToolText)
     assert(lastToolText.contains("Access denied: nobody answered the permission request"), lastToolText)
     assert(lastToolText.contains("[permissions: nobody answered the request for read on"), lastToolText)
-    assert(lastToolText.contains("do not repeat it or make other permission requests in this turn"), lastToolText)
+    assert(lastToolText.contains("Continue the task with an approach that works within the permissions"), lastToolText)
     assert(!lastToolText.contains("by the user") && !lastToolText.contains("the user denied"), lastToolText)
 
   test("exec through policy"):

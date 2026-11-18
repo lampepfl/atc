@@ -417,24 +417,27 @@ class LayerSuite extends munit.FunSuite:
     val limited = World(global = """{ "executionTimeoutMs": 9000 }""", project = """{ "executionTimeoutMs": null }""")
     assertEquals(limited.settings.executionTimeoutMs, Some(9000L))
 
-  test("a permission timeout is a limit: a project may add or shorten one, never lengthen or remove it"):
+  test("a permission timeout is a limit: a project may shorten one, never lengthen or remove it"):
     def timeout(global: String, project: String = "", explicit: String = "") =
       World(global = global, project = project, explicit = explicit).settings.permissionTimeoutSeconds
-    assertEquals(timeout("""{ }"""), 0, "unset, nothing is denied for want of an answer")
-    assertEquals(timeout("""{ "permissionTimeoutSeconds": 60 }"""), 60)
-    assertEquals(timeout("""{ }""", project = """{ "permissionTimeoutSeconds": 30 }"""), 30, "added")
+    // A config without the key, as every one written before the setting, gets the default; so does none at all.
+    assertEquals(timeout(""), 60)
+    assertEquals(timeout("""{ }"""), 60)
+    assertEquals(timeout("""{ }""", project = """{ "model": "m" }"""), 60)
+    assertEquals(timeout("""{ }""", project = """{ "permissionTimeoutSeconds": 30 }"""), 30)
+    assertEquals(timeout("""{ }""", project = """{ "permissionTimeoutSeconds": 600 }"""), 60, "not lengthened")
+    assertEquals(timeout("""{ }""", project = """{ "permissionTimeoutSeconds": 0 }"""), 60, "not turned off")
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 120 }"""), 120)
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 120 }""", """{ "permissionTimeoutSeconds": 30 }"""), 30)
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 120 }""", """{ "permissionTimeoutSeconds": 600 }"""), 120)
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 120 }""", """{ "permissionTimeoutSeconds": 0 }"""), 120)
+    // Only a granting layer turns it off, and a project may then add a time of its own.
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 0 }"""), 0)
     assertEquals(timeout("""{ "permissionTimeoutSeconds": 0 }""", """{ "permissionTimeoutSeconds": 30 }"""), 30)
-    assertEquals(timeout("""{ "permissionTimeoutSeconds": 60 }""", """{ "permissionTimeoutSeconds": 30 }"""), 30)
-    assertEquals(timeout("""{ "permissionTimeoutSeconds": 60 }""", """{ "permissionTimeoutSeconds": 600 }"""), 60)
-    assertEquals(timeout("""{ "permissionTimeoutSeconds": 60 }""", """{ "permissionTimeoutSeconds": 0 }"""), 60)
-    assertEquals(timeout("""{ "permissionTimeoutSeconds": 60 }""", """{ "model": "m" }"""), 60, "left alone")
     // A later granting layer may lengthen or remove what the global config set.
+    assertEquals(timeout("""{ }""", explicit = """{ "permissionTimeoutSeconds": 0 }"""), 0)
     assertEquals(
-      timeout("""{ "permissionTimeoutSeconds": 60 }""", explicit = """{ "permissionTimeoutSeconds": 0 }"""),
-      0
-    )
-    assertEquals(
-      timeout("""{ "permissionTimeoutSeconds": 60 }""", explicit = """{ "permissionTimeoutSeconds": 600 }"""),
+      timeout("""{ "permissionTimeoutSeconds": 120 }""", explicit = """{ "permissionTimeoutSeconds": 600 }"""),
       600,
     )
     // A value out of range is reported even where a stricter one wins.
@@ -442,15 +445,18 @@ class LayerSuite extends munit.FunSuite:
       World(global = """{ "permissionTimeoutSeconds": 60 }""", project = """{ "permissionTimeoutSeconds": 100000 }""")
     assert(bad.getMessage.nn.contains(".atc") && bad.getMessage.nn.contains("(was 100000)"), bad.getMessage)
 
-  test("what /config sets for the session may add or shorten a permission timeout, not lengthen or remove one"):
+  test("what /config sets for the session may shorten a permission timeout, not lengthen or remove one"):
     def withSession(global: String, seconds: Int) =
       val w = World(global = global)
       val session = ConfigLayer.session(ujson.Obj("permissionTimeoutSeconds" -> seconds))
       Configuration.combine(w.configuration.layers :+ session, w.configuration.keys).settings.permissionTimeoutSeconds
     assertEquals(withSession(GrantCwd, 30), 30)
-    assertEquals(withSession("""{ "permissionTimeoutSeconds": 60 }""", 30), 30)
-    assertEquals(withSession("""{ "permissionTimeoutSeconds": 60 }""", 120), 60)
-    assertEquals(withSession("""{ "permissionTimeoutSeconds": 60 }""", 0), 60)
+    assertEquals(withSession(GrantCwd, 120), 60, "the default is not lengthened")
+    assertEquals(withSession(GrantCwd, 0), 60, "nor turned off")
+    assertEquals(withSession("""{ "permissionTimeoutSeconds": 120 }""", 30), 30)
+    assertEquals(withSession("""{ "permissionTimeoutSeconds": 120 }""", 300), 120)
+    assertEquals(withSession("""{ "permissionTimeoutSeconds": 0 }""", 30), 30)
+    assertEquals(withSession("""{ "permissionTimeoutSeconds": 0 }""", 0), 0)
 
   // ── models are not policy ───────────────────────────────────────
 

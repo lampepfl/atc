@@ -354,9 +354,9 @@ requestNetwork(Set("api.github.com"), "check PRs") { httpGet("https://api.github
 The pop-up offers **Allow once**, **Allow for this session**, **Deny this request**, and
 **Tell the agent what to change**. The last one sends your instructions back instead of a
 grant: "request only the first four commands; skip the deployment" makes the agent revise
-its request. A request can also be denied when nobody answers it in time
-(`permissionTimeoutSeconds`, off by default). The granted capability cannot leave the block, and the host closes the scope
-when the block exits. `locked` rules cannot be widened at all, and a `denyCommands` or
+its request. A request nobody answers within a minute is denied on its own, so an agent left
+alone keeps working (`permissionTimeoutSeconds`). The granted capability cannot leave the
+block, and the host closes the scope when the block exits. `locked` rules cannot be widened at all, and a `denyCommands` or
 `denyHosts` match is refused without a pop-up.
 
 ## Configuration
@@ -445,14 +445,17 @@ variable the agent sets for a command is permitted separately, as `NAME=value co
 details and Windows notes are in
 [doc/development.md](doc/development.md#file-rules-and-command-patterns).
 
-**Unanswered permission requests.** `"permissionTimeoutSeconds": 120` denies a permission
-request that nobody answers within two minutes, so an agent left alone does not wait on a
-pop-up for ever; `0`, the default, waits, and a time is from 5 seconds to a day. The pop-up
-counts down in its footer (`auto-deny in 1 min 59 s`) until you press a key, which stops
-the countdown; a terminal without menus states the limit in its prompt and keeps to it. The
-agent is told that nobody answered, not that you refused, and not to ask again that turn.
-Like the other limits, a project config or `/config` for the session may set or shorten
-the time but not lengthen it or turn it off.
+**Unanswered permission requests.** A permission request that nobody answers within
+`permissionTimeoutSeconds` (60 by default, any time from 5 seconds to a day) is denied on its
+own, so an agent left alone is not blocked on a pop-up and can try another way. The pop-up
+counts down in its footer (`auto-deny in 59 s`) until you press a key, which stops the
+countdown; a terminal without menus states the limit in its prompt and keeps to it. The
+agent is told that nobody answered, not that you refused: it does not repeat the request,
+avoids new ones that turn (each would wait the full time again), continues with what the
+permissions it has allow, and says at the end which permission it still needs. `0` waits for
+ever, but only the global config or `-c` can set it: like the other limits, a project config
+or `/config` for the session may shorten the time but not lengthen it or turn it off. `-p`
+and `--approve-all` runs never show the pop-up, so the setting changes nothing there.
 
 ## Security model
 
