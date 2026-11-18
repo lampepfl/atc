@@ -69,6 +69,14 @@ class ToolOutputSuite extends munit.FunSuite:
     assert(out.contains("do not repeat it unchanged"), out)
     assert(out.contains("or infer a permanent ban on every item"), out)
 
+  test("a request nobody answered is not a denial by the user, and is not to be asked again this turn"):
+    val out =
+      ToolOutput.renderForModel(ExecutionResult(false, "x"), 10000, List(Decision.TimedOut -> "hosts a.example"))
+    assert(out.contains("nobody answered the request for hosts a.example in time"), out)
+    assert(out.contains("denied automatically"), out)
+    assert(out.contains("do not repeat it or make other permission requests in this turn"), out)
+    assert(!out.contains("the user denied"), out)
+
   test("a successful run gets no hint even when its output quotes a diagnostic"):
     val quoted = "README: ... it cannot subsume a read-only capture set of the stateful type ..."
     assertEquals(ToolOutput.renderForModel(ExecutionResult(true, quoted), 10000), quoted)

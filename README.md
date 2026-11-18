@@ -354,7 +354,8 @@ requestNetwork(Set("api.github.com"), "check PRs") { httpGet("https://api.github
 The pop-up offers **Allow once**, **Allow for this session**, **Deny this request**, and
 **Tell the agent what to change**. The last one sends your instructions back instead of a
 grant: "request only the first four commands; skip the deployment" makes the agent revise
-its request. The granted capability cannot leave the block, and the host closes the scope
+its request. A request can also be denied when nobody answers it in time
+(`permissionTimeoutSeconds`, off by default). The granted capability cannot leave the block, and the host closes the scope
 when the block exits. `locked` rules cannot be widened at all, and a `denyCommands` or
 `denyHosts` match is refused without a pop-up.
 
@@ -380,7 +381,8 @@ provider web search, the keys in its `.atc/keys.properties`) applies only after 
 shown it to you and you chose to trust it; ATC asks again when that part changes. A project
 config that belongs to another user is ignored.
 `/config` changes the settings that cannot loosen the sandbox (input prediction,
-notifications, web search, compaction) for the session or in either file. The exact merge
+notifications, web search, compaction, the permission timeout) for the session or in either
+file. The exact merge
 rules are in [doc/development.md](doc/development.md#configuration-semantics).
 
 ```json
@@ -442,6 +444,15 @@ variable the agent sets for a command is permitted separately, as `NAME=value co
 `LD_PRELOAD` or `GIT_CONFIG_*` only as you would the code they can make a command run. Pattern
 details and Windows notes are in
 [doc/development.md](doc/development.md#file-rules-and-command-patterns).
+
+**Unanswered permission requests.** `"permissionTimeoutSeconds": 120` denies a permission
+request that nobody answers within two minutes, so an agent left alone does not wait on a
+pop-up for ever; `0`, the default, waits, and a time is from 5 seconds to a day. The pop-up
+counts down in its footer (`auto-deny in 1 min 59 s`) until you press a key, which stops
+the countdown; a terminal without menus states the limit in its prompt and keeps to it. The
+agent is told that nobody answered, not that you refused, and not to ask again that turn.
+Like the other limits, a project config or `/config` for the session may set or shorten
+the time but not lengthen it or turn it off.
 
 ## Security model
 

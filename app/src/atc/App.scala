@@ -12,6 +12,7 @@ import atc.ui.{Notifier, Tui}
 
 import java.nio.file.Path
 import java.util.Locale
+import scala.concurrent.duration.*
 
 /** The running application: wires configuration, models, permission policy,
   * host, sandbox, agent loop and terminal UI together, then runs either one
@@ -36,12 +37,16 @@ final class App(args: Cli.Args, val tui: Tui):
 
   // ── permission policy ─────────────────────────────────────────────
 
+  /** How long a permission pop-up waits for an answer before it denies the request
+    * (`permissionTimeoutSeconds`); `/config` may change it during the session. */
+  @volatile private var permissionTimeout: Option[FiniteDuration] = App.permissionTimeout(config)
+
   val policy: Policy =
     Policy(
       configuration.fileRules(cwd),
       config.commands,
       config.hosts,
-      App.permissionPrompter(args, request => withClockPaused(tui.askPermission(request))),
+      App.permissionPrompter(args, request => withClockPaused(tui.askPermission(request, permissionTimeout))),
       config.denyCommands,
       config.denyHosts
     )
@@ -130,6 +135,7 @@ final class App(args: Cli.Args, val tui: Tui):
   def useSettings(settings: Config): Unit =
     agent.config = agent.config
       .copy(autoCompactThreshold = settings.autoCompactThreshold, compactKeepRatio = settings.compactKeepRatio)
+    permissionTimeout = App.permissionTimeout(settings)
     if args.prompt.isEmpty then tui.notifier = Notifier.fromSetting(settings.notifications)
     predictor.enabled = settings.predictInput && canPredict
     if !predictor.enabled then predictor.invalidate()
@@ -259,6 +265,10 @@ object App:
 
   /** Bare lines that quit like `/quit`: what shells and editors use. */
   private val QuitWords: Set[String] = Set(":q", "exit", "quit")
+
+  /** The time a permission pop-up waits under `settings`; `None` waits for ever. */
+  private[atc] def permissionTimeout(settings: Config): Option[FiniteDuration] =
+    Option.when(settings.permissionTimeoutSeconds > 0)(settings.permissionTimeoutSeconds.seconds)
 
   /** A scripted turn has nobody to answer permission pop-ups. Fail closed
     * without reading stdin unless the caller explicitly chose `--approve-all`. */

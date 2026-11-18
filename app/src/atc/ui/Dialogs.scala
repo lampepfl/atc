@@ -43,8 +43,11 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
 
   /** A permission request: allow once, allow for the session, deny, or instructions for the
     * agent. A cancelled menu denies, so Esc is shown as deny; empty or cancelled instructions
-    * return to the menu. A plain terminal reads a typed reply ([[Menus.permissionReply]]). */
-  def permission(req: PermissionRequest): Decision =
+    * return to the menu. A plain terminal reads a typed reply ([[Menus.permissionReply]]).
+    * With a `countdown`, nobody answering in time denies the request as
+    * [[Decision.TimedOut]]: the menu shows the time left until the user presses a key, and
+    * a plain terminal, which shows no key until Enter, says the limit and keeps to it. */
+  def permission(req: PermissionRequest, countdown: Option[Countdown] = None): Decision =
     // The request embeds model-chosen paths and command lines: sanitize.
     write(Indent + styled(s"${g.warn} Permission request: ${Ansi.sanitize(req.title)}", Yellow, Bold) + "\n")
     val rows = req.details.flatMap(detail => TextLayout.wrap(Ansi.sanitize(detail), width - 5, Under.length))
@@ -60,7 +63,11 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
     /** The decision, `None` when the menu is cancelled. After empty instructions the menu
       * opens again on that row, never on Allow once. */
     @tailrec def choose(initial: Int): Option[Decision] =
-      menu(choices, escape = "deny", initial) match
+      val outcome = menus.open("", choices, multi = false, initial, Set.empty, "deny", Under, countdown)
+      val label = outcome match
+        case MenuState.Outcome.Chosen(items) => items.headOption.flatMap(choices.lift)
+        case _ => None
+      label match
         case Some(Menus.AllowOnce) => Some(Decision.AllowOnce)
         case Some(Menus.AllowSession) => Some(Decision.AllowSession)
         case Some(Menus.ReviseLabel) =>
@@ -69,17 +76,26 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
             case Some(text) => Some(Decision.Revise(text))
             case None => choose(choices.indexOf(Menus.ReviseLabel))
         case Some(_) => Some(Decision.Deny)
-        case None => None
+        case None => Option.when(outcome == MenuState.Outcome.TimedOut)(Decision.TimedOut)
     val chosen =
       if !plain then choose(if scrolled then choices.indexOf(Menus.DenyLabel) else 0)
       else
-        val reply = freeText(styled("Allow? [y]es once / [s]ession / [n]o / type instructions: ", Yellow))
-        Some(Menus.permissionReply(reply))
+        val limit = countdown.fold("")(c => s" (auto-deny in ${Format.seconds(c.secondsLeft)})")
+        val reply =
+          freeText(styled(s"Allow? [y]es once / [s]ession / [n]o / type instructions$limit: ", Yellow), countdown)
+        if reply.isEmpty && countdown.exists(_.expired) then Some(Decision.TimedOut)
+        else Some(Menus.permissionReply(reply))
     val decision = chosen.getOrElse(Decision.Deny)
     // The menu echoes the choice and the instructions stay where they were typed; confirm
     // only what the user did not see.
     decision match
       case Decision.Revise(_) => write(Under + styled(s"${g.arrow} sent to the agent", Cyan) + "\n")
+      case Decision.TimedOut =>
+        // On a terminal of unknown size, JLine leaves the line of a read it did not finish open.
+        val size = screen.terminal.getBufferSize.nn
+        if plain && size.getColumns == 0 && size.getRows == 0 then write("\n")
+        val limit = countdown.fold("")(c => s" within ${Format.seconds(c.limit.toSeconds)}")
+        write(Under + styled(s"${g.arrow} denied: no answer$limit", Red) + "\n")
       case _ if plain || chosen.isEmpty =>
         val label = decision match
           case Decision.AllowOnce => styled(s"${g.arrow} allowed once", Green)
@@ -146,7 +162,9 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
       case None => write(Under + styled(s"${g.arrow} No answer", Dim) + "\n")
     reply
 
-  private def freeText(promptText: String): Option[String] = answerField(prompt.readAnswer(promptText))
+  /** Typed text; with a `countdown`, nothing once its time runs out (see [[Countdown.interrupting]]). */
+  private def freeText(promptText: String, countdown: Option[Countdown] = None): Option[String] =
+    answerField(countdown.fold(prompt.readAnswer(promptText))(_.interrupting(prompt.readAnswer(promptText))))
 
   /** Read typed text with the field's keys in the footer. */
   private def answerField(read: => Option[String]): Option[String] =

@@ -18,6 +18,9 @@ object Format:
       val total = secs.round // round first: 119.6 s is "2 min 0 s", not "1 min 60 s"
       s"${total / 60} min ${total % 60} s"
 
+  /** Whole seconds, for a countdown or a limit: `42 s`, then `2 min 5 s`. */
+  def seconds(n: Long): String = if n < 60 then s"$n s" else s"${n / 60} min ${n % 60} s"
+
   /** `1234` → `1.2k`, `200000` → `200k`, `1234567` → `1.2M`. */
   def count(n: Long): String =
     def short(x: Double, unit: String) = (if x == x.floor then f"$x%.0f" else f"$x%.1f") + unit

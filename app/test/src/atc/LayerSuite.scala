@@ -417,6 +417,41 @@ class LayerSuite extends munit.FunSuite:
     val limited = World(global = """{ "executionTimeoutMs": 9000 }""", project = """{ "executionTimeoutMs": null }""")
     assertEquals(limited.settings.executionTimeoutMs, Some(9000L))
 
+  test("a permission timeout is a limit: a project may add or shorten one, never lengthen or remove it"):
+    def timeout(global: String, project: String = "", explicit: String = "") =
+      World(global = global, project = project, explicit = explicit).settings.permissionTimeoutSeconds
+    assertEquals(timeout("""{ }"""), 0, "unset, nothing is denied for want of an answer")
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 60 }"""), 60)
+    assertEquals(timeout("""{ }""", project = """{ "permissionTimeoutSeconds": 30 }"""), 30, "added")
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 0 }""", """{ "permissionTimeoutSeconds": 30 }"""), 30)
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 60 }""", """{ "permissionTimeoutSeconds": 30 }"""), 30)
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 60 }""", """{ "permissionTimeoutSeconds": 600 }"""), 60)
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 60 }""", """{ "permissionTimeoutSeconds": 0 }"""), 60)
+    assertEquals(timeout("""{ "permissionTimeoutSeconds": 60 }""", """{ "model": "m" }"""), 60, "left alone")
+    // A later granting layer may lengthen or remove what the global config set.
+    assertEquals(
+      timeout("""{ "permissionTimeoutSeconds": 60 }""", explicit = """{ "permissionTimeoutSeconds": 0 }"""),
+      0
+    )
+    assertEquals(
+      timeout("""{ "permissionTimeoutSeconds": 60 }""", explicit = """{ "permissionTimeoutSeconds": 600 }"""),
+      600,
+    )
+    // A value out of range is reported even where a stricter one wins.
+    val bad = intercept[IllegalArgumentException]:
+      World(global = """{ "permissionTimeoutSeconds": 60 }""", project = """{ "permissionTimeoutSeconds": 100000 }""")
+    assert(bad.getMessage.nn.contains(".atc") && bad.getMessage.nn.contains("(was 100000)"), bad.getMessage)
+
+  test("what /config sets for the session may add or shorten a permission timeout, not lengthen or remove one"):
+    def withSession(global: String, seconds: Int) =
+      val w = World(global = global)
+      val session = ConfigLayer.session(ujson.Obj("permissionTimeoutSeconds" -> seconds))
+      Configuration.combine(w.configuration.layers :+ session, w.configuration.keys).settings.permissionTimeoutSeconds
+    assertEquals(withSession(GrantCwd, 30), 30)
+    assertEquals(withSession("""{ "permissionTimeoutSeconds": 60 }""", 30), 30)
+    assertEquals(withSession("""{ "permissionTimeoutSeconds": 60 }""", 120), 60)
+    assertEquals(withSession("""{ "permissionTimeoutSeconds": 60 }""", 0), 60)
+
   // ── models are not policy ───────────────────────────────────────
 
   test("a project layer may add models and pick one, without repeating the provider"):

@@ -18,6 +18,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import scala.collection.mutable
+import scala.concurrent.duration.FiniteDuration
 import scala.util.control.NonFatal
 
 import Ansi.{Blue, Bold, Cyan, Dim, Green, Red, Yellow}
@@ -481,13 +482,17 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
         dialogs.checkboxIndices(title, options, checked, escape = "back")
       ticked.map(_.toSet)
 
-  // The operation is set inside the pop-up, under its lock: pop-ups that `parallel` tasks
-  // open take turns, and each restores the operation it found when its turn came.
-  def askPermission(req: PermissionRequest): Decision =
+  /** Ask the user to decide on `req` (see [[Dialogs.permission]]). With a `timeout`, a
+    * request nobody answers in that time is denied as [[Decision.TimedOut]]; the time
+    * counts from when the pop-up shows, not while it waits for another to close. */
+  def askPermission(req: PermissionRequest, timeout: Option[FiniteDuration] = None): Decision =
     val summary = s"${req.title} (${req.details.mkString(", ")})"
+    // The operation is set inside the pop-up, under its lock: pop-ups that `parallel` tasks
+    // open take turns, and each restores the operation it found when its turn came.
     popupBlock("permission", summary):
       alerts.alert(s"Permission needed: $summary")
-      statusLine.withOperation("waiting for permission")(dialogs.permission(req))
+      val countdown = timeout.map(Countdown(_))
+      statusLine.withOperation("waiting for permission")(dialogs.permission(req, countdown))
 
   /** A yes/no question from the app itself (see [[Dialogs.confirm]]). */
   def confirm(question: String): Boolean = popupBlock("question", question)(dialogs.confirm(question))

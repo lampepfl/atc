@@ -31,6 +31,7 @@
   "safeMode": true,
   "respectGitignore": true,
   "executionTimeoutMs": 300000,
+  "permissionTimeoutSeconds": 0,
   "maxToolCalls": 200,
   "maxToolOutputChars": 40000,
   "autoCompactThreshold": 0.8,

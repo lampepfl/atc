@@ -1,7 +1,7 @@
 package atc.commands
 
 import atc.{App, Debug}
-import atc.config.{Config, Configuration, Origin, ProjectTrust}
+import atc.config.{Config, ConfigValidation, Configuration, Origin, ProjectTrust}
 import atc.platform.PlatformPath
 
 import java.nio.file.{Files, Path}
@@ -116,6 +116,14 @@ final class ConfigCommands(app: App):
         val shown = setting.current(models.configuration.settings)
         val where = scope.path.fold(" (this session only)")(saved(models.configuration, app.cwd, setting.key, _))
         tui.success(s"${setting.key} -> $shown$where")
+        // A limit is the shortest any narrowing layer sets, the session's own included.
+        if setting == Setting.PermissionTimeout &&
+          value.num.toInt != models.configuration.settings.permissionTimeoutSeconds
+        then
+          tui.warn(
+            s"${setting.key} stays $shown: a config in force sets a shorter limit, and a project config or " +
+              "this session can only shorten one, never lengthen it or turn it off"
+          )
     catch case NonFatal(e) => tui.error(s"Nothing changed: ${Debug.message(e)}")
 
 object ConfigCommands:
@@ -174,7 +182,8 @@ object ConfigCommands:
 
   private final case class Scope(name: String, label: String, path: Option[Path])
 
-  /** A setting `/config` changes: none of them loosens the sandbox. */
+  /** A setting `/config` changes: none of them loosens the sandbox. All but the permission
+    * timeout are outside `PolicyKeys`; that one is a limit, which a session can only tighten. */
   enum Setting(val key: String, val help: String, val choices: List[String]):
     case PredictInput extends Setting("predictInput", "suggest the next request after each turn", List("true", "false"))
     case Notifications
@@ -197,6 +206,14 @@ object ConfigCommands:
           "share of the context window compaction keeps verbatim",
           List("0", "0.1", "0.2", "0.3", "0.5"),
         )
+    /** A limit (`PolicyKeys`): kept for the session or in a project config it can only be set
+      * or shortened; a longer or no limit takes the global config. */
+    case PermissionTimeout
+        extends Setting(
+          "permissionTimeoutSeconds",
+          "deny a permission request nobody answers in this many seconds; 0 is off",
+          List("0", "30", "60", "120", "300"),
+        )
 
     def current(config: Config): String = this match
       case PredictInput => config.predictInput.toString
@@ -204,6 +221,7 @@ object ConfigCommands:
       case WebSearch => config.webSearch.contains(true).toString
       case AutoCompactThreshold => fraction(config.autoCompactThreshold)
       case CompactKeepRatio => fraction(config.compactKeepRatio)
+      case PermissionTimeout => config.permissionTimeoutSeconds.toString
 
     /** The config value `text` stands for, or why it is not one. */
     def parse(text: String): Either[String, ujson.Value] =
@@ -220,6 +238,10 @@ object ConfigCommands:
         case AutoCompactThreshold | CompactKeepRatio =>
           typed.toDoubleOption.filter(d => d >= 0 && d <= 1).map(ujson.Num(_)).toRight:
             s"$key is a number from 0 to 1, not '${text.trim}'"
+        case PermissionTimeout =>
+          val range = ConfigValidation.PermissionTimeouts
+          typed.toIntOption.filter(n => n == 0 || range.contains(n)).map(ujson.Num(_)).toRight:
+            s"$key is 0 (off) or a number of seconds from ${range.start} to ${range.end}, not '${text.trim}'"
 
   object Setting:
     def named(name: String): Option[Setting] = values.find(_.key.equalsIgnoreCase(name))

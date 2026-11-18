@@ -19,6 +19,13 @@ class ConfigCommandsSuite extends munit.FunSuite:
     assertEquals(Notifications.parse("loud").left.map(_.contains("auto | system | terminal | bell | off")), Left(true))
     for bad <- List("1.5", "-0.1", "NaN", "Infinity", "half") do
       assert(AutoCompactThreshold.parse(bad).isLeft, bad)
+    assertEquals(PermissionTimeout.parse(" 90 "), Right(ujson.Num(90)))
+    assertEquals(PermissionTimeout.parse("0"), Right(ujson.Num(0)))
+    assertEquals(
+      PermissionTimeout.parse("3"),
+      Left("permissionTimeoutSeconds is 0 (off) or a number of seconds from 5 to 86400, not '3'"),
+    )
+    for bad <- List("-5", "86401", "1.5", "1e3", "a minute") do assert(PermissionTimeout.parse(bad).isLeft, bad)
 
   test("every offered choice parses, and the value in force reads as one"):
     for setting <- values; choice <- setting.choices do assert(setting.parse(choice).isRight, s"${setting.key} $choice")
@@ -26,8 +33,10 @@ class ConfigCommandsSuite extends munit.FunSuite:
     for setting <- values do assert(setting.choices.contains(setting.current(defaults)), setting.key)
     assertEquals(AutoCompactThreshold.current(Config(autoCompactThreshold = 0.75)), "0.75")
 
-  test("settings are named case-insensitively; policy settings are not among them"):
+  test("settings are named case-insensitively; the limits the sandbox started with are not among them"):
     assertEquals(named("AUTOCOMPACTTHRESHOLD"), Some(AutoCompactThreshold))
+    // A limit too, but on the pop-ups, not the sandbox; a session can only tighten it.
+    assertEquals(named("permissionTimeoutSeconds"), Some(PermissionTimeout))
     assertEquals(named("maxToolCalls"), None)
 
   test("a project config that is a link, or lies in a linked .atc, is not written"):

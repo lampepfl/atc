@@ -218,6 +218,11 @@ final case class Config(
   /** Wall-clock limit for one snippet, excluding time spent waiting for the user
     * or for a command (`exec` has its own `ExecOptions.timeoutMs`). `null` sets no limit. */
   executionTimeoutMs: Option[Long] = Some(300000L),
+  /** Seconds a permission pop-up waits for an answer (in a menu, for the user's first key)
+    * before it denies the request on its own (`Decision.TimedOut`), from 5 to 86400; zero,
+    * the default, waits for ever. A limit like `executionTimeoutMs`: a narrowing layer may
+    * set or shorten it, never lengthen or remove it. */
+  permissionTimeoutSeconds: Int = 0,
   /** Tool calls per user turn before the agent checks in: an interactive session
     * asks the user whether to continue for another `maxToolCalls`, a `-p` run stops. */
   maxToolCalls: Int = 200,
