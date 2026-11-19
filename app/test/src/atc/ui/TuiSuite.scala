@@ -25,14 +25,39 @@ class TuiSuite extends munit.FunSuite:
       assertEquals(terminal.encoding(), StandardCharsets.UTF_8)
     finally terminal.close()
 
+  /** A scripted (`-p`) Tui, which writes to the `System.out` and `System.err` of when it is
+    * built: the model's answer to `answer`, everything else to `rest`. */
+  private def scripted(answer: ByteArrayOutputStream, rest: ByteArrayOutputStream): Tui =
+    val (savedOut, savedErr) = (System.out, System.err)
+    System.setOut(java.io.PrintStream(answer, true, StandardCharsets.UTF_8))
+    System.setErr(java.io.PrintStream(rest, true, StandardCharsets.UTF_8))
+    try Tui(TestEnv.tempDir("atc-tui").resolve("history").nn, nonInteractive = true)
+    finally
+      System.setOut(savedOut)
+      System.setErr(savedErr)
+
+  test("a scripted run writes the model's answer to standard output and the rest to standard error"):
+    val (answer, rest) = (ByteArrayOutputStream(), ByteArrayOutputStream())
+    val tui = scripted(answer, rest)
+    try
+      tui.info("a notice")
+      tui.beginTurn()
+      tui.assistantDelta("First line\nsecond ")
+      tui.assistantDelta("line")
+      tui.toolStart("1 + 1")
+      tui.toolEnd(atc.sandbox.ExecutionResult(true, "val res0: Int = 2"), 5)
+      tui.assistantDelta("Done.")
+      tui.endTurn()
+      // The answer alone, without bullets or indentation, each block on lines of its own.
+      assertEquals(answer.toString(StandardCharsets.UTF_8), "First line\nsecond line\nDone.\n")
+      val other = rest.toString(StandardCharsets.UTF_8)
+      assert(other.contains("a notice") && other.contains("res0: Int = 2"), other)
+      assert(!other.contains("First line") && !other.contains("Done."), other)
+    finally tui.close()
+
   test("a process event during streaming prose waits for the end of the turn, on a line of its own"):
     val out = ByteArrayOutputStream()
-    val saved = System.out
-    // The non-interactive terminal writes to the `System.out` of when it is built.
-    System.setOut(java.io.PrintStream(out, true, StandardCharsets.UTF_8))
-    val tui =
-      try Tui(TestEnv.tempDir("atc-tui").resolve("history").nn, nonInteractive = true)
-      finally System.setOut(saved)
+    val tui = scripted(out, out)
     try
       tui.beginTurn()
       tui.assistantDelta("Hello ")
@@ -46,11 +71,7 @@ class TuiSuite extends munit.FunSuite:
 
   test("a TODO status change shows the items that changed and the progress, a new list the whole list"):
     val out = ByteArrayOutputStream()
-    val saved = System.out
-    System.setOut(java.io.PrintStream(out, true, StandardCharsets.UTF_8))
-    val tui =
-      try Tui(TestEnv.tempDir("atc-tui").resolve("history").nn, nonInteractive = true)
-      finally System.setOut(saved)
+    val tui = scripted(out, out)
     try
       import atc.lib.{Todo, TodoStatus}
       val plan = List(Todo("read"), Todo("fix"), Todo("test"))

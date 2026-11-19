@@ -858,8 +858,9 @@ writes a global config naming only that provider, binds the key in
 `~/.atc/keys.properties` (`KeyBindings.bind`, owner-only, other lines kept), stores the
 list and records the model as the last one, so the session starts without another fetch.
 *Configure providers myself* writes the starting config with every preset and exits;
-*Not now* or Esc runs on the built-in starting config. `-p` runs and terminals without
-menus never ask.
+*Not now* or Esc runs on the built-in starting config, whose providers that need no key (a
+ChatGPT sign-in, a signed-in Claude Code) are then the ones in use. `-p` runs never ask, and a
+terminal without menus is asked only whether to write the starting config.
 
 The first run and `/providers` → *Add a provider* also offer a custom OpenAI-compatible
 (`api` `openai`, Chat Completions) or Anthropic-compatible server (`FirstRun.custom`): a name
@@ -1381,7 +1382,11 @@ plural forms of status and summary lines. `Glyphs` chooses Unicode or ASCII mark
 markers and control separators included: ASCII with `ATC_ASCII` or on a terminal that
 reports no UTF encoding. `Ansi` removes terminal controls from external text before display.
 Keep model-visible capture text unchanged; sanitize only at display boundaries. A `-p` run
-uses a dumb UTF-8 terminal.
+uses a dumb UTF-8 terminal on standard error, and writes the model's own answer to standard
+output (`Screen.writeAnswer`), without bullets or indentation, so a script can take the answer
+alone. Notices, progress lines, tool blocks and the statistics go to standard error. The two
+streams share one line position, so a terminal that shows both looks as before. A run that
+took its model itself, because neither `-m` nor a config named one, says which.
 
 `Continuation` handles open brackets, strings and comments for `/run`. Shift-Enter and
 backslash followed by Enter insert a newline. An empty line submits a code block; Ctrl-C
@@ -1413,8 +1418,14 @@ row last chosen; when it ends, one line says what was chosen. Menus read focus r
 a resize redraws them at the new size. A menu turns bracketed paste on while it reads and
 takes nothing inside a paste as a key, and Enter counts only 300 ms after it opens
 (`ListMenu.EnterDelayNanos`), so a newline typed or pasted just before a permission request
-cannot choose its first row, Allow once. The turn's key reader leaves paste mode after a
-pop-up, which may have read the paste's end.
+cannot choose its first row, Allow once. An Enter that comes earlier starts the wait over,
+so a held key or a second impatient press does not choose either. Text typed into a menu
+that takes none restarts that delay, so a correction the user was typing as the menu opened
+cannot end on a choice either. The trust prompt for a project config opens on running without
+its grants. A permission request with more rows than the window has scrolled its first ones
+out of sight, and its patterns are sorted, so filler could choose which: the dialog then says
+so and opens on the denial. The turn's key reader leaves paste mode after a pop-up, which may
+have read the paste's end.
 
 While the main prompt holds a single word starting with `/`, `PromptReader` lists the
 matching `SlashCommand.table` rows in JLine's `post` area under the buffer, with an exact
@@ -1433,8 +1444,10 @@ and the footer shows the pasted text once, when the paste ends. The footer uses 
 operation, elapsed time and mode, model and directory. Spinner writes and status updates
 share the TUI lock. The footer is reserved before the first content line, so adding it does
 not scroll the banner away. Its activity indicator replaces a separate spinner when the
-terminal supports a status line. Idle state shows a short mode, model and directory label;
-menus and answer fields replace it with the applicable keyboard controls.
+terminal supports a status line: JLine draws one only with the scroll-region and cursor
+capabilities `StatusLine.FooterCapabilities` lists, and does not say when it cannot. Idle
+state shows a short mode, model and directory label; menus and answer fields replace it with
+the applicable keyboard controls.
 
 Every footer update goes through `StatusLine.draw`, which flushes the terminal writer after
 JLine's `Status.update`: JLine leaves the closing synchronized-output sequence
@@ -1532,8 +1545,11 @@ row (one-line edits, one after another) is one row with a count. A pop-up, or an
 written outside the block, freezes what the region shows and the block continues below.
 Output that `parallel` tasks write while a pop-up is open is held, up to its last million
 characters, and written when the pop-up closes. Ctrl-O takes the region down and writes the
-block out in full. The expanded view and a plain terminal write every block in full, with
-the result panel; the expanded view breaks output lines at the row's end
+block out in full. At a prompt the key switches the view for what comes next: `PromptReader`
+binds it, because JLine's own binding accepts the line being typed. Its Shift-Tab binding acts
+at the main prompt only, since answer and secret fields share the key map and would take the
+`/mode` line it submits as their text. The expanded view and a plain terminal write every
+block in full, with the result panel; the expanded view breaks output lines at the row's end
 (`Screen.breakLines`, which keeps the column across chunks), so a long line stays inside the
 block's gutter.
 

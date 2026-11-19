@@ -115,7 +115,10 @@ object Setup:
             val trustIt = "Trust it"
             val without = "Run without these grants"
             val answer =
-              if tui.menusAvailable then tui.choose("Trust this project's config?", List(trustIt, without, "Quit"))
+              // The menu opens on running without them: Enter alone must not trust a config
+              // the user has not read.
+              if tui.menusAvailable then
+                tui.choose("Trust this project's config?", List(trustIt, without, "Quit"), initial = 1)
               else Some(if tui.confirm("Trust this project's config?") then trustIt else without)
             answer match
               case Some(`trustIt`) =>

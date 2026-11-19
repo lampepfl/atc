@@ -102,12 +102,14 @@ class ListMenuSuite extends munit.FunSuite:
     delayMillis: Long = 0,
     glyphs: Glyphs = Glyphs.unicode,
     out: ByteArrayOutputStream = ByteArrayOutputStream(),
+    gapMillis: Long = 0,
   ): Option[List[Int]] =
     val bytes = ByteArrayInputStream(input.getBytes(UTF_8))
     val source = new java.io.InputStream:
       private var waited = false
       override def read(): Int =
         if !waited then { Thread.sleep(delayMillis); waited = true }
+        else Thread.sleep(gapMillis)
         bytes.read()
     val terminal = TestTerminal(input = source, output = out)
     val screen = Screen(terminal, plain = false, glyphs)
@@ -125,6 +127,17 @@ class ListMenuSuite extends munit.FunSuite:
       "keys after a paste count"
     )
     assertEquals(choose("\r", delayMillis = 500), Some(List(0)))
+
+  test("an Enter that comes too early starts the wait over, so a held key chooses nothing"):
+    // Key repeat, or an impatient second press: every one of them is early.
+    assertEquals(choose("\r" * 6, delayMillis = 150, gapMillis = 150), None)
+    // One press after a pause chooses.
+    assertEquals(choose("\r\r", delayMillis = 100, gapMillis = 450), Some(List(0)))
+
+  test("Enter right after text the menu ignores chooses nothing"):
+    // A correction typed during a turn runs on into a permission menu that opens meanwhile.
+    assertEquals(choose("fix the test\r", delayMillis = 500), None)
+    assertEquals(choose("ok \u007f\r", delayMillis = 500), None)
 
   test("a menu turns bracketed paste on while it reads, and off when it ends"):
     val out = ByteArrayOutputStream()

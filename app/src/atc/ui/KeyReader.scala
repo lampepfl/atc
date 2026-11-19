@@ -87,6 +87,11 @@ private[ui] final class KeyReader(
   private def loop(): Unit =
     val in: NonBlockingReader = terminal.reader()
     var skipLf = false // a CR already added the newline of a CRLF
+    /** Enter, typed: a `\` right before it continues the line, as at the prompt. A terminal
+      * that cannot report Shift-Enter is set up to send that pair. */
+    def enter(): Unit =
+      val last = typeAhead.length - 1
+      if last >= 0 && typeAhead.charAt(last) == '\\' then typeAhead.setCharAt(last, '\n') else submit()
     def submit(): Unit =
       val text = typeAhead.toString.trim
       if text.nonEmpty then
@@ -107,12 +112,12 @@ private[ui] final class KeyReader(
             case NonBlockingReader.READ_EXPIRED => () // no key read: leave skipLf pending
             case -1 => running = false
             case '\r' =>
-              if pasting then typeAhead.append('\n') else submit()
+              if pasting then typeAhead.append('\n') else enter()
               skipLf = true
             // Only an LF right after a CR completes a CRLF; any other key clears `skipLf`.
             case '\n' =>
               if !skipLf then
-                if pasting then typeAhead.append('\n') else submit()
+                if pasting then typeAhead.append('\n') else enter()
               skipLf = false
             case other =>
               skipLf = false
@@ -139,7 +144,7 @@ private[ui] final class KeyReader(
                 // ch.toChar alone would truncate a non-BMP code point; UTF-16 units
                 // (a reader that delivers surrogates) pass through reassembled.
                 case ch if ch > 0xffff => typeAhead.append(String(Character.toChars(ch)))
-                case ch if ch >= 32 => typeAhead.append(ch.toChar)
+                case ch if ch >= 32 || ch == '\t' => typeAhead.append(ch.toChar)
                 case _ => ()
           // A paste reports its text once, at its end, not with every byte; a pause
           // in the input still reports it, which also keeps the footer's clock going.

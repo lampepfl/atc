@@ -515,7 +515,8 @@ offers to resume. ATC notifies you when a turn ends or the agent waits for you, 
 reports whether it is working, waiting or done to terminals that track program status.
 
 A `-p` run asks nothing: a permission the configuration does not grant fails instead of
-waiting. `--approve-all` approves such requests instead; use it only in a trusted setup.
+waiting. `--approve-all` approves such requests instead; use it only in a trusted setup. The
+answer goes to standard output and everything else to standard error.
 
 ## License
 

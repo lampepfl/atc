@@ -101,7 +101,13 @@ final class App(args: Cli.Args, val tui: Tui):
     config.instructions,
     () => (host.currentTaskNotes, host.currentTodos),
   )
-  tui.onSubmit = agent.submit
+  // A line typed while the agent works is a correction for it. A slash command is not one:
+  // sent on, `/mode read` would reach the model as text and change nothing.
+  tui.onSubmit = line =>
+    if SlashCommand.isCommandLine(line) then
+      val command = line.trim.takeWhile(!_.isWhitespace)
+      tui.info(s"$command was not run: commands run between turns. Ctrl-C stops this turn.")
+    else agent.submit(line)
   if args.prompt.isEmpty then tui.notifier = Notifier.fromSetting(config.notifications)
   tui.queuedInputs = () => agent.queuedInputCount
   tui.onInterrupt = () =>

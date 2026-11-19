@@ -51,12 +51,28 @@ class DialogsSuite extends munit.FunSuite:
     val expected = (("  ? " + lines.head) :: lines.tail.map("    " + _)).mkString("\n")
     assert(written(out).contains(expected), written(out))
 
+  test("a request too long for the window says so and opens on the denial"):
+    // Its first rows, the title among them, have scrolled out of sight: Enter must not allow them.
+    val many = ExecRequest((1 to 40).map(i => s"tool$i --flag").toList, "run the build")
+    val (long, out) = dialogsReading(paced(500L -> "\r"), 80, plain = false)
+    assertEquals(long.permission(many), Decision.Deny)
+    assert(written(out).contains("the first are above this window"), written(out))
+    val (short, shortOut) = dialogsReading(paced(500L -> "\r"), 80, plain = false)
+    assertEquals(short.permission(ExecRequest(List("npm test"), "run the tests")), Decision.AllowOnce)
+    assert(!written(shortOut).contains("above this window"), written(shortOut))
+
   test("after empty instructions the permission menu opens again on that row, not on Allow once"):
     // Up from the first row reaches the last, the instructions; Enter with nothing typed goes back
     // to the menu, where Enter must not allow the request.
     val input = paced(700L -> "\u001b[A\r\r", 700L -> "\r", 0L -> "only run the tests\r")
     val (d, _) = dialogsReading(input, width = 80, plain = false)
     assertEquals(d.permission(ExecRequest(List("npm test"), "run the tests")), Decision.Revise("only run the tests"))
+
+  test("ticked answers stay when the added answer is left empty"):
+    // Tick the first, move to "Add an answer", tick it, save, then Enter on an empty line.
+    val input = paced(700L -> " \u001b[B\u001b[B ", 400L -> "\r", 300L -> "\r")
+    val (d, _) = dialogsReading(input, width = 80, plain = false)
+    assertEquals(d.answer("Which?", List("a", "b"), multiple = true), Some("a"))
 
   test("a line of setup text is read under its question, and empty means none"):
     val (d, out) = dialogs("http://localhost:11434/v1\r")

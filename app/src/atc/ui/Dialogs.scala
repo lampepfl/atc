@@ -47,10 +47,16 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
   def permission(req: PermissionRequest): Decision =
     // The request embeds model-chosen paths and command lines: sanitize.
     write(Indent + styled(s"${g.warn} Permission request: ${Ansi.sanitize(req.title)}", Yellow, Bold) + "\n")
-    req.details.foreach: detail =>
-      TextLayout.wrap(Ansi.sanitize(detail), width - 5, Under.length)
-        .foreach(line => write(Indent + Indent + styled(line, Yellow) + "\n"))
+    val rows = req.details.flatMap(detail => TextLayout.wrap(Ansi.sanitize(detail), width - 5, Under.length))
+    rows.foreach(line => write(Indent + Indent + styled(line, Yellow) + "\n"))
     val choices = List(Menus.AllowOnce, Menus.AllowSession, Menus.DenyLabel, Menus.ReviseLabel)
+    // A request with more rows than the window has scrolls its first ones out of sight, the
+    // title among them, and its patterns are sorted, so filler can choose which. The menu
+    // then says so and opens on the denial: Enter alone must not allow what was not read.
+    val scrolled = !plain && 1 + rows.size + choices.size + 2 > screen.height
+    if scrolled then
+      val warning = s"${g.warn} ${rows.size} rows: the first are above this window. Scroll up and read them all."
+      write(Under + styled(warning, Yellow, Bold) + "\n")
     /** The decision, `None` when the menu is cancelled. After empty instructions the menu
       * opens again on that row, never on Allow once. */
     @tailrec def choose(initial: Int): Option[Decision] =
@@ -65,7 +71,7 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
         case Some(_) => Some(Decision.Deny)
         case None => None
     val chosen =
-      if !plain then choose(0)
+      if !plain then choose(if scrolled then choices.indexOf(Menus.DenyLabel) else 0)
       else
         val reply = freeText(styled("Allow? [y]es once / [s]ession / [n]o / type instructions: ", Yellow))
         Some(Menus.permissionReply(reply))
@@ -125,8 +131,9 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
         val labels = cleanOptions :+ Menus.AddAnswerLabel
         menus.run("", labels, multi = true, 0, Set.empty, "cancel", Under).flatMap: ids =>
           val chosen = ids.sorted.flatMap(options.lift)
-          if ids.contains(cleanOptions.size) then freeText(answerPrompt).map(t => (chosen :+ t).mkString("; "))
-          else Option.when(chosen.nonEmpty)(chosen.mkString("; "))
+          // An empty added answer keeps what was ticked.
+          val added = if ids.contains(cleanOptions.size) then freeText(answerPrompt).toList else Nil
+          Option.when(chosen.nonEmpty || added.nonEmpty)((chosen ++ added).mkString("; "))
       else
         val labels = cleanOptions :+ Menus.OtherLabel
         menus.run("", labels, multi = false, 0, Set.empty, "cancel", Under).flatMap(_.headOption).flatMap: i =>

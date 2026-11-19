@@ -3,7 +3,7 @@ package atc.ui
 import atc.agent.TurnOutcome
 
 import org.jline.terminal.{Size, Terminal}
-import org.jline.utils.{AttributedString, Status}
+import org.jline.utils.{AttributedString, InfoCmp, Status}
 
 import java.nio.charset.StandardCharsets.UTF_8
 import java.util.Base64
@@ -26,7 +26,12 @@ private[ui] final class StatusLine(
 ):
   import screen.{g, plain, terminal, width}
 
-  private val footer = if plain then None else Option(Status.getStatus(terminal))
+  /** JLine hands out a status on any terminal but draws it only where the terminal can set a
+    * scroll region and move the cursor, a check it keeps to itself; elsewhere the spinner line
+    * shows progress instead. */
+  private val footer =
+    val capable = StatusLine.FooterCapabilities.forall(terminal.getStringCapability(_) != null)
+    if plain || !capable then None else Option(Status.getStatus(terminal))
   private var footerSize = (0, 0)
   private var lastFooter = ""
   private var context = ""
@@ -154,6 +159,14 @@ private[ui] final class StatusLine(
     footer.foreach(_.close())
 
 private[ui] object StatusLine:
+  /** What JLine's `Status` needs to draw (its constructor's `supported` check). */
+  private val FooterCapabilities = List(
+    InfoCmp.Capability.change_scroll_region,
+    InfoCmp.Capability.save_cursor,
+    InfoCmp.Capability.restore_cursor,
+    InfoCmp.Capability.cursor_address,
+  )
+
   /** A Program Status Protocol report's fields. */
   private type Program = (state: String, kind: String, message: String)
 
