@@ -156,8 +156,13 @@ private[atc] object PlatformPath:
                 throw FileSystemException(path.toString, null, "Too many levels of symbolic links")
               val target = Files.readSymbolicLink(candidate).nn
               // A target with a root starts over from that root; a relative one continues here.
-              val names = if target.getRoot == null then target else candidate.resolveSibling(target).nn
-              if target.getRoot != null then current = names.getRoot
+              // Windows takes `..` in a relative target as removing the name before it, not as
+              // the parent of where that name leads, so there it starts over from the root too.
+              val names =
+                if target.getRoot != null then candidate.resolveSibling(target).nn
+                else if Platform.isWindows then candidate.resolveSibling(target).nn.normalize.nn
+                else target
+              if names.getRoot != null then current = names.getRoot
               for i <- names.getNameCount - 1 to 0 by -1 do pending.push(names.getName(i))
             case _: IOException => current = candidate // a missing name
     current

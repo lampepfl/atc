@@ -793,19 +793,21 @@ class HostSuite extends munit.FunSuite:
     val nested = TestEnv()
     import nested.given
     nested.file("x/y/inner.txt", "inner")
-    nested.file("x/b.txt", "the OS's target")
-    nested.file("b.txt", "the lexical target")
+    nested.file("x/b.txt", "x/b.txt")
+    nested.file("b.txt", "b.txt")
     assume(
       TestEnv.trySymbolicLink(nested.root.resolve("sub"), Path.of("x/y")),
       "symbolic links are unavailable for this account",
     )
+    // POSIX follows `sub` before `..` leaves where it leads; Windows removes `sub/..` first.
+    val dir = if Platform.isWindows then "" else "x/"
     Files.createSymbolicLink(nested.root.resolve("l"), Path.of("sub/../b.txt"))
-    assertEquals(nested.host.read("l"), "the OS's target")
+    assertEquals(nested.host.read("l"), s"${dir}b.txt")
     // The same for a target that does not exist yet: a write creates what the OS would create.
     Files.createSymbolicLink(nested.root.resolve("d"), Path.of("sub/../new.txt"))
-    assertEquals(PlatformPath.canonical(nested.root.resolve("d")), nested.root.resolve("x/new.txt"))
+    assertEquals(PlatformPath.canonical(nested.root.resolve("d")), nested.root.resolve(s"${dir}new.txt"))
     nested.host.write("d", "created")
-    assertEquals(nested.contents("x/new.txt"), "created")
+    assertEquals(nested.contents(s"${dir}new.txt"), "created")
 
   test("a handle kept across a symlink swap is judged by the link's current target"):
     val name = "swapped.txt"
