@@ -1,6 +1,6 @@
 package atc.perms
 
-import atc.platform.{Platform, PlatformPath}
+import atc.platform.{Interruptible, Platform, PlatformPath}
 
 import java.io.IOException
 import java.nio.file.{Files, LinkOption, Path}
@@ -115,7 +115,7 @@ object GitIgnore:
 
   /** One `.gitignore` line, compiled against paths relative to its own directory. */
   private final class Rule(val negated: Boolean, dirOnly: Boolean, regex: Regex):
-    def matches(rel: String, isDir: Boolean): Boolean = (isDir || !dirOnly) && regex.matches(rel)
+    def matches(rel: String, isDir: Boolean): Boolean = (isDir || !dirOnly) && regex.matches(Interruptible(rel))
 
   private object Rule:
     /** `None` for blank lines and comments. */

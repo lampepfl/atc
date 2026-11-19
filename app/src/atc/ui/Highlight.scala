@@ -48,6 +48,9 @@ object Highlight:
       try synchronized(SyntaxHighlighting.highlight(code)(using ctx))
       catch
         case NonFatal(_) => code
+        // The highlighter parses the code, and its parser recurses with the nesting: code
+        // nested thousands deep, which the model may write, is shown plain.
+        case _: StackOverflowError => code
     // The compiler paints comments blue, which is unreadable on dark backgrounds: dim them instead.
     ansi.replace(Esc + "[34m", Esc + "[2m")
 

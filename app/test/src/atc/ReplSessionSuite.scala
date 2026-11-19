@@ -37,6 +37,25 @@ class ReplSessionSuite extends munit.FunSuite, ReplAssertions:
   // ── Basic execution ─────────────────────────────────────────────
 
   test("simple expression") { assert(assertOk(run("1 + 1")).output.contains("2")) }
+  test("a value whose toString throws fails its own line, and the next lines still work"):
+    assertOk(run("class Bad { override def toString: String = throw IllegalStateException(\"boom in toString\") }"))
+    assertFails(run("val bad = Bad()"), "boom in toString")
+    assert(assertOk(run("val after = 42")).output.contains("42"))
+    assert(assertOk(run("after + 1")).output.contains("43"))
+    // The message of what a rendering throws is agent code too, and may throw in its turn.
+    assertOk(
+      run(
+        "class Msg extends RuntimeException(\"x\") { override def getMessage: String = throw IllegalStateException(\"in getMessage\") }"
+      )
+    )
+    assertOk(run("class Worse { override def toString: String = throw Msg() }"))
+    assertFails(run("val worse = Worse()"))
+    assert(assertOk(run("after + 2")).output.contains("44"))
+  test("code nested too deeply for the parser fails, and the session goes on"):
+    // The validator's scan and the parser run on the caller's thread and recurse with the nesting.
+    assertFails(run("val deep = " + "(" * 20000 + "1" + ")" * 20000), "nests too deeply")
+    assertFails(run("/*" * 100000 + " c " + "*/" * 100000 + "\nval commented = 2"), "nests too deeply")
+    assert(assertOk(run("1 + 2")).output.contains("3"))
   test("println goes through the host and into the tool output"):
     envSafe.clearOutput()
     val r = assertOk(run("""println("Hello, World!")"""))
@@ -321,6 +340,23 @@ class ReplSessionSuite extends munit.FunSuite, ReplAssertions:
     assertOk(s.run("val afterInterrupt = beforeInterrupt + 2"))
     assert(assertOk(s.run("afterInterrupt")).output.contains("42"))
 
+  test("a stop the caller raised before the run keeps the code from running"):
+    // Ctrl-C between the agent's last check and the run is cleared with the run's own stop flag.
+    val r = safe.run("""println("ran")""", () => true)
+    assert(!r.success && r.render.contains("interrupted"), r.render)
+    assert(!r.output.contains("ran"), r.output)
+    assert(assertOk(safe.run("1 + 1", () => false)).output.contains("2"))
+
+  test("a session without a time limit evaluates and stops like one with a limit"):
+    val env = TestEnv(prefix = "atc-repl-unlimited")
+    val unlimited = env.newSession(timeoutMs = None)
+    try
+      assert(assertOk(unlimited.run("1 + 1")).output.contains("2"))
+      val r = stopped(unlimited, "while true do ()")(_.interrupt())
+      assert(!r.success && r.render.contains("interrupted"), r.render)
+      assert(assertOk(unlimited.run("2 + 2")).output.contains("4"))
+    finally unlimited.close()
+
   test("interrupt() and the timeout stop tasks running in parallel"):
     val busy = "parallel(List(1, 2).map(i => () => { var n = 0L; while true do n += i; n }))"
     val env = TestEnv(prefix = "atc-repl-parallel")
@@ -442,6 +478,12 @@ class ReplSessionSuite extends munit.FunSuite, ReplAssertions:
     val s = env.newSession()
     s.close()
     assertFails(s.run("1 + 1"), "closed")
+  test("only a stop trace that ends a timed-out snippet's output is dropped"):
+    val trace = "java.lang.ThreadDeath\n  at rs$line$3$.<clinit>(rs$line$3:1)\n  ... 4 more"
+    assertEquals(ReplSession.withoutStopTrace(s"progress 1\n$trace"), "progress 1")
+    val printed = "java.lang.ExceptionInInitializerError: from the snippet\nprogress 2"
+    assertEquals(ReplSession.withoutStopTrace(printed), printed)
+
   test("BoundedOutputStream truncates and resets"):
     val b = ReplSession.BoundedOutputStream(10)
     b.write("hello".getBytes)

@@ -16,6 +16,7 @@ private[atc] final class ScalaToolRunner(
   policy: Policy,
   ui: AgentUI,
   maxOutputChars: Int,
+  cancelled: () => Boolean,
 ) extends ToolRunner:
   val tools: List[ToolSpec] = ScalaToolRunner.tools
   private lazy val repl = session
@@ -35,7 +36,7 @@ private[atc] final class ScalaToolRunner(
     else
       ui.toolStart(code)
       val current = repl // may start the sandbox first: not part of the snippet's time
-      val (result, decisions) = ScalaToolRunner.evaluate(current, policy, ui, code)
+      val (result, decisions) = ScalaToolRunner.evaluate(current, policy, ui, code, cancelled)
       val rendered = ToolOutput.renderForModel(result, maxOutputChars, decisions, code)
       val needsReplan = decisions.exists {
         case (Decision.Revise(_), _) => true
@@ -50,17 +51,19 @@ private[atc] object ScalaToolRunner:
 
   /** Run `code` inside an open tool block (`ui.toolStart` already called): report the result
     * with the evaluation time, minus the time spent waiting for the user at prompts, and
-    * return it with what the user decided at those prompts. Shared with the user's `/run`. */
+    * return it with what the user decided at those prompts. Shared with the user's `/run`.
+    * A stop that `cancelled` shows keeps the code from running. */
   def evaluate(
     session: ReplSession,
     policy: Policy,
     ui: AgentUI,
-    code: String
+    code: String,
+    cancelled: () => Boolean,
   ): (ExecutionResult, List[(Decision, String)]) =
     val decisionsBefore = policy.decisionCount
     ui.status(AgentMessages.runningScalaStatus)
     val start = System.nanoTime()
-    val result = session.run(code)
+    val result = session.run(code, cancelled)
     val millis = (System.nanoTime() - start - session.clock.paused) / 1_000_000L
     ui.toolEnd(result, millis)
     (result, policy.decisionsSince(decisionsBefore))

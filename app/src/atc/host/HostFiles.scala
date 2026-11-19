@@ -2,7 +2,7 @@ package atc.host
 
 import atc.{ScalaSource, TextFiles}
 import atc.lib.*
-import atc.platform.{PathGlob, Platform, PlatformPath}
+import atc.platform.{Interruptible, PathGlob, Platform, PlatformPath}
 
 import java.nio.ByteBuffer
 import java.nio.charset.{CharacterCodingException, CodingErrorAction, StandardCharsets}
@@ -191,7 +191,7 @@ private[host] trait HostFiles:
     val (bom, before) = editable(entry, "sed")
     val javaReplacement = sedReplacement(replacement)
     val rewritten = java.lang.StringBuilder()
-    val matcher = regex.matcher(before)
+    val matcher = regex.matcher(Interruptible(before))
     var count = 0
     while matcher.find() do
       count += 1
@@ -284,7 +284,8 @@ private[host] trait HostFiles:
     val shown = fromCwd(entry.path)
     entry.forEachLine(
       operation,
-      (line, number) => if regex.findFirstIn(line).isDefined then matches += GrepMatch(shown, number, line)
+      (line, number) =>
+        if regex.findFirstIn(Interruptible(line)).isDefined then matches += GrepMatch(shown, number, line)
     )
     matches.toList
 
@@ -331,7 +332,7 @@ private[host] trait HostFiles:
             false
           else
             if chars > line.length then limited = true
-            val hit = regex.findFirstIn(line).isDefined
+            val hit = regex.findFirstIn(Interruptible(line)).isDefined
             if hit && matches.size >= options.maxMatches then
               limited = true
               false
@@ -349,8 +350,10 @@ private[host] trait HostFiles:
     val pattern = PathGlob.pattern(glob)
     if glob.contains('/') || glob.contains("**") then
       val base = canonical(dir)
-      files.filter(entry => pattern.matcher(PlatformPath.portable(base.relativize(Paths.get(entry.path)).nn)).matches())
-    else files.filter(entry => pattern.matcher(entry.name).matches())
+      files.filter: entry =>
+        val relative = PlatformPath.portable(base.relativize(Paths.get(entry.path)).nn)
+        pattern.matcher(Interruptible(relative)).matches()
+    else files.filter(entry => pattern.matcher(Interruptible(entry.name)).matches())
 
   def readClassified(path: String)(using fs: FileSystem): Classified[String] = fs.access(path).readClassified()
 

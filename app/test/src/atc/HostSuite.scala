@@ -493,6 +493,33 @@ class HostSuite extends munit.FunSuite:
     assert(outcome.exists(_.isInstanceOf[InterruptedException]), outcome.toString)
     assert(taskInterrupted.await(5, TimeUnit.SECONDS), "the task was not interrupted")
 
+  test("an interrupted parallel returns once its tasks have ended"):
+    val started = CountDownLatch(1)
+    @volatile var ended = false
+    val caller = Thread(() =>
+      try
+        parallel(List(() =>
+          started.countDown()
+          try Thread.sleep(10000)
+          catch
+            case _: InterruptedException =>
+              // Still running for a while after the interrupt, like a task in host code.
+              val until = System.nanoTime() + 300_000_000L
+              while System.nanoTime() < until do ()
+          ended = true
+          0
+        ))
+        ()
+      catch case _: InterruptedException => ()
+    )
+    caller.setDaemon(true)
+    caller.start()
+    assert(started.await(5, TimeUnit.SECONDS))
+    caller.interrupt()
+    caller.join(5000)
+    assert(!caller.isAlive, "the caller did not return after the interrupt")
+    assert(ended, "parallel returned while its task was still running")
+
   test("writeBytes is refused on a classified path, like write"):
     intercept[SecurityException](writeBytes("secrets/x.dat", Array[Byte](1, 2)))
 

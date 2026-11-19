@@ -426,10 +426,23 @@ which would silence it. Compiler diagnostics and runtime results are returned
 as `ExecutionResult`; an exception recorded by `CappedRendering` marks evaluation failure.
 A string containing the word `error` in ordinary output does not determine run success.
 
-With an execution timeout configured, evaluation runs on a daemon worker. `ExecutionClock`
+Evaluation runs on a daemon worker, with or without an execution timeout. `ExecutionClock`
 excludes nested waits for user input, external commands and model calls that have their own
 timeouts. Interrupts set the compiler's REPL stop flag and interrupt blocking operations.
-`skipInvalidWrapper` advances past a potentially incomplete wrapper class. Completed file,
+A stop that arrives while the code is validated or parsed still keeps it from running, and so
+does one that arrived just before the run, which the turn's cancellation passed to `run`
+shows. An interrupt returns after the same two-second grace a timeout gives, even when the
+evaluation is in host code that ignores it; that evaluation keeps running, like one a timeout
+cannot stop.
+Pattern matching is host code of that kind, and a glob or regular expression from the agent,
+a config or a `.gitignore` can run for longer than any timeout on the right text (`*a*a*…*b`
+against a long name of `a`s). It reads its input through `Interruptible`, which gives up once
+the thread is interrupted, so such a match ends with the stop. A loop inside library code that
+agent code calls, such as `LazyList.from(0).iterator.size`, is still not stopped.
+`skipInvalidWrapper` advances past a potentially incomplete wrapper class, also when an
+exception escapes the driver, as one from a value's `toString` does while the REPL shows the
+value: the wrapper is loaded then, but the driver returned no state for it. The message of
+such an exception is agent code and is read on the evaluation thread. Completed file,
 process or network effects are not rolled back after interruption or timeout. A timed-out
 result still carries what the snippet printed before the limit (the worker's output if it
 stopped within the two-second grace, else a snapshot of the capture buffer it is still
@@ -674,7 +687,9 @@ the snippet; the first failure in task order is rethrown, and a fatal throwable 
 ordinary exceptions so that the REPL's stop signal reaches the evaluation thread. Every
 instrumented REPL class checks the stop flag on every thread, so an interrupt or timeout
 stops busy tasks too, and interrupting the calling thread interrupts workers blocked in a
-host call. Shared host state is thread-safe: the TUI's output methods are synchronized,
+host call. An interrupted call returns once its workers have ended, or after two seconds, so
+the stop flag is still raised while they finish and a later evaluation does not clear it
+under them. Shared host state is thread-safe: the TUI's output methods are synchronized,
 `Policy`, the process registry and the TODO list lock their mutable state, and
 `Tui.popupBlock` shows questions and permission prompts from several tasks one at a time.
 
