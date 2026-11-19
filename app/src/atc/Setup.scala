@@ -101,7 +101,12 @@ object Setup:
       ProjectTrust.pending(args.cwd, Config.globalDir).filterNot(_ => args.approveAll) match
         case None => current
         case Some(pending) =>
-          val config = PlatformPath.display(Config.projectPath(pending.root))
+          // A project may ship a key file alone: then that is the file to name.
+          val (what, file) =
+            if Files.isRegularFile(Config.projectPath(pending.root)) then
+              "project config" -> Config.projectPath(pending.root)
+            else "project key file" -> Config.keysPath(pending.root)
+          val config = PlatformPath.display(file)
           val state = if pending.changed then "has changed since you trusted it" else "is not one you have trusted"
           // The rows repeat what the repository wrote: show hidden characters as escapes.
           val rows = pending.grants.describe.map(row => "    " + PermissionRequest.visible(row))
@@ -110,7 +115,7 @@ object Setup:
             rows.foreach(tui.println)
             current
           else
-            tui.warn(s"The project config $config $state. It:")
+            tui.warn(s"The $what $config $state. It:")
             rows.foreach(tui.println)
             val trustIt = "Trust it"
             val without = "Run without these grants"
@@ -131,11 +136,21 @@ object Setup:
 
     def load() = Config.load(args.cwd, args.config, bundledGlobal, trustProject = args.approveAll)
 
+    for (dir, owner) <- Config.foreignProjects(args.cwd) do
+      val shown = PlatformPath.display(dir.resolve(".atc").nn)
+      tui.warn(s"Ignoring the project config in $shown: it belongs to another user ($owner).")
+
     // Offered whenever cwd has no `.atc/config.json` of its own and nothing
     // grants it, whatever an ancestor's project config (or the home `.atc`,
     // which the walk-up also finds) says: the new file becomes the nearest
     // project config and takes over from there.
-    confirmTrust(offerProjectConfig(load()))
+    val configuration = confirmTrust(offerProjectConfig(load()))
+    // A config above the working directory governs this run without being in sight.
+    Config.projectRoot(args.cwd)
+      .filterNot(root => Config.samePath(root, args.cwd) || Config.samePath(root.resolve(".atc").nn, Config.globalDir))
+      .foreach: root =>
+        tui.info(s"Project config: ${PlatformPath.display(root.resolve(".atc").nn)}, above this directory.")
+    configuration
 
   /** Save what setting up a provider produced besides its config entry: the key
     * the user typed, and the model list fetched with it. */

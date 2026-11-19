@@ -199,6 +199,18 @@ class ConfigSuite extends munit.FunSuite:
     val message = loadError("{ not json ]")
     assert(message.contains("Cannot parse config"), message)
 
+  test("a config that cannot be read says why and where, not only a JSON path"):
+    // A trailing comma: the reader's path for it names the member before, so the line and column are given.
+    val syntax = loadError("{ \"providers\": {},\n \"files\": [ { \"path\": \".\" }, ]\n}")
+    assert(syntax.contains("line 2, column 30: expected json value"), syntax)
+    assert(!syntax.contains("$["), syntax)
+    assert(loadError("""{ "commands": "ls" }""").endsWith("commands: expected sequence got string"))
+    assert(
+      loadError("""{ "files": [ { "access": "read" } ] }""").endsWith("files[0]: missing keys in dictionary: path")
+    )
+    assert(loadError("""{ "files": [ { "path": ".", "classified": "yes" } ] }""").contains("files[0].classified: "))
+    assert(loadError("""{ "maxToolCalls": "many" }""").endsWith("maxToolCalls: must be a number (was many)"))
+
   test("a non-object config file is rejected"):
     val message = loadError("[1, 2, 3]")
     assert(message.contains("must be a JSON object"), message)
@@ -240,6 +252,58 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(settings.executionTimeoutMs, None)
     assertEquals(settings.maxToolCalls, 1000)
     assertEquals(settings.providers("p").models("m").maxTokens, Some(4096))
+
+  test("a key that is not a setting is rejected with its file, not skipped"):
+    def rejected(json: String): String =
+      val cfg = configFile(json)
+      val e = intercept[IllegalArgumentException](load(cfg))
+      assert(e.getMessage.nn.startsWith(s"Invalid config $cfg: "), e.getMessage)
+      e.getMessage.nn
+    def model(settings: String) = s"""{ "providers": { "p": { "api": "echo", "models": { "m": $settings } } } }"""
+    // A misspelt deny list would otherwise load and deny nothing.
+    val deny = rejected("""{ "denyComands": ["rm *"] }""")
+    assert(deny.contains("denyComands is not a setting"), deny)
+    assert(deny.contains("denyCommands"), "the message lists the settings: " + deny)
+    assert(
+      rejected("""{ "files": [ { "path": ".", "acess": "write" } ] }""").contains("files[0].acess is not a setting")
+    )
+    assert(rejected("""{ "files": [ { "path": ".env", "clasified": true } ] }""").contains("files[0].clasified is not"))
+    assert(rejected("""{ "providers": { "p": { "api": "echo", "urll": "x" } } }""").contains("providers.p.urll is not"))
+    assert(rejected(model("""{ "webSerch": true }""")).contains("providers.p.models.m.webSerch is not a setting"))
+    // Names the user chooses, and JSON taken as written, are not settings to check.
+    load(
+      configFile(
+        """{ "providers": { "any-name": { "api": "openai", "headers": { "x-any": "v" },
+          |    "reasoningStyle": { "request": { "anything": { "nested": 1 } } },
+          |    "models": { "any.alias": {} } } } }""".stripMargin
+      )
+    )
+
+  test("a value of another kind than its setting is rejected, not converted"):
+    def rejected(json: String): String =
+      val cfg = configFile(json)
+      val e = intercept[IllegalArgumentException](load(cfg))
+      assert(e.getMessage.nn.startsWith(s"Invalid config $cfg: "), e.getMessage)
+      e.getMessage.nn
+    def model(settings: String) = s"""{ "providers": { "p": { "api": "echo", "models": { "m": $settings } } } }"""
+    // The JSON reader takes each of these: "true" as true, 5 as "5", "0.5" as 0.5.
+    assert(rejected("""{ "webSearch": "true" }""").endsWith("webSearch must be true or false (was \"true\")"))
+    assert(rejected("""{ "safeMode": "false" }""").endsWith("safeMode must be true or false (was \"false\")"))
+    assert(rejected(model("""{ "webSearch": "true" }""")).contains("providers.p.models.m.webSearch must be true"))
+    assert(rejected("""{ "files": [ { "path": ".", "classified": "true" } ] }""").contains("files[0].classified must"))
+    assert(rejected("""{ "classifiedModel": 5 }""").endsWith("classifiedModel must be a string (was 5)"))
+    assert(
+      rejected("""{ "hosts": ["a.example", 2130706433] }""").endsWith("hosts[1] must be a string (was 2130706433)")
+    )
+    assert(rejected("""{ "commands": [7] }""").endsWith("commands[0] must be a string (was 7)"))
+    assert(rejected("""{ "maxToolCalls": "7" }""").endsWith("maxToolCalls must be a number (was \"7\")"))
+    assert(rejected("""{ "autoCompactThreshold": "0.5" }""").contains("autoCompactThreshold must be a number"))
+    assert(rejected(model("""{ "maxTokens": "4096" }""")).contains("providers.p.models.m.maxTokens must be a number"))
+    // A context window is the one number that may be written as text.
+    val ok = configFile(model("""{ "contextWindow": "256k", "maxTokens": 4096, "temperature": 1 }"""))
+    val settings = load(ok).settings.providers("p").models("m")
+    assertEquals(settings.contextWindow.map(_.toInt), Some(256000))
+    assertEquals(settings.temperature, Some(1.0))
 
   test("a files entry with an unknown access level or an unusable pattern is rejected while loading"):
     val access = loadError("""{ "files": [ { "path": ".", "access": "rw2" } ] }""")
@@ -573,6 +637,11 @@ class ConfigSuite extends munit.FunSuite:
       afterInit("keys.properties\n!keys.properties\n"),
       "keys.properties\n!keys.properties\nkeys.properties\n"
     )
+    assertEquals( // a negation that may re-include the key file
+      afterInit("keys.properties\n!*.properties\n"),
+      "keys.properties\n!*.properties\nkeys.properties\n"
+    )
+    assertEquals(afterInit("!build\nkeys.properties\n# done\n"), "!build\nkeys.properties\n# done\n")
     assertEquals(afterInit("target\r\n"), "target\r\nkeys.properties\r\n")
     assertEquals(afterInit(""), "keys.properties\n")
     assertEquals(afterInit("\uFEFFtarget\r"), "\uFEFFtarget\rkeys.properties\r")

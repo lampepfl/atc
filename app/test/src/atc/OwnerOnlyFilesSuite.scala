@@ -19,6 +19,16 @@ class OwnerOnlyFilesSuite extends munit.FunSuite:
       created.foreach(name => Files.deleteIfExists(dir.resolve(name)))
       Files.deleteIfExists(dir)
 
+  test("a file of the user's own, or of the system's, has no foreign owner"):
+    inTempDir("mine.txt"): dir =>
+      val mine = dir.resolve("mine.txt").nn
+      OwnerOnlyFiles.create(mine, utf8("x"))
+      assertEquals(OwnerOnlyFiles.foreignOwner(mine), None)
+      assertEquals(OwnerOnlyFiles.foreignOwner(dir), None)
+      // The root directory belongs to the administrator; a path that does not exist has no owner to tell.
+      assertEquals(OwnerOnlyFiles.foreignOwner(dir.getRoot.nn), None)
+      assertEquals(OwnerOnlyFiles.foreignOwner(dir.resolve("absent").nn), None)
+
   test("create and open make owner-only files, and create never overwrites"):
     inTempDir("secret", "lock"): dir =>
       val secret = dir.resolve("secret").nn

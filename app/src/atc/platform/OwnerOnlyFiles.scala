@@ -1,9 +1,11 @@
 package atc.platform
 
+import java.io.IOException
 import java.nio.channels.{Channels, FileChannel}
-import java.nio.file.{AtomicMoveNotSupportedException, Files, OpenOption, Path, StandardCopyOption}
+import java.nio.file.{AtomicMoveNotSupportedException, FileSystems, Files, LinkOption, OpenOption, Path}
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption.{CREATE_NEW, WRITE}
-import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.attribute.{PosixFilePermissions, UserPrincipal}
 import java.util.UUID
 import scala.util.Using
 
@@ -12,6 +14,26 @@ import scala.util.Using
   * permissions, and gets the file system's default access elsewhere. */
 private[atc] object OwnerOnlyFiles:
   private val OwnerOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+
+  /** The owner of `path` itself, a link not followed, when that is neither the user running
+    * ATC nor the system's administrator, who could do anything here already. `None` also
+    * where the owner cannot be told, so that a file system which records none does not make
+    * every file another user's. */
+  def foreignOwner(path: Path): Option[String] =
+    try
+      val owner = Files.getOwner(path, LinkOption.NOFOLLOW_LINKS).nn
+      val name = owner.getName.nn
+      Option.when(currentUser.exists(_ != owner) && !Administrators.contains(name))(name)
+    catch case _: IOException | _: UnsupportedOperationException => None
+
+  private lazy val currentUser: Option[UserPrincipal] =
+    try
+      val lookup = FileSystems.getDefault.nn.getUserPrincipalLookupService.nn
+      Option(lookup.lookupPrincipalByName(System.getProperty("user.name")))
+    catch case _: Exception => None
+
+  /** As the JDK names them; a Windows in another language names its groups otherwise. */
+  private val Administrators = Set("root", "BUILTIN\\Administrators", "NT AUTHORITY\\SYSTEM")
 
   /** Open `path` with `options`; a file the call creates is owner-only. */
   def open(path: Path, options: OpenOption*): FileChannel =

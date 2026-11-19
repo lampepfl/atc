@@ -49,9 +49,10 @@ final case class ConfigLayer(
 object ConfigLayer:
   /** `text` parsed as a config, which must be a JSON object; `where` names it in errors. */
   private[config] def parse(text: String, where: String): ujson.Obj =
+    val json = TextFiles.stripBom(text)
     val parsed =
-      try ujson.read(TextFiles.stripBom(text))
-      catch case e: Exception => throw IllegalArgumentException(s"Cannot parse config $where: ${Debug.message(e)}")
+      try ujson.read(json)
+      catch case e: Exception => throw IllegalArgumentException(s"Cannot parse config $where: ${failure(e, json)}")
     parsed match
       case o: ujson.Obj => o
       case _ => throw IllegalArgumentException(s"Config $where must be a JSON object")
@@ -86,7 +87,26 @@ object ConfigLayer:
       val config = upickle.default.read[Config](json)
       ConfigValidation.requireExact(json, config)
       config
-    catch case e: Exception => throw IllegalArgumentException(s"Invalid config $where: ${Debug.message(e)}")
+    catch case e: Exception => throw IllegalArgumentException(s"Invalid config $where: ${failure(e, "")}")
+
+  /** What a failed reading says. The JSON reader's exception carries only the place, as a JSON
+    * path, and the reason is its cause. A syntax error in `text` is given by line and column
+    * instead: the path of one may name a member that ended before it. */
+  private def failure(e: Throwable, text: String): String =
+    val causes = Debug.causes(e).toList
+    val reason = causes.last match
+      case n: NumberFormatException => s"must be a number (was ${Debug.message(n)})"
+      case other => Debug.message(other)
+    causes.collectFirst { case syntax: ujson.ParseException => syntax } match
+      case Some(syntax) =>
+        val before = text.take(syntax.index)
+        s"line ${before.count(_ == '\n') + 1}, column ${syntax.index - before.lastIndexOf('\n')}: ${syntax.clue}"
+      case None =>
+        e match
+          case _: upickle.core.TraceVisitor.TraceException =>
+            val setting = Debug.message(e).stripPrefix("$").replaceAll("\\['([^']*)'\\]", ".$1").stripPrefix(".")
+            if setting.isEmpty then reason else s"$setting: $reason"
+          case _ => reason
 
 /** A file rule with the folder its layer is anchored at: the folder holding
   * `.atc` for a project config (whose rules are read against it and grant only

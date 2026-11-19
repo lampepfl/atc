@@ -448,8 +448,8 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   /** A sub-menu: `options` and a last Back row. The chosen index; `None` for Back,
     * Esc or no menus, which return to the menu that opened it. */
-  def chooseOrBack(title: String, options: List[String]): Option[Int] =
-    chooseIndex(title, options :+ Menus.BackLabel).filter(_ < options.size)
+  def chooseOrBack(title: String, options: List[String], initial: Int = 0): Option[Int] =
+    chooseIndex(title, options :+ Menus.BackLabel, initial).filter(_ < options.size)
 
   /** A menu the user comes back to after each choice: `entries`, labels with what
     * choosing them does, are built again every time, and the last row, Done, or

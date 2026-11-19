@@ -268,8 +268,11 @@ object App:
   ): PermissionPrompter =
     if args.approveAll then _ => Decision.AllowSession
     else if args.prompt.isDefined then
-      _ =>
+      request =>
+        // The message is all a script's log holds of the refusal: it names what was asked for.
+        // (The rows are padded after their labels for the pop-up.)
+        val asked = (request.title :: request.details.map(_.replaceFirst(":\\s+", ": "))).mkString("; ")
         throw SecurityException(
-          "non-interactive run cannot ask for permission; configure a standing grant or use --approve-all in a trusted setup"
+          s"non-interactive run cannot ask for permission ($asked); configure a standing grant or use --approve-all in a trusted setup"
         )
     else request => interactive(request)

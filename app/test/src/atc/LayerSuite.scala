@@ -579,6 +579,20 @@ class LayerSuite extends munit.FunSuite:
     assert(ProjectTrust.pending(entry.cwd, entry.globalPath.getParent.nn).get.grants.webSearch)
     assertEquals(Config.load(entry.cwd, None, entry.globalPath).catalog.find("m").settings.webSearch, None)
 
+  test("a project cannot put a setting that needs trust in force by writing it as another kind of value"):
+    // Trust finds these settings by the kind written, and the JSON reader would convert each:
+    // "true" to true, 5 to "5". Such a config is refused, so none is in force unasked.
+    val global = """{ "files": [ { "path": ".", "access": "write" } ],
+                     "providers": { "p": { "api": "echo", "models": { "m": {} } } } }"""
+    def refused(project: String, setting: String): Unit =
+      val e = intercept[IllegalArgumentException](World(global = global, project = project))
+      assert(e.getMessage.nn.contains(s"$setting must be "), e.getMessage)
+    refused("""{ "webSearch": "true" }""", "webSearch")
+    refused("""{ "providers": { "p": { "models": { "m": { "webSearch": "true" } } } } }""", "p.models.m.webSearch")
+    refused("""{ "classifiedModel": 5, "providers": { "p": { "models": { "5": {} } } } }""", "classifiedModel")
+    refused("""{ "hosts": [2130706433] }""", "hosts[0]")
+    refused("""{ "commands": [7] }""", "commands[0]")
+
   test("a project's classified model is trusted as the project's providers define it"):
     val w = World(
       global = """{ "providers": { "local": { "api": "echo" }, "cloud": { "api": "echo" } } }""",
@@ -588,6 +602,11 @@ class LayerSuite extends munit.FunSuite:
     val atcDir = w.globalPath.getParent.nn
     def edit(providers: String) =
       Files.writeString(Config.projectPath(w.cwd), s"""{ "classifiedModel": "safe", "providers": $providers }""")
+    // The prompt says what the project makes of the name, which is the repository's to choose.
+    assertEquals(
+      ProjectTrust.pending(w.cwd, atcDir).get.grants.describe,
+      List("sends classified data to the model safe, which it defines as local/safe (model id small)")
+    )
     ProjectTrust.trust(w.cwd, atcDir)
     // an edit that leaves the model alone is not put to the user again
     edit("""{ "local": { "models": { "safe": { "name": "small" }, "other": {}, "more": {} } } }""")
@@ -783,6 +802,22 @@ class LayerSuite extends munit.FunSuite:
     // "./build" is the project's build directory, not one under the working directory
     assertEquals(w.access("build/x.jar"), Access.Read)
     assertEquals(w.access("src/main/build/x.jar"), Access.Write)
+
+  test("a project config that belongs to another user is passed over for the next one above"):
+    // In a shared directory anyone can put a `.atc` above where atc runs.
+    val w = World(project = """{ "files": [ { "path": ".", "access": "write" } ] }""", runIn = "shared/work")
+    val planted = w.cwd.resolve("shared").nn
+    Files.createDirectories(planted.resolve(".atc"))
+    Files.writeString(Config.projectPath(planted), """{ "files": [ { "path": ".", "access": "write" } ] }""")
+    // Its own files are the user's: the nearest one counts.
+    assertEquals(Config.projectRoot(w.runDir), Some(planted))
+    assertEquals(Config.foreignProjects(w.runDir), Nil)
+    val mallory: Path => Option[String] = dir => Option.when(dir == planted)("mallory")
+    assertEquals(Config.projectRoot(w.runDir, mallory), Some(w.cwd))
+    assertEquals(Config.foreignProjects(w.runDir, mallory), List(planted -> "mallory"))
+    // Above the one in use nothing is reported, and with every one foreign there is no project.
+    assertEquals(Config.foreignProjects(w.runDir, dir => Option.when(dir == w.cwd)("mallory")), Nil)
+    assertEquals(Config.projectRoot(w.runDir, _ => Some("mallory")), None)
 
   test("a project rule reaches the whole project, however deep atc runs inside it"):
     val w = World(project = """{ "files": [ { "path": ".", "access": "read" } ] }""", runIn = "a/b/c")

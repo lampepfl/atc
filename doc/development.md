@@ -709,7 +709,13 @@ transport and response failures within `Classified`.
 ## Configuration semantics
 
 Layers load in this order: global, nearest project, explicit `-c` file. A project is the
-nearest ancestor containing `.atc/config.json` or `.atc/keys.properties`. A file named
+nearest ancestor containing `.atc/config.json` or `.atc/keys.properties`. One whose `.atc`
+directory or project files belong to another user is passed over, with a warning, for the
+next one above (`Config.foreignProjects`): in a shared directory such as `/tmp` anyone can
+put a config above where ATC runs, and its file rules and instructions need no trust. Files
+of the administrator (`root`, and on Windows the Administrators group by its English name)
+count as the user's own, as does everything on a file system that records no owner. When the
+project config in use lies above the working directory, the start names it. A file named
 twice, compared by canonical path so that a link to it counts as the same file, retains its
 first role. Project rules are anchored to the directory containing
 `.atc` and grant access only within it; their restrictions apply wherever they match.
@@ -743,15 +749,24 @@ the offered starter config) are trusted as they are written, unless the director
 waited for trust, such as for a `keys.properties` the repository shipped: the prompt then
 shows the starter config's grants with it. Neither writes the home directory's
 `.atc/config.json`, which is the global config, nor through a symbolic link at `.atc`, its
-`config.json` or its `.gitignore`. Other edits, such as a new `model`, do not change the
-fingerprint.
+`config.json` or its `.gitignore`. The commands that edit a project config (`/model`,
+`/effort`, `/classifiedmodel`, `/config`, `/providers`) refuse a linked `.atc` or
+`config.json` too: a repository can ship either to point the write at another file. The
+global config is the user's own and is written through a link they made. Other edits, such
+as a new `model`, do not change the fingerprint.
 
 Only explicitly defined project settings narrow a value. `executionTimeoutMs` defaults to
 300000; a JSON `null` clears it and means no limit. Reading a layer
-(`ConfigValidation.requireExact`) refuses a `null` for a setting that is not optional, which
-the JSON reader would take as `null`, `0` or `false`, and a number that an integer setting
-would truncate or clamp, such as `1.5` or `1e10`. `Configuration.rules` is the complete rule
-list; do not build policy from `settings.files`, which contains only granting-layer entries.
+(`ConfigValidation.requireExact`) refuses a key that is not a setting, which the JSON reader
+would skip, so that a misspelt `denyCommands` cannot load and deny nothing. It refuses a
+`null` for a setting that is not optional, which the JSON reader would take as `null`, `0`
+or `false`, a number that an integer setting would truncate or clamp, such as `1.5` or
+`1e10`, and a value of another kind than its setting, which the reader would convert:
+`"true"` for a boolean, `5` for a string, `"7"` for a number. Project trust finds the
+settings that need it by the kind written, so a `"webSearch": "true"` must not be in force
+unasked. A `contextWindow` alone may be a number or text such as `"256k"`.
+`Configuration.rules` is the complete rule list; do not build policy from `settings.files`,
+which contains only granting-layer entries.
 Configuration validation checks modes, limits, file rules, provider and model settings and
 the uniqueness of model references before execution; `model` and `classifiedModel` are
 resolved at the start (see [Models and providers](#models-and-providers)).
@@ -1422,10 +1437,12 @@ cannot choose its first row, Allow once. An Enter that comes earlier starts the 
 so a held key or a second impatient press does not choose either. Text typed into a menu
 that takes none restarts that delay, so a correction the user was typing as the menu opened
 cannot end on a choice either. The trust prompt for a project config opens on running without
-its grants. A permission request with more rows than the window has scrolled its first ones
-out of sight, and its patterns are sorted, so filler could choose which: the dialog then says
-so and opens on the denial. The turn's key reader leaves paste mode after a pop-up, which may
-have read the paste's end.
+its grants, and shows a classified model with what the project's own providers define the
+name as (`provider/alias` and the model id), since the name is the repository's to choose. A
+permission request with more rows than the window has scrolled its first ones out of sight,
+and its patterns are sorted, so filler could choose which: the dialog then says so and opens
+on the denial. The turn's key reader leaves paste mode after a pop-up, which may have read the
+paste's end.
 
 While the main prompt holds a single word starting with `/`, `PromptReader` lists the
 matching `SlashCommand.table` rows in JLine's `post` area under the buffer, with an exact

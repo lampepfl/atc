@@ -68,7 +68,8 @@ final class ConfigCommands(app: App):
     while open do
       val current = setting.current(models.configuration.settings)
       val rows = setting.choices.map(c => if c == current then s"$c  (current)" else c)
-      tui.chooseOrBack(s"${setting.key}: ${setting.help}", rows).map(setting.choices) match
+      val initial = setting.choices.indexOf(current).max(0) // the menu opens on the value in use
+      tui.chooseOrBack(s"${setting.key}: ${setting.help}", rows, initial).map(setting.choices) match
         case None => open = false
         case Some(text) =>
           for value <- setting.parse(text); scope <- pickScope(setting, text) do
@@ -140,8 +141,15 @@ object ConfigCommands:
     * their final text, before `use` reads them. On failure the files get their text back, those
     * created are deleted, trust is restored the same way, and the failure is thrown again. */
   private[commands] def editConfigs[A](cwd: Path, atcDir: Path, files: List[Path])(write: => Unit)(use: => A): A =
-    val originals = files.distinct.filter(Files.exists(_)).map(p => p -> Files.readString(p).nn)
     val global = atcDir.resolve("config.json").nn
+    // A repository can ship `.atc`, or the config in it, as a link that points the write at
+    // another file. The global config is the user's own and may be a link they made; it is
+    // told apart by its name, since a link to it would resolve to the same file.
+    def named(p: Path) = p.toAbsolutePath.nn.normalize
+    files.filterNot(named(_) == named(global)).foreach: path =>
+      List(path, path.getParent.nn).find(Files.isSymbolicLink(_)).foreach: link =>
+        throw IllegalArgumentException(s"$link is a symbolic link; atc does not write a project config through it")
+    val originals = files.distinct.filter(Files.exists(_)).map(p => p -> Files.readString(p).nn)
     val created = if files.contains(global) && !Files.exists(global) then Config.ensureGlobal(global) else Nil
     val project = Config.projectRoot(cwd).map(Config.projectPath)
     val trusted = project.exists(p => files.exists(Config.samePath(_, p))) && ProjectTrust.pending(cwd, atcDir).isEmpty
@@ -152,9 +160,13 @@ object ConfigCommands:
       use
     catch
       case NonFatal(e) =>
-        originals.foreach((p, text) => Files.writeString(p, text))
-        created.foreach(Files.deleteIfExists)
-        retrust()
+        // Every step runs although one fails, and the failure that started it is what is thrown.
+        def restoring(step: => Unit): Unit =
+          try step
+          catch case NonFatal(failure) => e.addSuppressed(failure)
+        originals.foreach((p, text) => restoring(Files.writeString(p, text)))
+        created.foreach(p => restoring(Files.deleteIfExists(p)))
+        restoring(retrust())
         throw e
 
   /** The scopes `/config <setting> <value> <scope>` accepts. */

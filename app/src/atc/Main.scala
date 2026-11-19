@@ -4,6 +4,7 @@ import atc.config.{Config, ProjectTrust}
 import atc.ui.{Ansi, Tui}
 
 import java.nio.file.Path
+import scala.util.control.NonFatal
 
 /** Command line entry point: parses the flags and starts [[App]]. */
 object Main:
@@ -46,20 +47,26 @@ object Main:
         println(s"atc $Version")
         0
       else if args.initGlobal then
-        report(Config.globalPath, Config.ensureGlobal(), "fill in the API keys and edit the permissions")
+        initializing(report(Config.globalPath, Config.ensureGlobal(), "fill in the API keys and edit the permissions"))
       else if args.init then
-        try
+        initializing:
           report(
             Config.projectPath(args.cwd),
             ProjectTrust.initProject(args.cwd, Config.globalDir),
             "edit the project's permissions"
           )
-        catch
-          case e: IllegalArgumentException =>
-            System.err.println(Ansi.sanitize(Debug.message(e)))
-            1
       else run(args)
     sys.exit(exitCode)
+
+  /** `--init` and `--init-global`: a failure, whose message may quote a path, is reported
+    * sanitized like any other, not as the JVM's raw stack trace. */
+  private def initializing(body: => Int): Int =
+    try body
+    catch
+      case NonFatal(e) =>
+        System.err.println(Ansi.sanitize(s"atc: ${Debug.message(e)}"))
+        Debug.trace(e)
+        1
 
   private def run(args: Cli.Args): Int =
     // Opened here so it is closed even when App's constructor fails (a bad config, an

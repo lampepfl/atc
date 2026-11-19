@@ -53,29 +53,45 @@ object ConfigValidation:
       try Mode.parse(m)
       catch case e: IllegalArgumentException => throw IllegalArgumentException(s"Invalid config$where: ${e.getMessage}")
 
-  /** Reject what the JSON reader takes without complaint and turns into a different value:
-    * `null` where the setting is not optional, which it reads as `null`, `0` or `false`, and
-    * a number that an integer setting would truncate or clamp. `value` is what `json` was
-    * read as, and `path` names it in the error. A `null` for an optional setting unsets it,
-    * and JSON fragments such as a `reasoningStyle.request` are taken as they are. */
+  /** Reject what the JSON reader takes without complaint: a key that is no setting, which it
+    * skips, and what it turns into a different value: `null` where the setting is not
+    * optional, which it reads as `null`, `0` or `false`, a number that an integer setting
+    * would truncate or clamp, and a value of another kind than its setting, since the reader
+    * takes `"true"` for `true`, `5` for `"5"` and `"7"` for `7`. [[ProjectTrust]] finds what
+    * needs trust by the kind written, so a setting must not be in force under another one.
+    * `value` is what `json` was read as, and `path` names it in the error. A `null` for an
+    * optional setting unsets it, and JSON fragments such as a `reasoningStyle.request` are
+    * taken as they are. */
   private[config] def requireExact(json: ujson.Value, value: Any, path: String = ""): Unit =
     def at(key: String) = if path.isEmpty then key else s"$path.$key"
     def wholeNumber(n: Double, read: Double) =
       if n != read then
         throw IllegalArgumentException(s"$path must be a whole number in range (was ${ujson.write(json)})")
+    def mustBe(kind: String) = throw IllegalArgumentException(s"$path must be $kind (was ${ujson.write(json)})")
     (json, value) match
       case (_, _: ujson.Value) => ()
       case (_, option: Option[?]) => option.foreach(requireExact(json, _, path))
       case (ujson.Null, _) => throw IllegalArgumentException(s"$path must not be null")
       case (ujson.Num(n), i: Int) => wholeNumber(n, i.toDouble)
       case (ujson.Num(n), l: Long) => wholeNumber(n, l.toDouble)
+      // A context window may be text such as "256k", which `Tokens` reads.
+      case (ujson.Str(_), _: Int) if path.endsWith("contextWindow") => ()
+      case (other, _: Int | _: Long | _: Double) if !other.isInstanceOf[ujson.Num] => mustBe("a number")
+      case (other, _: Boolean) if !other.isInstanceOf[ujson.Bool] => mustBe("true or false")
+      case (other, _: String) if !other.isInstanceOf[ujson.Str] => mustBe("a string")
       case (ujson.Obj(members), map: Map[?, ?]) =>
         for (k, v) <- map; item <- members.get(k.toString) do requireExact(item, v, at(k.toString))
       case (ujson.Arr(items), seq: Seq[?]) =>
         for ((item, v), i) <- items.zip(seq).zipWithIndex do requireExact(item, v, s"$path[$i]")
       case (ujson.Obj(members), product: Product) =>
-        for (k, v) <- product.productElementNames.zip(product.productIterator); item <- members.get(k) do
-          requireExact(item, v, at(k))
+        // The reader skips a key it does not know, so a misspelt `denyCommands` would load
+        // and deny nothing.
+        val known = product.productElementNames.toList
+        members.keysIterator.find(!known.contains(_)).foreach: key =>
+          throw IllegalArgumentException(
+            s"${at(key)} is not a setting; the settings here are ${known.sorted.mkString(", ")}"
+          )
+        for (k, v) <- known.zip(product.productIterator); item <- members.get(k) do requireExact(item, v, at(k))
       case _ => ()
 
   /** A `files` entry of any layer (the project layer's included, which

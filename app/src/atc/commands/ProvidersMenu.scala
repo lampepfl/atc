@@ -3,11 +3,12 @@ package atc.commands
 import atc.{App, Debug, FirstRun, Setup}
 import atc.config.{Config, ModelCatalog, ObjectText, ProviderConfig, ProviderEdits, ProviderPreset}
 import atc.llm.ChatModel
-import atc.platform.PlatformPath
+import atc.platform.{OwnerOnlyFiles, PlatformPath}
+import atc.ui.Format
 
 import upickle.default.writeJs
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import scala.util.control.NonFatal
 
 /** `/providers`: the provider list, back to it after each change until the
@@ -122,7 +123,7 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
             if edits.isEmpty then
               tui.info("No change.")
               true
-            else applyEdits(edits, s"$name: ${chosen.size} model${if chosen.size == 1 then "" else "s"} on")
+            else applyEdits(edits, s"$name: ${Format.plural(chosen.size, "model")} on")
 
   /** The presets not configured yet, then a server at an address the user gives. A custom
     * server's name may be neither a configured provider's nor a preset's, which stays addable. */
@@ -138,10 +139,21 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
           FirstRun.custom(ui, FirstRun.CustomServers(index - addable.size), taken, keys, ChatModel.listModels)
       outcome match
         case Some(ready) =>
+          // The key is bound first, since the reload builds the new model with it; a failed
+          // edit puts the key file back as it was.
+          val keyFile = Config.globalKeysPath
+          val keysBefore = Option.when(Files.exists(keyFile))(Files.readAllBytes(keyFile).nn)
           Setup.saveKeyAndModels(ready)
           val edit = ProviderEdits.Edit(List("providers", ready.provider.name), Some(writeJs(ready.provider.config)))
           if applyEdits(List(edit), s"${ready.provider.label} added", into = Some(Config.globalPath)) then
             modelCommands.switchModel(ready.model.ref)
+          else
+            try
+              keysBefore match
+                case Some(bytes) => OwnerOnlyFiles.replace(keyFile.toRealPath().nn, bytes, keepPermissions = false)
+                case None => Files.deleteIfExists(keyFile)
+            catch
+              case NonFatal(e) => tui.error(s"Could not restore ${PlatformPath.display(keyFile)}: ${Debug.message(e)}")
         case None => tui.info("No provider added.")
 
   /** The files `edits` go to, `into` or those [[ProviderEdits.files]] names, each with its edits. */

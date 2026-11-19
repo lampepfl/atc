@@ -161,7 +161,9 @@ final class ModelCommands(app: App):
     * the confirmation. */
   private def remember(key: String, value: Option[ujson.Value]): String =
     val path = Config.projectPath(app.cwd)
-    if !Files.isRegularFile(path) then ""
+    // In the home directory that path is the global config, which a choice made for one
+    // directory must not change for every other.
+    if !Files.isRegularFile(path) || Config.samePath(path, Config.globalPath) then ""
     else
       try
         ConfigCommands.editConfigs(app.cwd, Config.globalDir, List(path)) {

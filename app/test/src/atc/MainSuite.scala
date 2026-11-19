@@ -100,6 +100,8 @@ class MainSuite extends munit.FunSuite:
     val scripted = App.permissionPrompter(Cli.Args(prompt = Some("work")), interactive)
     val denied = intercept[SecurityException](scripted.ask(request))
     assert(denied.getMessage.nn.contains("non-interactive run cannot ask"), denied.getMessage)
+    // The refusal names what was asked for: a script's log holds nothing else of it.
+    assert(denied.getMessage.nn.contains("Run commands; reason: test; command 1: git status"), denied.getMessage)
     assertEquals(asked, 0)
     val approved = App.permissionPrompter(Cli.Args(prompt = Some("work"), approveAll = true), interactive)
     assertEquals(approved.ask(request), Decision.AllowSession)
