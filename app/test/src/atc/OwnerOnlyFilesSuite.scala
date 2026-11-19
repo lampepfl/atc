@@ -25,7 +25,7 @@ class OwnerOnlyFilesSuite extends munit.FunSuite:
       OwnerOnlyFiles.create(mine, utf8("x"))
       assertEquals(OwnerOnlyFiles.foreignOwner(mine), None)
       assertEquals(OwnerOnlyFiles.foreignOwner(dir), None)
-      // The root directory belongs to the administrator; a path that does not exist has no owner to tell.
+      // The root directory belongs to the system; a path that does not exist has no owner to tell.
       assertEquals(OwnerOnlyFiles.foreignOwner(dir.getRoot.nn), None)
       assertEquals(OwnerOnlyFiles.foreignOwner(dir.resolve("absent").nn), None)
 

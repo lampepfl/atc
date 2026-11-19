@@ -717,12 +717,13 @@ nearest ancestor containing `.atc/config.json` or `.atc/keys.properties`. One wh
 directory or project files belong to another user is passed over, with a warning, for the
 next one above (`Config.foreignProjects`): in a shared directory such as `/tmp` anyone can
 put a config above where ATC runs, and its file rules and instructions need no trust. Files
-of the administrator (`root`, and on Windows the Administrators group by its English name)
-count as the user's own, as does everything on a file system that records no owner. When the
-project config in use lies above the working directory, the start names it. A file named
-twice, compared by canonical path so that a link to it counts as the same file, retains its
-first role. Project rules are anchored to the directory containing
-`.atc` and grant access only within it; their restrictions apply wherever they match.
+of the administrator (`root`, and on Windows the Administrators group, `SYSTEM` and
+`TrustedInstaller` by their English names) count as the user's own, as does everything on a
+file system that records no owner. When the project config in use lies above the working
+directory, the start names it. A file named twice, compared by canonical path so that a link
+to it counts as the same file, retains its first role. Project rules are anchored to the
+directory containing `.atc` and grant access only within it; their restrictions apply
+wherever they match.
 
 | Setting | Merge rule |
 |---|---|

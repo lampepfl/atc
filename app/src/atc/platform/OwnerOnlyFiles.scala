@@ -32,8 +32,10 @@ private[atc] object OwnerOnlyFiles:
       Option(lookup.lookupPrincipalByName(System.getProperty("user.name")))
     catch case _: Exception => None
 
-  /** As the JDK names them; a Windows in another language names its groups otherwise. */
-  private val Administrators = Set("root", "BUILTIN\\Administrators", "NT AUTHORITY\\SYSTEM")
+  /** As the JDK names them; a Windows in another language names its groups otherwise.
+    * TrustedInstaller, the service that installs Windows, owns the system drive's root. */
+  private val Administrators =
+    Set("root", "BUILTIN\\Administrators", "NT AUTHORITY\\SYSTEM", "NT SERVICE\\TrustedInstaller")
 
   /** Open `path` with `options`; a file the call creates is owner-only. */
   def open(path: Path, options: OpenOption*): FileChannel =
