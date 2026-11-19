@@ -588,10 +588,11 @@ holds the configured rules and the session grants; request scopes do not count. 
 `.gitignore` is judged by its target. A refusal lasts only until the session grants change,
 so a `.gitignore` applies from the first listing after the user grants access for the session.
 
-Host patterns are case-insensitive and normalize numeric IP literals. Deny rules are checked
-at use, even when a requested pattern was previously approved. Each permission decision is
-included in the tool result so the model knows whether approval was temporary, session-wide
-or denied.
+Host patterns are case-insensitive and normalize numeric IP literals. Names are never
+resolved, so a `denyHosts` entry for an address does not cover a name that resolves to it.
+Deny rules are checked at use, even when a requested pattern was previously approved. Each
+permission decision is included in the tool result so the model knows whether approval was
+temporary, session-wide or denied.
 
 ### Request blocks from the agent's side
 
@@ -936,10 +937,11 @@ rule applies to the matched path **and its entire subtree**. Every matching rule
 and a project rule grants only inside its project ([Policy algebra](#policy-algebra)). A
 path is classified or locked if any matching rule says so.
 
-**Classified** content is only observable as `Classified[String]`, and a classified
-directory's structure is classified too (listing it needs `childrenClassified`/`walkClassified`;
-`walk`/`grepRecursive`/`find` do not descend into it). A plain `write` to a classified path
-is refused, and so is `writeClassified` to a non-classified path. **Locked** means no prompt
+**Classified** content is only observable as `Classified[String]`, and so is a classified
+directory's listing (`childrenClassified`/`walkClassified`; `walk`/`grepRecursive`/`find` do
+not descend into it). A path named inside it can still be probed: `exists`, `isDirectory` and
+`isClassified` answer for it. A plain `write` to a classified path is refused, and so is
+`writeClassified` to a non-classified path. **Locked** means no prompt
 can widen the rule. `"respectGitignore": true` (the default) additionally hides what git
 ignores from listings; that is visibility, not permission, so an ignored file is still
 readable by name.
@@ -1199,9 +1201,11 @@ do not change the prompt prefix. Repository-derived scalar values are JSON-quote
 instruction and permission blocks are marked as data.
 
 `CompletionPolicy` selects tool execution, continuation or completion. Calls from truncated
-or blocked responses are not executed, and the assistant message says so even when it has
-text. Output limits add `Msg.Continuation`; server-side pauses can resume directly. A tool
-call the output limit cut gets its own continuation (`AgentMessages.truncatedToolCall`: the
+or blocked responses are not executed. A response that resumes says so in its assistant
+message even when it has text, or the model only sends the calls again; a blocked response
+keeps its text as the provider sent it, and only the user is warned. Output limits add
+`Msg.Continuation`; server-side pauses can resume directly. A tool call the output limit cut
+gets its own continuation (`AgentMessages.truncatedToolCall`: the
 call did not run, split it), since after a plain continuation models send the same call
 again, and at most `Agent.MaxTruncatedCalls` retries. Resume and tool-budget rejection counts
 bound repeated work. The interactive tool budget may be extended by the user;
@@ -1371,7 +1375,8 @@ that could not be resumed never replaces the previous checkpoint, and a turn tha
 a fatal error too, first answers its open tool calls. Concurrent instances in one directory
 share the checkpoint, so the last successful save becomes the resume point. A missing or
 invalid checkpoint never prevents
-startup. ATC installs no shutdown hook, so a forced termination loses the turn in progress.
+startup. No shutdown hook saves the session (the one ATC installs kills spawned processes),
+so a forced termination loses the turn in progress.
 
 ### Input prediction
 
@@ -1458,8 +1463,9 @@ and a line that starts with an absolute path goes to the agent.
 
 During a turn, Enter submits a correction and unsent text is shown in the status line.
 Bracketed pastes keep their newlines and are collected without submitting individual lines,
-and the footer shows the pasted text once, when the paste ends. The footer uses JLine
-`Status`, updates on phase and input changes, and reserves a terminal row for the active
+and the footer shows the pasted text when the paste ends or pauses, not with every byte. The
+footer uses JLine `Status`, updates on phase and input changes, and reserves a terminal row
+for the active
 operation, elapsed time and mode, model and directory. Spinner writes and status updates
 share the TUI lock. The footer is reserved before the first content line, so adding it does
 not scroll the banner away. Its activity indicator replaces a separate spinner when the
@@ -1485,7 +1491,7 @@ old rows, so a shrink can leave some of them above the redrawn region.
 
 Streaming text is flushed at the end of each incoming update. Nested rendering helpers share
 that flush instead of flushing every gutter and style fragment. Live regions compare their
-rows with the previous view and immediately repaint only changed rows. `LiveRegion.redraw`
+rows with the previous view and repaint from the first row that changed. `LiveRegion.redraw`
 cuts every row to one terminal row, measured from column 0 with its gutter and tab stops,
 with newlines shown as spaces, since a row that wrapped would take two terminal rows and
 shift every later redraw. `Screen.fit` stops scanning once the row is full, so a very long
@@ -1509,9 +1515,9 @@ Focus counts only once the terminal has sent a report, since JLine assumes suppo
 terminals. Under the title `atc · <directory>`, a turn's alert shows the start of its last
 prose block, or the outcome with the error or duration when the turn did not finish
 normally (`Alerts.turnText`); permission and question alerts show the request or the
-question. Terminal alerts are OSC 9, 99 (kitty) or 777 sequences, chosen from `TERM` and
-`TERM_PROGRAM`, wrapped for tmux passthrough and written as style text so they leave the
-line tracking alone. System alerts start `osascript`, a Base64-encoded PowerShell toast
+question. Terminal alerts are OSC 9, 99 (kitty) or 777 sequences, chosen from `TERM`,
+`TERM_PROGRAM` and `KITTY_WINDOW_ID`, wrapped for tmux passthrough and written as style text
+so they leave the line tracking alone. System alerts start `osascript`, a Base64-encoded PowerShell toast
 script or `notify-send` on a daemon thread, passing the text as arguments (after `--` for
 `notify-send`, so a body starting with `-` is not an option) or quoted script data, and ring
 the bell if the command cannot start. Alert text is sanitized, put on one line and capped at
@@ -1594,8 +1600,8 @@ continuation lines under the question text, like permission details. For multipl
 selections, chosen answers retain their display order and custom text is appended. User
 input is returned to the host's `ask` call; only its terminal display is sanitized.
 
-The prompt history is owner-only on POSIX systems and rejects final symlinks. Only the main
-prompt adds to it; answers and secrets typed into pop-ups stay out.
+The prompt history is owner-only on POSIX systems and rejects final symlinks. The main
+prompt and `/run` blocks add to it; answers and secrets typed into pop-ups stay out.
 
 ## Testing and conventions
 

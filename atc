@@ -77,7 +77,8 @@ Environment:
   ATC_STARTUP_CACHE=0  run without the JVM startup cache (AOT cache on Java 25+,
                        class-data-sharing archive on Java 19-24)
   ATC_CHECK_UPDATES=0  skip the release and wrapper checks on interactive startup
-  GITHUB_TOKEN         raises the GitHub API rate limit for release checks and downloads
+  GITHUB_TOKEN         raises the GitHub API rate limit for release checks and the
+                       wrapper's own download
 
 Examples:
   atc setup

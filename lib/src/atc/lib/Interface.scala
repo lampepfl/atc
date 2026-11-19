@@ -101,7 +101,7 @@ abstract class FileEntry private[atc] () extends Cap:
   def name: String
   def exists: Boolean
   def isDirectory: Boolean
-  /** Whether this file's content (or this directory's structure) is classified. */
+  /** Whether this file's content (or this directory's listing) is classified. */
   def isClassified: Boolean
   def size: Long
   def read(): String

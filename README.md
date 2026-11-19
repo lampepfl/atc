@@ -82,10 +82,10 @@ access within a block the extra permission cannot escape. You decide in a pop-up
   │ }
 
   ⚠ Permission request: Run commands
-    patterns: npm *
-    reason:   install dependencies and run the test suite
-    Allow?
-    › Allow once
+    reason:    install dependencies and run the test suite
+    command 1: npm *
+    note:      * matches any arguments; for an interpreter, any code
+    ❯ Allow once
       Allow for this session
       Deny this request
       Tell the agent what to change
@@ -131,9 +131,10 @@ scripts, use `atc.cmd`, or allow local scripts with
 
 **1. Start it.** Change to the project you want to work on (`cd ~/my-project`) and run
 `atc`. The first start asks you to choose a provider, paste its API key and choose one of
-its models; the key is saved in `~/.atc/keys.properties`, readable only by you. With a
-ChatGPT plan you can sign in through the browser instead of giving a key, and with a
-Claude plan ATC can use your signed-in [Claude Code](https://claude.com/claude-code) CLI.
+its models; the key is saved in `~/.atc/keys.properties`, readable only by you on macOS
+and Linux (on Windows, as private as your user profile). With a ChatGPT plan you can sign
+in through the browser instead of giving a key, and with a Claude plan ATC can use your
+signed-in [Claude Code](https://claude.com/claude-code) CLI.
 Any other OpenAI- or Anthropic-compatible server, such as a local Ollama, is set up by its URL.
 To set up providers by hand instead, choose *Configure providers myself*: ATC writes
 `~/.atc/config.json` and exits. On Windows, `~/.atc` is `%USERPROFILE%\.atc`.
@@ -362,7 +363,7 @@ Config files are JSON, in three layers:
 | | layer | file | may |
 |---|---|---|---|
 | 1 | global | `~/.atc/config.json` | grant anything |
-| 2 | project | the nearest `.atc/config.json` at or above the working directory | open **its own project**; narrow anything |
+| 2 | project | the nearest `.atc/config.json` at or above the working directory (a `.atc/keys.properties` alone also marks a project) | open **its own project**; narrow anything |
 | 3 | explicit | `-c <file>` | grant anything |
 
 No policy is compiled into the program: anything not granted by a configuration is denied.
@@ -475,9 +476,9 @@ and the configured permissions.
   Even `git status` runs programs named in the configuration of the repository it runs in, so
   keep every `.git` read-only, as the starter project config does; with git 2.38 or newer, ATC
   also has git refuse a directory that only looks like a repository.
-- **Allowed hosts can receive data.** The agent may send any non-classified data available
-  to it to an allowed host. The type system prevents this only for `classified` content.
-  Allow only hosts you trust to receive project data.
+- **Allowed hosts can receive data.** The agent may send any data available to it to an
+  allowed host, `classified` content included through `httpPostClassified` and secret
+  headers. Allow only hosts you trust to receive project data.
 - **Your provider sees your context.** Everything that is not `classified` (your prompts,
   the file contents the agent reads, command output) goes to the model provider you
   configured. Use `classifiedModel` only for a deployment that satisfies the isolated,
@@ -511,8 +512,8 @@ Tab fills in, Enter runs). Ctrl-C interrupts the turn, Shift-Tab cycles the mode
 Shift-Enter adds a line. Finished code runs fold to a summary, and `/output <n>` shows one
 in full. Ctrl-O switches to writing code, output and reasoning out in full. While the agent
 is working, type a correction and press Enter: it reaches the agent before its next tool
-call. Sessions are saved after every turn, and the next start in the same directory
-offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
+call. Interactive sessions are saved after every turn, and the next start in the same
+directory offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
 reports whether it is working, waiting or done to terminals that track program status.
 
 A `-p` run asks nothing: a permission the configuration does not grant fails instead of
