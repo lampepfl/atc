@@ -1345,8 +1345,11 @@ runs and redirected input neither save nor offer to resume.
 `SessionStore.checkpoint` writes an exclusive temporary file with the usual size limit and
 permissions, then replaces the previous save with an atomic move, or a replacement move where
 the file system has none. Failed writes leave the previous checkpoint intact; temporary
-files are removed. Concurrent instances in one directory share the checkpoint, so the last
-successful save becomes the resume point. A missing or invalid checkpoint never prevents
+files are removed. A save checks tool-call/result pairing as `/resume` does, so a history
+that could not be resumed never replaces the previous checkpoint, and a turn that fails, by
+a fatal error too, first answers its open tool calls. Concurrent instances in one directory
+share the checkpoint, so the last successful save becomes the resume point. A missing or
+invalid checkpoint never prevents
 startup. ATC installs no shutdown hook, so a forced termination loses the turn in progress.
 
 ### Input prediction

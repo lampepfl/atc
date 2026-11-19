@@ -267,7 +267,8 @@ final class Agent(
           conversation.repairAfter(AgentMessages.interrupted)
           interrupted()
           TurnOutcome.Interrupted
-        case NonFatal(e) =>
+        case e @ (_: Exception | _: Error) =>
+          // Fatal errors too: the history is saved on exit and must stay paired to be resumed.
           conversation.repairAfter(AgentMessages.turnFailed(e))
           throw e
 
