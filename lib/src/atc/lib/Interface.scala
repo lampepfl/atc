@@ -113,11 +113,13 @@ abstract class FileEntry private[atc] () extends Cap:
   update def write(content: String): Unit
   update def writeBytes(content: Array[Byte]): Unit
   update def append(content: String): Unit
+  /** Delete this file or empty directory; a symlink is deleted itself, not its target. */
   update def delete(): Unit
   /** Create this directory, including missing parents. */
   update def mkdir(): Unit
   /** Immediate children of a (non-classified) directory; entries you cannot
-   *  access are omitted, and a symlink is listed as its target. */
+   *  access are omitted. A symlink is listed under its own path and judged by
+   *  what it reaches. */
   def children: List[FileEntry^{this}]
   /** All descendants; classified sub-directories and symlinked directories are
    *  listed but not entered. */
@@ -397,7 +399,8 @@ trait Interface:
 
   /** Move a file by copying it and deleting the source. Requires write access
    *  to both paths; classified files are rejected. Parent directories are created.
-   *  The operation is not atomic. Move directory contents individually. */
+   *  The operation is not atomic. Move directory contents individually. A symlink
+   *  source is read through, and the link itself is deleted. */
   def move(from: String, to: String)(using FileSystem^): Unit
   /** Copy a file, binary-safe (`writeBytes(to, readBytes(from))`). */
   def copy(from: String, to: String)(using FileSystem^): Unit
@@ -445,8 +448,9 @@ trait Interface:
   def isDirectory(path: String)(using FileSystem): Boolean
   /** Create a directory (and parents). */
   def mkdir(path: String)(using FileSystem^): Unit
-  /** Delete a file or an empty directory. There is no recursive delete: for a tree,
-   *  `walk(dir).reverse.foreach(delete)` then `delete(dir)`. */
+  /** Delete a file, an empty directory or a symlink (the link, not its target).
+   *  There is no recursive delete: for a tree, `walk(dir).reverse.foreach(delete)`
+   *  then `delete(dir)`. */
   def delete(path: String)(using FileSystem^): Unit
 
   /** The entries of a directory (non-recursive). Paths are relative to the working

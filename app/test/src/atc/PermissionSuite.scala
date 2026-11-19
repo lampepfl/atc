@@ -511,6 +511,34 @@ class PermissionSuite extends munit.FunSuite:
     intercept[IllegalArgumentException](env.host.exec(s"$cat < in.txt", Nil, ExecOptions(stdin = "x"))) // two inputs
     intercept[IllegalArgumentException](env.host.exec(s"$echo a | $cat", List("x"))) // args need one program
 
+  test("a redirection or working directory through more links than the OS follows is judged by where it leads"):
+    // `a -> .` repeated until the kernel gives up on the lookup, then a link into a read-only
+    // directory or out of the project: the names left over must not be taken as plain names.
+    val outside = TestEnv.outsideDir()
+    val env = TestEnv(
+      root =>
+        List(
+          FileRule(PathPattern(".", root), Some(Access.Write), None),
+          FileRule(PathPattern("./kept", root), Some(Access.Read), None),
+        ),
+      commands = permits("echo", "cat", "pwd"),
+    )
+    import env.given
+    env.file("kept/config", "original\n")
+    assume(TestEnv.trySymbolicLink(env.root.resolve("a"), Path.of(".")), "symbolic links are unavailable")
+    Files.createSymbolicLink(env.root.resolve("k"), Path.of("kept"))
+    Files.createSymbolicLink(env.root.resolve("o"), outside)
+    val around = "a/" * 45
+    intercept[SecurityException](env.host.exec(s"${fixture("echo")} changed > ${around}k/config"))
+    intercept[SecurityException](env.host.exec(s"${fixture("echo")} created >> ${around}k/new.txt"))
+    assertEquals(env.contents("kept/config"), "original\n")
+    assert(!env.existsOnDisk("kept/new.txt"))
+    intercept[SecurityException](env.host.exec(s"${fixture("cat")} < ${around}o/o.txt"))
+    intercept[SecurityException](env.host.exec(fixture("pwd"), Nil, s"${around}o"))
+    // Where the links lead somewhere permitted, the command runs there.
+    assertEquals(env.host.exec(s"${fixture("cat")} < ${around}k/config").stdout, "original\n")
+    assertEquals(Path.of(env.host.exec(fixture("pwd"), Nil, s"${around}k").stdout.trim), env.root.resolve("kept"))
+
   test("spawn: talk to a process while it runs, read what it says, and it is reported to the user"):
     val env = TestEnv(commands = permits("cat", "sort"))
     import env.given

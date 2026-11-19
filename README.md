@@ -32,12 +32,12 @@ Here is a request, the Scala code the agent wrote, the program output, and the f
   │ grepRecursive("lib/src", "^\\s+update def", "*.scala")
   │   .foreach(m => println(s"${m.lineNumber}  ${m.line.trim}"))
   ├ output
-  │ 114  update def write(content: String): Unit
-  │ 115  update def writeBytes(content: Array[Byte]): Unit
-  │ 116  update def append(content: String): Unit
+  │ 113  update def write(content: String): Unit
+  │ 114  update def writeBytes(content: Array[Byte]): Unit
+  │ 115  update def append(content: String): Unit
   │ 117  update def delete(): Unit
   │ 119  update def mkdir(): Unit
-  │ 129  update def writeClassified(content: Classified[String]): Unit
+  │ 130  update def writeClassified(content: Classified[String]): Unit
   └ ok 121 ms
 
 ● Six of them: write, writeBytes, append, delete, mkdir and writeClassified. They are

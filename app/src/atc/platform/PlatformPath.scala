@@ -1,7 +1,8 @@
 package atc.platform
 
 import java.io.IOException
-import java.nio.file.{Files, Path, Paths}
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.{FileSystemException, Files, LinkOption, Path, Paths}
 import java.util.Locale
 
 /** Host-path parsing, display and validation. Agent-facing paths always use
@@ -104,27 +105,62 @@ private[atc] object PlatformPath:
   private def isDriveRelative(value: String): Boolean =
     value.replace('/', '\\').matches("(?i)^[a-z]:(?:$|[^\\\\].*)")
 
-  /** Convert a path to absolute normalized form and resolve symlinks as far as
-    * possible. Dangling links are resolved too because writing through one
-    * creates its target, which is the path the policy must evaluate. */
+  /** Whether `path` itself is a symbolic link or another reparse point (a Windows junction
+    * is not reported as a link, but its no-follow attributes are `isOther`). */
+  def isLink(path: Path): Boolean =
+    try
+      val attributes = Files.readAttributes(path, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS).nn
+      attributes.isSymbolicLink || attributes.isOther
+    catch case _: IOException => false
+
+  /** Convert a path to absolute normalized form with every symbolic link resolved: the path
+    * the policy evaluates and the operation then opens. Dangling links are resolved too,
+    * because writing through one creates its target. No name of the result is a link the OS
+    * would follow, so what is opened is what was judged; a path that cannot be resolved that
+    * far, a link loop or a chain past [[MaxLinkDepth]], is refused with a `FileSystemException`.
+    *
+    * The OS resolves a path that exists. Otherwise a name is missing, a link dangles, or the
+    * kernel gave up on the links (it follows 32 to 40 in one lookup): then the nearest
+    * ancestor it does resolve is real, and each name below is examined under a real parent,
+    * where a lookup has no link left to follow and so cannot fail for their number. */
   def canonical(path: Path): Path =
-    realPathOfNearestAncestor(path.toAbsolutePath.normalize, MaxLinkDepth)
-
-  /** Maximum symlink-chain depth, analogous to the kernel's ELOOP threshold. */
-  private val MaxLinkDepth = 40
-
-  private def realPathOfNearestAncestor(path: Path, depth: Int): Path =
-    if depth <= 0 then path // a symlink loop: judge the path literally
-    else if Files.isSymbolicLink(path) then // NOFOLLOW: true for dangling links too
+    // The names below `current` still to be resolved, the next one first.
+    val pending = java.util.ArrayDeque[Path]()
+    var current = path.toAbsolutePath.normalize
+    var real = false
+    while !real do
       try
-        val target = Files.readSymbolicLink(path).nn
-        val resolved = if target.isAbsolute then target else path.getParent.resolve(target).nn
-        realPathOfNearestAncestor(resolved.toAbsolutePath.normalize, depth - 1)
-      catch case _: IOException => path
-    else if Files.exists(path) then
-      try path.toRealPath()
-      catch case _: IOException => path
-    else
-      val parent = path.getParent
-      val name = path.getFileName
-      if parent != null && name != null then realPathOfNearestAncestor(parent, depth).resolve(name) else path
+        current = current.toRealPath()
+        real = true
+      catch
+        case _: IOException =>
+          val parent = current.getParent
+          val name = current.getFileName
+          if parent == null || name == null then real = true // a root that does not resolve
+          else
+            pending.push(name)
+            current = parent
+    var followed = 0
+    while !pending.isEmpty do
+      val name = pending.pop().nn
+      name.toString match
+        case "." => ()
+        case ".." => current = Option(current.getParent).getOrElse(current)
+        case _ =>
+          val candidate = current.resolve(name).nn
+          try current = candidate.toRealPath()
+          catch
+            case _: IOException if Files.isSymbolicLink(candidate) =>
+              followed += 1
+              if followed > MaxLinkDepth then
+                throw FileSystemException(path.toString, null, "Too many levels of symbolic links")
+              val target = Files.readSymbolicLink(candidate).nn
+              // A target with a root starts over from that root; a relative one continues here.
+              val names = if target.getRoot == null then target else candidate.resolveSibling(target).nn
+              if target.getRoot != null then current = names.getRoot
+              for i <- names.getNameCount - 1 to 0 by -1 do pending.push(names.getName(i))
+            case _: IOException => current = candidate // a missing name
+    current
+
+  /** Links [[canonical]] follows itself, besides those the OS resolves. */
+  private val MaxLinkDepth = 40

@@ -2,7 +2,7 @@ package atc.host
 
 import atc.{ScalaSource, TextFiles}
 import atc.lib.*
-import atc.platform.{PathGlob, PlatformPath}
+import atc.platform.{PathGlob, Platform, PlatformPath}
 
 import java.nio.file.Paths
 import java.util.regex.{Matcher, Pattern}
@@ -134,10 +134,23 @@ private[host] trait HostFiles:
     if source.isDirectory then
       throw IllegalArgumentException(s"move: '$from' is a directory; move its files and mkdir/delete the directories")
     val target = impl(fs.access(to))
-    if source.path != target.path then
-      requireWrite(scopeOf(fs), source.canonicalPath, "move")
+    // Compared as resolved: a target that is a link to the source names the same file, which
+    // deleting the source afterwards would lose.
+    source.checkedRemovable("move")
+    if source.canonicalPath != target.canonicalPath then
       Using.resource(source.openRead())(in => target.writeFrom(source, in))
       source.delete()
+    else
+      // Where names ignore case, a new spelling of the same name is the same file, and the
+      // move would do nothing: say so rather than report a rename that did not happen.
+      val wanted = Option(PlatformPath.parse(to).getFileName).map(_.toString)
+      val actual = Option(target.canonicalPath.getFileName).map(_.toString)
+      val caseOnly = wanted.exists(w => actual.exists(a => a != w && a.equalsIgnoreCase(w)))
+      // A target that is a link to the source is another name, not another spelling.
+      if caseOnly && Platform.caseInsensitivePaths && !PlatformPath.isLink(target.removable) then
+        throw IllegalArgumentException(
+          s"move: '$from' and '$to' name the same file on this file system; to change only the case of its name, move it to a temporary name first"
+        )
 
   def copy(from: String, to: String)(using fs: FileSystem): Unit =
     val source = impl(fs.access(from))

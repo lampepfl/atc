@@ -7,7 +7,7 @@ import atc.platform.{PathGlob, Platform, PlatformPath}
 
 import java.io.IOException
 import java.nio.charset.Charset
-import java.nio.file.{Files, LinkOption, Path}
+import java.nio.file.{FileSystemException, Files, LinkOption, Path}
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import scala.collection.mutable.ListBuffer
 
@@ -673,8 +673,8 @@ class HostSuite extends munit.FunSuite:
 
   test("entries listed through children/walk are judged by their target, like paths given by name"):
     // A link in a readable directory to a classified file: `read` by name is
-    // refused, and an entry obtained from a listing must be refused the same way,
-    // so the entry carries the target's path and is judged there.
+    // refused, and an entry obtained from a listing must be refused the same way:
+    // the entry carries the link's own path and each operation resolves it.
     val linked = TestEnv(TestEnv.withSecrets)
     import linked.given
     linked.file("secrets/key.txt", "THE-SECRET")
@@ -683,16 +683,16 @@ class HostSuite extends munit.FunSuite:
       TestEnv.trySymbolicLink(linked.root.resolve("pub/link.txt"), linked.root.resolve("secrets/key.txt")),
       "symbolic links are unavailable for this account",
     )
-    val target = PlatformPath.portable(linked.root.resolve("secrets/key.txt"))
+    val link = PlatformPath.portable(linked.root.resolve("pub/link.txt"))
     intercept[SecurityException](linked.host.read("pub/link.txt"))
     val listed = linked.host.access("pub").children
-    assertEquals(listed.map(_.path), List(target), "a link is listed as its target")
+    assertEquals(listed.map(_.path), List(link), "a link is listed under its own path")
     assert(listed.head.isClassified)
     intercept[SecurityException](listed.head.read())
     intercept[SecurityException](linked.host.access("pub").walk().head.read())
-    // `ls` shows the same canonical path (relative to the root, as listings are), and
+    // `ls` shows the same path (relative to the root, as listings are), and
     // `readClassified` stays the way in.
-    assertEquals(linked.host.ls("pub"), List("secrets/key.txt"))
+    assertEquals(linked.host.ls("pub"), List("pub/link.txt"))
     linked.host.readClassified(listed.head.path)
 
   test("symlink escaping cwd is judged by its target"):
@@ -701,6 +701,100 @@ class HostSuite extends munit.FunSuite:
     intercept[SecurityException](read("link/o.txt"))
     val top = ls(".").map(p => Path.of(p).getFileName.toString)
     assert(!top.contains("link"), top.toString)
+
+  test("a link chain longer than the OS follows is judged by its target, or refused"):
+    val outside = TestEnv.outsideDir()
+    val chained = TestEnv()
+    import chained.given
+    /** `name1 -> name2 -> ... -> name<length> -> target`; returns the first link's name. */
+    def chain(name: String, length: Int, target: Path): String =
+      assume(
+        TestEnv.trySymbolicLink(chained.root.resolve(s"$name$length"), target),
+        "symbolic links are unavailable for this account",
+      )
+      for i <- length - 1 to 1 by -1 do
+        Files.createSymbolicLink(chained.root.resolve(s"$name$i"), Path.of(s"$name${i + 1}"))
+      s"${name}1"
+    // More links than one lookup follows (32 on macOS, 40 on Linux): still the target itself.
+    val long = chain("l", 45, outside.resolve("o.txt"))
+    assertEquals(PlatformPath.canonical(chained.root.resolve(long)), outside.resolve("o.txt"))
+    intercept[SecurityException](chained.host.read(long))
+    intercept[SecurityException](chained.host.write(long, "changed"))
+    assertEquals(Files.readString(outside.resolve("o.txt")), "outside")
+    // More than are followed at all: refused, not judged as the link the resolution stopped at.
+    val endless = chain("m", 200, outside.resolve("o.txt"))
+    intercept[FileSystemException](PlatformPath.canonical(chained.root.resolve(endless)))
+    intercept[FileSystemException](chained.host.read(endless))
+    // A loop is refused the same way, and neither kind stops a listing.
+    Files.createSymbolicLink(chained.root.resolve("loop-a"), Path.of("loop-b"))
+    Files.createSymbolicLink(chained.root.resolve("loop-b"), Path.of("loop-a"))
+    intercept[FileSystemException](PlatformPath.canonical(chained.root.resolve("loop-a")))
+    intercept[FileSystemException](chained.host.read("loop-a"))
+    chained.file("plain.txt", "plain")
+    assertEquals(chained.host.ls("."), List("plain.txt"))
+
+  test("a path through more links than the OS follows is resolved name by name"):
+    // `a -> .` repeated until the kernel gives up on the lookup, then `k -> kept`: every name
+    // must still be resolved, or the read-only rule on `kept` would not see the path.
+    val looped = TestEnv(root =>
+      List(
+        FileRule(PathPattern(".", root), Some(Access.Write), None),
+        FileRule(PathPattern("./kept", root), Some(Access.Read), None),
+      )
+    )
+    import looped.given
+    looped.file("kept/config", "original")
+    assume(
+      TestEnv.trySymbolicLink(looped.root.resolve("a"), Path.of(".")),
+      "symbolic links are unavailable for this account",
+    )
+    Files.createSymbolicLink(looped.root.resolve("k"), Path.of("kept"))
+    val through = "a/" * 45 + "k/config"
+    assertEquals(PlatformPath.canonical(looped.root.resolve(through)), looped.root.resolve("kept/config"))
+    assertEquals(looped.host.read(through), "original")
+    intercept[SecurityException](looped.host.write(through, "changed"))
+    intercept[SecurityException](looped.host.write("a/" * 45 + "k/new.txt", "created"))
+    assertEquals(looped.contents("kept/config"), "original")
+    assert(!looped.existsOnDisk("kept/new.txt"))
+    // However many: each `a` resolves by itself under its real parent.
+    assertEquals(
+      PlatformPath.canonical(looped.root.resolve("a/" * 200 + "k/config")),
+      looped.root.resolve("kept/config"),
+    )
+
+  test("a link target is resolved as the OS resolves it, `..` after another link included"):
+    val nested = TestEnv()
+    import nested.given
+    nested.file("x/y/inner.txt", "inner")
+    nested.file("x/b.txt", "the OS's target")
+    nested.file("b.txt", "the lexical target")
+    assume(
+      TestEnv.trySymbolicLink(nested.root.resolve("sub"), Path.of("x/y")),
+      "symbolic links are unavailable for this account",
+    )
+    Files.createSymbolicLink(nested.root.resolve("l"), Path.of("sub/../b.txt"))
+    assertEquals(nested.host.read("l"), "the OS's target")
+    // The same for a target that does not exist yet: a write creates what the OS would create.
+    Files.createSymbolicLink(nested.root.resolve("d"), Path.of("sub/../new.txt"))
+    assertEquals(PlatformPath.canonical(nested.root.resolve("d")), nested.root.resolve("x/new.txt"))
+    nested.host.write("d", "created")
+    assertEquals(nested.contents("x/new.txt"), "created")
+
+  test("a handle kept across a symlink swap is judged by the link's current target"):
+    val name = "swapped.txt"
+    env.file(name, "plain")
+    val entry = env.fs.access(name)
+    assertEquals(entry.read(), "plain")
+    Files.delete(root.resolve(name))
+    assume(
+      TestEnv.trySymbolicLink(root.resolve(name), root.resolve("secrets/key.txt")),
+      "symbolic links are unavailable for this account",
+    )
+    try
+      intercept[SecurityException](entry.read())
+      intercept[SecurityException](entry.write("x"))
+      assertEquals(Files.readString(root.resolve("secrets/key.txt")), "s3cret")
+    finally Files.delete(root.resolve(name))
 
   test("a Windows directory junction escaping cwd is judged by its target"):
     assume(Platform.isWindows, "Windows junction integration test")
@@ -733,26 +827,127 @@ class HostSuite extends munit.FunSuite:
     write("dangling-ok.txt", "fine")
     assertEquals(Files.readString(inner), "fine")
 
-  test("a readable symlinked directory is listed as its target but never entered"):
+  test("a readable symlinked directory is listed as a link but never entered"):
     Files.createDirectories(root.resolve("real/sub"))
     Files.writeString(root.resolve("real/sub/f.txt"), "f")
     assume(
       TestEnv.trySymbolicLink(root.resolve("dirlink"), root.resolve("real")),
       "symbolic links are unavailable for this account",
     )
-    // List and evaluate the link as its target.
+    // The link is listed under its own name beside its target.
     val top = ls(".")
     assert(top.contains("real"), top.toString)
-    assertEquals(top.count(_ == "real"), 1, top.toString) // the link resolves to it: listed once
-    assert(!top.exists(_.contains("dirlink")), top.toString)
+    assert(top.contains("dirlink"), top.toString)
     // Walk the real directory once without traversing the link.
     val walked = walk(".").map(env.rel)
     assert(walked.contains("real/sub/f.txt"), walked.toString)
-    assert(!walked.exists(_.contains("dirlink")), walked.toString)
+    assert(walked.contains("dirlink"), walked.toString)
+    assert(!walked.exists(_.startsWith("dirlink/")), walked.toString)
     assertEquals(walked.count(_ == "real/sub/f.txt"), 1, walked.toString)
     // Evaluate access through the link at its target.
     assertEquals(read("dirlink/sub/f.txt"), "f")
     assertEquals(access("dirlink/sub/f.txt").path, PlatformPath.portable(root.resolve("real/sub/f.txt")))
+
+  test("delete and move act on a link itself, so deleting a tree leaves what its links reach"):
+    env.file("kept/data.txt", "kept")
+    env.dir("tree")
+    assume(
+      TestEnv.trySymbolicLink(root.resolve("tree/link.txt"), root.resolve("kept/data.txt")),
+      "symbolic links are unavailable for this account",
+    )
+    assert(TestEnv.trySymbolicLink(root.resolve("tree/dangling.txt"), root.resolve("tree/gone.txt")))
+    assert(TestEnv.trySymbolicLink(root.resolve("moved-link.txt"), root.resolve("kept/data.txt")))
+    // The recipe Interface.scala gives for a tree: delete what walk lists, deepest first.
+    walk("tree").reverse.foreach(delete)
+    delete("tree")
+    assert(!Files.exists(root.resolve("tree"), LinkOption.NOFOLLOW_LINKS))
+    assertEquals(Files.readString(root.resolve("kept/data.txt")), "kept")
+    // Moving a link writes what it reaches to the target and removes the link.
+    move("moved-link.txt", "copy-of-link.txt")
+    assertEquals(read("copy-of-link.txt"), "kept")
+    assert(!Files.exists(root.resolve("moved-link.txt"), LinkOption.NOFOLLOW_LINKS))
+    assertEquals(Files.readString(root.resolve("kept/data.txt")), "kept")
+    // Moving a file onto a link to it, or a link onto its target, names one file: nothing happens.
+    assert(TestEnv.trySymbolicLink(root.resolve("alias.txt"), root.resolve("kept/data.txt")))
+    move("kept/data.txt", "alias.txt")
+    move("alias.txt", "kept/data.txt")
+    assertEquals(Files.readString(root.resolve("kept/data.txt")), "kept")
+    assert(Files.isSymbolicLink(root.resolve("alias.txt")))
+
+  test("a link's handle deletes nothing outside after its directory is swapped for a link"):
+    val outside = TestEnv.outsideDir()
+    env.dir("swapdir")
+    assume(
+      TestEnv.trySymbolicLink(root.resolve("swapdir/l"), root.resolve("README.md")),
+      "symbolic links are unavailable for this account",
+    )
+    assert(TestEnv.trySymbolicLink(outside.resolve("l"), outside.resolve("o.txt")))
+    val entry = access("swapdir/l")
+    Files.delete(root.resolve("swapdir/l"))
+    Files.delete(root.resolve("swapdir"))
+    assert(TestEnv.trySymbolicLink(root.resolve("swapdir"), outside))
+    try
+      intercept[SecurityException](entry.delete())
+      assert(Files.isSymbolicLink(outside.resolve("l")), "the link outside was deleted")
+    finally Files.delete(root.resolve("swapdir"))
+
+  test("a link to a read-only file is not deleted or moved, so it cannot be replaced"):
+    // A rule names what a link reaches; replacing the link would get past it.
+    val guarded = TestEnv(root =>
+      List(
+        FileRule(PathPattern(".", root), Some(Access.Write), None),
+        FileRule(PathPattern("ro", root), Some(Access.Read), None),
+      )
+    )
+    import guarded.given
+    guarded.file("ro/settings.txt", "kept")
+    guarded.dir("tree")
+    assume(
+      TestEnv.trySymbolicLink(guarded.root.resolve("tree/settings.txt"), guarded.root.resolve("ro/settings.txt")),
+      "symbolic links are unavailable for this account",
+    )
+    intercept[SecurityException](guarded.host.delete("tree/settings.txt"))
+    intercept[SecurityException](guarded.host.move("tree/settings.txt", "elsewhere.txt"))
+    assert(Files.isSymbolicLink(guarded.root.resolve("tree/settings.txt")))
+    assert(!Files.exists(guarded.root.resolve("elsewhere.txt")))
+
+  test("a denied link delete asks for its directory, which a grant can then cover"):
+    val outside = TestEnv.outsideDir()
+    assume(
+      TestEnv.trySymbolicLink(outside.resolve("l"), root.resolve("README.md")),
+      "symbolic links are unavailable for this account",
+    )
+    val e = intercept[SecurityException](delete(PlatformPath.portable(outside.resolve("l"))))
+    assert(e.getMessage.nn.contains(ScalaSource.stringLiteral(PlatformPath.portable(outside))), e.getMessage)
+
+  test("deleting a link to a classified file reports no content"):
+    val linked = TestEnv(TestEnv.withSecrets)
+    import linked.given
+    linked.file("secrets/key.txt", "THE-SECRET")
+    linked.dir("pub")
+    assume(
+      TestEnv.trySymbolicLink(linked.root.resolve("pub/link.txt"), linked.root.resolve("secrets/key.txt")),
+      "symbolic links are unavailable for this account",
+    )
+    linked.host.delete("pub/link.txt")
+    assert(!Files.exists(linked.root.resolve("pub/link.txt"), LinkOption.NOFOLLOW_LINKS))
+    assertEquals(Files.readString(linked.root.resolve("secrets/key.txt")), "THE-SECRET")
+    assert(!linked.fileChanges.exists(_.toString.contains("THE-SECRET")), linked.fileChanges.toString)
+
+  test("a rename that changes only the case of a name is refused where names ignore case"):
+    assume(Platform.caseInsensitivePaths, "names compare by case here")
+    write("case-only.txt", "data")
+    assume(Files.exists(root.resolve("CASE-ONLY.txt")), "this volume compares names by case")
+    val e = intercept[IllegalArgumentException](move("case-only.txt", "CASE-ONLY.txt"))
+    assert(e.getMessage.nn.contains("temporary name"), e.getMessage)
+    move("case-only.txt", "case-only.tmp")
+    move("case-only.tmp", "CASE-ONLY.txt")
+    assertEquals(root.toFile.list().nn.filter(_.equalsIgnoreCase("case-only.txt")).toList, List("CASE-ONLY.txt"))
+    // A link to the file under another spelling is another name: moving onto it does nothing.
+    env.dir("case-links")
+    assert(TestEnv.trySymbolicLink(root.resolve("case-links/case-only.txt"), root.resolve("CASE-ONLY.txt")))
+    move("CASE-ONLY.txt", "case-links/case-only.txt")
+    assertEquals(read("CASE-ONLY.txt"), "data")
 
   test("move of a file onto itself is a no-op"):
     write("self.txt", "data")

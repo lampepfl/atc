@@ -194,6 +194,11 @@ class GitIgnoreSuite extends munit.FunSuite:
     assertEquals(ls(root.resolve("denied").toString), List("denied/beta"))
     // A link to a file the agent may read is followed.
     assert(!ls(root.resolve("readable").toString).contains("readable/beta"))
+    // A link loop holds no rules, and does not hide the directory's other entries.
+    Files.createDirectories(root.resolve("looped"))
+    Files.writeString(root.resolve("looped/beta"), "")
+    Files.createSymbolicLink(root.resolve("looped/.gitignore"), Path.of(".gitignore"))
+    assertEquals(ls(root.resolve("looped").toString), List("looped/beta"))
 
   test("a .gitignore counts from the first listing after a session grant"):
     // No rule grants the project. An approval for one block leaves the base scope

@@ -520,7 +520,19 @@ Neither decision adds a permanent deny rule; configured deny rules remain unchan
 File patterns match a path or an ancestor. Component globs match at any depth; relative
 patterns with separators use the layer's base; absolute patterns and `~` use an absolute
 path. `PathGlob` handles slash-based globs on all platforms. Canonicalization resolves
-symlinks, including dangling write targets. Directory traversal does not follow symlinked
+symlinks, including dangling write targets, and no name of its result is a link, so the path
+that is judged is the path that is opened. Where the OS gives up on a lookup for the number of
+links in it, `PlatformPath.canonical` resolves the path name by name under a real parent; a
+loop, or a chain of more than 40 links beyond those the OS follows, is refused with a
+`FileSystemException`. A link that cannot be resolved is left out of listings and cannot be
+deleted or moved through the file API. A `FileEntry` resolves its path again at every
+operation and checks and acts on that result, so a link planted after `access` is judged by
+its own target. A path whose last name is a link, and a link in a listing, keep the link's own
+path, judged by what it reaches; `delete` and the source side of `move` remove the link itself,
+checked as a write where the link sits and at what it reaches (a rule names the target), so
+deleting a tree leaves what its links reach and a link cannot be replaced past a read-only
+rule. A denied link names its directory in the suggested request, since a request for the
+link would be resolved to its target. Directory traversal does not follow symlinked
 directories or Windows junctions. Filesystem checks and subsequent operations are not an
 OS-level transactional sandbox. On Windows and macOS (`Platform.caseInsensitivePaths`) every
 pattern, exact paths and the root of an anchored glob included, compares names

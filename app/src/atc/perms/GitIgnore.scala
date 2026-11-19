@@ -2,6 +2,7 @@ package atc.perms
 
 import atc.platform.{Platform, PlatformPath}
 
+import java.io.IOException
 import java.nio.file.{Files, LinkOption, Path}
 import scala.collection.concurrent.TrieMap
 import scala.jdk.CollectionConverters.*
@@ -57,7 +58,11 @@ object GitIgnore:
       * canonical target is judged and read, so a symlinked `.gitignore` is never
       * followed to a file that fails the check. */
     private def load(dir: Path): Option[List[Rule]] =
-      val file = PlatformPath.canonical(dir.resolve(".gitignore").nn)
+      val own = dir.resolve(".gitignore").nn
+      // One that cannot be resolved, a link loop, stays a link here and so holds no rules.
+      val file =
+        try PlatformPath.canonical(own)
+        catch case _: IOException => own
       if !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) then Some(Nil)
       else
         val permission = policy.effective(ScopeId.Base, file)
