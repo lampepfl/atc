@@ -129,10 +129,11 @@ class ListMenuSuite extends munit.FunSuite:
     assertEquals(choose("\r", delayMillis = 500), Some(List(0)))
 
   test("an Enter that comes too early starts the wait over, so a held key chooses nothing"):
-    // Key repeat, or an impatient second press: every one of them is early.
-    assertEquals(choose("\r" * 6, delayMillis = 150, gapMillis = 150), None)
-    // One press after a pause chooses.
-    assertEquals(choose("\r\r", delayMillis = 100, gapMillis = 450), Some(List(0)))
+    // Key repeat, or an impatient second press: every one of them is early. The presses go on
+    // for twice the delay, and each gap is far below it, so a stalled CI machine stays early.
+    assertEquals(choose("\r" * 20, delayMillis = 30, gapMillis = 30), None)
+    // One press after a pause chooses, the pause well past the delay for the same reason.
+    assertEquals(choose("\r\r", delayMillis = 100, gapMillis = 800), Some(List(0)))
 
   test("Enter right after text the menu ignores chooses nothing"):
     // A correction typed during a turn runs on into a permission menu that opens meanwhile.
