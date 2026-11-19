@@ -908,7 +908,18 @@ program there; arguments keep their case. The project template pre-approves only
 git commands whose options cannot reach files outside the repository once `--output` is
 denied: `git diff` reads any file when one of two paths lies outside the repository or the
 directory is not one (`git diff .env /dev/null`), and `git blame` through `--contents`,
-`--ignore-revs-file`, `-S` and their abbreviations, so neither is in the template.
+`--ignore-revs-file`, `-S` and their abbreviations, so neither is in the template. A pattern
+without `*` is a word prefix, and git lets a later `--no-list` (or `--no-l`) undo `--list`,
+after which `git branch` deletes, moves and renames; the template denies `git branch *--no-l*`.
+Git also runs programs named in the configuration of the repository it finds from its working
+directory (`core.fsmonitor` for `git status`), and a command's working directory needs only
+read access. The template's `.git` rule is therefore a component pattern: with `./.git` alone
+the agent could write `x/.git/config` and run `git status` in `x`. Git also accepts a
+directory laid out as a bare repository (`HEAD`, `objects`, `refs`), which no `.git` rule
+covers. The template names documentation hosts one by one: a wildcard such as `*.golang.org`
+or `*.scala-lang.org` also covers services that fetch a URL the caller names (the Go module
+proxy) or publish what they are sent (code playgrounds), which would carry data on to hosts
+that no list names.
 
 **Windows.** Use `/` separators in configuration on every platform: in JSON,
 `"C:/Users/alice/project"` (a native backslash starts a JSON escape, so the equivalent form

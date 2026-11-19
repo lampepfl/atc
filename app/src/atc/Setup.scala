@@ -84,7 +84,10 @@ object Setup:
           s"No configuration grants access to ${PlatformPath.display(args.cwd)}, so the agent would have to ask for every file."
         )
         val accepted =
-          tui.confirm("Write a starting project config to .atc/config.json here? It opens this directory to the agent.")
+          tui.confirm(
+            "Write a starting project config to .atc/config.json here? It opens this directory to the agent, " +
+              "with read-only git commands, documentation hosts and the provider's web search."
+          )
         if !accepted then current
         else
           val created = ProjectTrust.initProject(args.cwd, Config.globalDir)

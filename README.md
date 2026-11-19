@@ -141,8 +141,8 @@ To set up providers by hand instead, choose *Configure providers myself*: ATC wr
 **2. Open the project.** If no configuration grants access to the current directory and
 the directory has no `.atc/config.json` of its own, ATC offers to create a starter one there
 and applies it immediately. That file is what opens the project to the agent: its own tree,
-the read-only git commands and a set of documentation hosts. Review it to choose which
-**files, commands and hosts** the agent may use without asking; see
+the read-only git commands, a set of documentation hosts and the provider's web search.
+Review it to choose which **files, commands and hosts** the agent may use without asking; see
 [Configuration](#configuration). `/models` lists the models your providers offer, and
 `/model` picks one.
 
@@ -398,12 +398,13 @@ rules are in [doc/development.md](doc/development.md#configuration-semantics).
   },
   "files": [
     { "path": ".",        "access": "write" },
+    { "path": ".git",     "access": "read" },
     { "path": "secrets",  "classified": true },
     { "path": "~/notes",  "access": "read", "locked": true }
   ],
   "commands": ["git status", "git log"],
   "denyCommands": ["git push*", "git *--output*", "rm -rf *", "sudo", "sh", "bash", "zsh", "powershell"],
-  "hosts": ["*.scala-lang.org", "docs.oracle.com"],
+  "hosts": ["docs.scala-lang.org", "docs.oracle.com"],
   "mode": "full",
   "instructions": "Use 2-space indentation."
 }
@@ -470,6 +471,8 @@ and the configured permissions.
   runs hooks can do anything you can, unconstrained by capabilities, classified data, or the
   mode. **Pre-approve narrow, specific subcommands (`git status`, `./mill app.test`); never
   grant an interpreter, a shell, or a wildcard like `git *` over a tool that can run code.**
+  Even `git status` runs programs named in the configuration of the repository it runs in, so
+  keep every `.git` read-only, as the starter project config does.
 - **Allowed hosts can receive data.** The agent may send any non-classified data available
   to it to an allowed host. The type system prevents this only for `classified` content.
   Allow only hosts you trust to receive project data.

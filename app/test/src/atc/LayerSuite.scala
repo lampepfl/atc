@@ -2,7 +2,7 @@ package atc
 
 import atc.config.*
 import atc.perms.*
-import atc.platform.PlatformPath
+import atc.platform.{Platform, PlatformPath}
 
 import java.nio.file.{Files, Path}
 
@@ -128,7 +128,8 @@ class LayerSuite extends munit.FunSuite:
     for host <- List(
         "developer.mozilla.org",
         "docs.python.org",
-        "peps.python.org", // *.python.org
+        "peps.python.org",
+        "nightly.scala-lang.org",
         "doc.rust-lang.org",
         "docs.rs",
         "pkg.go.dev",
@@ -141,6 +142,10 @@ class LayerSuite extends munit.FunSuite:
     for host <- List(
         "python.org.evil.com",
         "evil-rust-lang.org",
+        // services that fetch a caller-named URL or publish what they are sent
+        "proxy.golang.org",
+        "scastie.scala-lang.org",
+        "play.rust-lang.org",
         "notgo.dev",
         "example.com",
         "api.openai.com",
@@ -325,6 +330,10 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(w.access("src/A.scala"), Access.Write)
     assertEquals(w.access(".git/config"), Access.Read) // git metadata is readable, not writable
     assertEquals(w.access(".git/hooks/pre-commit"), Access.Read)
+    // A nested repository's config would let a pre-approved `git status` run there execute a program.
+    assertEquals(w.access("sub/.git/config"), Access.Read)
+    assertEquals(w.access("sub/.git"), Access.Read)
+    if Platform.caseInsensitivePaths then assertEquals(w.access("sub/.GIT/config"), Access.Read)
     assert(w.perm("secrets/token").classified)
     assert(w.settings.safeMode && w.settings.respectGitignore)
     assert(w.policy.commandDenied("git push origin main").isDefined)
@@ -358,6 +367,11 @@ class LayerSuite extends munit.FunSuite:
         "git log -1 --format=tformat:x --output=/tmp/x",
         "git show \"--output=/tmp/a b\"",
         "git stash list --output /tmp/x",
+        // `--no-list`, and git's abbreviations of it, turn `git branch --list` back into
+        // the command that deletes, moves and renames branches
+        "git branch --list --no-list -D main",
+        "git branch --list --no-l -m main renamed",
+        "git branch --list --no-li -f main HEAD~5",
         "ls",
         "rm -rf x"
       )

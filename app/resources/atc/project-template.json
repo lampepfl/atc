@@ -1,7 +1,7 @@
 {
   "files": [
     { "path": ".", "access": "write" },
-    { "path": "./.git", "access": "read" },
+    { "path": ".git", "access": "read" },
     { "path": "./secrets", "classified": true }
   ],
 
@@ -9,34 +9,35 @@
     "git status", "git log", "git show",
     "git branch --list", "git rev-parse", "git ls-files", "git stash list"
   ],
-  "denyCommands": ["git push*", "git reset --hard*", "git *--output*"],
+  "denyCommands": ["git push*", "git reset --hard*", "git *--output*", "git branch *--no-l*"],
 
   "hosts": [
-    "developer.mozilla.org", "man7.org", "git-scm.com", "*.git-scm.com",
+    "developer.mozilla.org", "man7.org", "git-scm.com",
 
     "docs.oracle.com", "openjdk.org", "javadoc.io", "maven.apache.org", "gradle.org",
-    "*.scala-lang.org", "kotlinlang.org", "*.kotlinlang.org",
+    "scala-lang.org", "www.scala-lang.org", "docs.scala-lang.org", "nightly.scala-lang.org",
+    "kotlinlang.org",
 
-    "*.python.org", "docs.python.org",
-    "nodejs.org", "*.nodejs.org", "*.typescriptlang.org", "www.typescriptlang.org",
+    "docs.python.org", "peps.python.org", "www.python.org",
+    "nodejs.org", "www.typescriptlang.org",
 
-    "*.rust-lang.org", "docs.rs",
-    "go.dev", "pkg.go.dev", "*.golang.org",
+    "doc.rust-lang.org", "www.rust-lang.org", "docs.rs",
+    "go.dev", "pkg.go.dev",
 
     "en.cppreference.com", "isocpp.org",
     "docs.ruby-lang.org", "ruby-doc.org",
-    "php.net", "*.php.net",
+    "php.net", "www.php.net",
     "learn.microsoft.com",
-    "*.swift.org", "developer.apple.com",
-    "*.haskell.org", "hackage.haskell.org", "hexdocs.pm",
+    "www.swift.org", "docs.swift.org", "developer.apple.com",
+    "www.haskell.org", "hackage.haskell.org", "hexdocs.pm",
     "perldoc.perl.org",
 
-    "lean-lang.org", "*.lean-lang.org", "leanprover.github.io", "leanprover-community.github.io",
-    "rocq-prover.org", "*.rocq-prover.org", "coq.inria.fr",
+    "lean-lang.org", "leanprover.github.io", "leanprover-community.github.io",
+    "rocq-prover.org", "coq.inria.fr",
 
     "www.postgresql.org", "dev.mysql.com", "www.sqlite.org",
 
-    "arxiv.org", "*.arxiv.org", "openreview.net", "aclanthology.org",
+    "arxiv.org", "export.arxiv.org", "openreview.net", "aclanthology.org",
     "proceedings.mlr.press", "proceedings.neurips.cc", "papers.nips.cc", "openaccess.thecvf.com",
     "www.jmlr.org", "jmlr.org", "dl.acm.org", "ieeexplore.ieee.org", "link.springer.com",
     "www.semanticscholar.org", "api.semanticscholar.org", "dblp.org", "doi.org"
