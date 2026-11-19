@@ -402,7 +402,8 @@ trait Interface:
    *  The operation is not atomic. Move directory contents individually. A symlink
    *  source is read through, and the link itself is deleted. */
   def move(from: String, to: String)(using FileSystem^): Unit
-  /** Copy a file, binary-safe (`writeBytes(to, readBytes(from))`). */
+  /** Copy a file, binary-safe (`writeBytes(to, readBytes(from))`). A new file gets the
+   *  source's permissions, as with `move`; one that exists keeps its own. */
   def copy(from: String, to: String)(using FileSystem^): Unit
 
   /** Edit a file in place, like `sed -E -i 's/pattern/replacement/g'`: replace
@@ -425,7 +426,9 @@ trait Interface:
   def sed(path: String, pattern: String, replacement: String)(using FileSystem^): Int
 
   /** Replace one exact occurrence of `expected`; no regex or replacement escapes.
-   *  Missing or ambiguous text throws before writing. */
+   *  Missing or ambiguous text throws before writing. Like `sed`, `replaceLines` and
+   *  `insertLines`, it rewrites the file as UTF-8 text and refuses one that is not valid
+   *  UTF-8 (edit such a file with `readBytes` and `writeBytes`). */
   def replaceExact(path: String, expected: String, replacement: String)(using FileSystem^): Unit
 
   /** A regex that matches `text` literally (`\Q…\E`), for a `sed` pattern. */

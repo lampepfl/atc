@@ -19,6 +19,58 @@ class HostEditingSuite extends munit.FunSuite:
       assert(!error.getMessage.nn.contains("Use requestFiles"))
     assertEquals(env.contents("locked/note.txt"), "unchanged")
 
+  test("an edit refuses a file that is not valid UTF-8 instead of rewriting its other bytes"):
+    // `read` shows such bytes as U+FFFD; writing that text back would replace them on lines
+    // the edit never touched.
+    val env = TestEnv()
+    import env.given
+    val latin1 = Array[Byte]('c', 'a', 'f', 0xe9.toByte, '\n', 'f', 'o', 'o', '\n')
+    val path = env.root.resolve("latin.txt").nn
+    java.nio.file.Files.write(path, latin1)
+    val edits = List[() => Any](
+      () => env.host.replaceExact("latin.txt", "foo", "bar"),
+      () => env.host.replaceLines("latin.txt", 2, 2, "bar"),
+      () => env.host.insertLines("latin.txt", 1, "first"),
+      () => env.host.sed("latin.txt", "foo", "bar"),
+    )
+    for edit <- edits do
+      val e = intercept[IllegalArgumentException](edit())
+      assert(e.getMessage.nn.contains("not valid UTF-8"), e.getMessage)
+      assert(java.util.Arrays.equals(java.nio.file.Files.readAllBytes(path), latin1))
+    // Reading stays lenient, and bytes can still be written as bytes.
+    assert(env.host.read("latin.txt").contains("foo"))
+
+  test("a byte-order mark stays at the front through line edits"):
+    val env = TestEnv()
+    import env.given
+    val bom = "﻿"
+    env.file("bom.txt", bom + "one\r\ntwo\r\n")
+    env.host.insertLines("bom.txt", 1, "zero")
+    assertEquals(env.contents("bom.txt"), bom + "zero\r\none\r\ntwo\r\n")
+    assertEquals(env.host.replaceLines("bom.txt", 1, 1, "first"), "zero")
+    assertEquals(env.contents("bom.txt"), bom + "first\r\none\r\ntwo\r\n")
+    assertEquals(env.host.sed("bom.txt", "^first", "1st"), 1)
+    env.host.replaceExact("bom.txt", "1st", "start")
+    assertEquals(env.contents("bom.txt"), bom + "start\r\none\r\ntwo\r\n")
+
+  test("a copied or moved file keeps the permissions of its source"):
+    assume(!atc.platform.Platform.isWindows, "POSIX permissions")
+    import java.nio.file.Files
+    import java.nio.file.attribute.PosixFilePermissions
+    val env = TestEnv()
+    import env.given
+    def mode(rel: String) = PosixFilePermissions.toString(Files.getPosixFilePermissions(env.root.resolve(rel)))
+    Files.setPosixFilePermissions(env.file("run.sh", "#!/bin/sh\n"), PosixFilePermissions.fromString("rwx------"))
+    env.host.copy("run.sh", "bin/copy.sh")
+    assertEquals(mode("bin/copy.sh"), "rwx------")
+    env.host.move("run.sh", "bin/run.sh")
+    assertEquals(mode("bin/run.sh"), "rwx------")
+    // A file that exists keeps its own permissions when it is copied over.
+    Files.setPosixFilePermissions(env.file("plain.txt", "old"), PosixFilePermissions.fromString("rw-r--r--"))
+    env.host.copy("bin/run.sh", "plain.txt")
+    assertEquals(mode("plain.txt"), "rw-r--r--")
+    assertEquals(env.contents("plain.txt"), "#!/bin/sh\n")
+
   test("literal replacement checks uniqueness before writing and preserves literal replacement characters"):
     val env = TestEnv()
     import env.given

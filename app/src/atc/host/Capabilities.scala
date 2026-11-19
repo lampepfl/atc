@@ -6,7 +6,8 @@ import atc.platform.PlatformPath
 
 import java.io.{InputStream, InputStreamReader}
 import java.nio.charset.StandardCharsets.UTF_8
-import java.nio.file.{Files, NoSuchFileException, Path}
+import java.nio.file.{FileAlreadyExistsException, Files, NoSuchFileException, Path}
+import java.nio.file.attribute.PosixFilePermissions
 import scala.util.Using
 
 /** Runtime capabilities carry a permission scope ID. The host checks scope,
@@ -181,6 +182,11 @@ final class FileEntryImpl(fs: FileSystemImpl, at: Path) extends FileEntry:
     if !sameFile then
       host.withFileChange(p, "copied"):
         host.ensureParent(p)
+        // A new file gets the source's permissions before it gets the content, as `cp` and
+        // `mv` give it: a private file stays private, and a script stays executable.
+        if !Files.exists(p) then
+          try Files.createFile(p, PosixFilePermissions.asFileAttribute(Files.getPosixFilePermissions(sourcePath)))
+          catch case _: UnsupportedOperationException | _: FileAlreadyExistsException => ()
         Using.resource(Files.newOutputStream(p).nn)(out => in.transferTo(out))
 
   def write(content: String): Unit =

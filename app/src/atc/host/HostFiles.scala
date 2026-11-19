@@ -4,6 +4,8 @@ import atc.{ScalaSource, TextFiles}
 import atc.lib.*
 import atc.platform.{PathGlob, Platform, PlatformPath}
 
+import java.nio.ByteBuffer
+import java.nio.charset.{CharacterCodingException, CodingErrorAction, StandardCharsets}
 import java.nio.file.Paths
 import java.util.regex.{Matcher, Pattern}
 import scala.collection.mutable
@@ -164,13 +166,29 @@ private[host] trait HostFiles:
     case e: FileEntryImpl => e
     case other => throw SecurityException(s"Unknown FileEntry implementation: ${other.getClass.getName}")
 
+  /** The text of a file that an edit rewrites as a whole, with its byte-order mark apart, so
+    * that the mark stays in front and is not part of line 1. A file that is not valid UTF-8
+    * is refused: `read` shows its other bytes as U+FFFD, and writing that text back would
+    * replace them on lines the edit never touched. */
+  private def editable(entry: FileEntry, operation: String): (String, String) =
+    val decoder = StandardCharsets.UTF_8.newDecoder().nn
+      .onMalformedInput(CodingErrorAction.REPORT).nn.onUnmappableCharacter(CodingErrorAction.REPORT).nn
+    val text =
+      try decoder.decode(ByteBuffer.wrap(entry.readBytes())).toString
+      catch
+        case _: CharacterCodingException =>
+          throw IllegalArgumentException(
+            s"$operation: '${entry.path}' is not valid UTF-8, and rewriting it as text would change its other bytes; use readBytes and writeBytes"
+          )
+    text.splitAt(TextFiles.bomLength(text))
+
   /** Rewrite every regex match in place and reject an accidental no-op. One
     * pass both counts and rewrites, so a large file is scanned once. */
   def sed(path: String, pattern: String, replacement: String)(using fs: FileSystem): Int =
     if pattern.isEmpty then throw IllegalArgumentException("sed: the pattern must not be empty")
     val regex = Pattern.compile(pattern, Pattern.MULTILINE)
     val entry = fs.access(path)
-    val before = entry.read()
+    val (bom, before) = editable(entry, "sed")
     val javaReplacement = sedReplacement(replacement)
     val rewritten = java.lang.StringBuilder()
     val matcher = regex.matcher(before)
@@ -183,7 +201,7 @@ private[host] trait HostFiles:
       throw IllegalArgumentException(
         s"sed: the regex '$pattern' matches nothing in '${entry.path}', so nothing was changed; check it with grep(path, pattern), and quote literal text with quote(text) (the pattern) and quoteReplacement(text) (the replacement)."
       )
-    entry.write(rewritten.toString)
+    entry.write(bom + rewritten.toString)
     count
 
   /** Convert sed-style group and escape syntax to Java replacement syntax. */
@@ -212,16 +230,17 @@ private[host] trait HostFiles:
   def replaceExact(path: String, expected: String, replacement: String)(using fs: FileSystem): Unit =
     if expected.isEmpty then throw IllegalArgumentException("replaceExact: expected text must not be empty")
     val entry = fs.access(path)
-    val before = entry.read()
+    val (bom, before) = editable(entry, "replaceExact")
     val index = before.indexOf(expected)
     if index < 0 then throw IllegalArgumentException("replaceExact: expected text was not found; read the file again")
     if before.lastIndexOf(expected) != index then
       throw IllegalArgumentException("replaceExact: expected text is ambiguous; include more surrounding context")
-    entry.write(before.substring(0, index) + replacement + before.substring(index + expected.length))
+    entry.write(bom + before.substring(0, index) + replacement + before.substring(index + expected.length))
 
   def replaceLines(path: String, from: Int, to: Int, text: String)(using fs: FileSystem): String =
     val entry = fs.access(path)
-    val document = TextFiles.splitLines(entry.read())
+    val (bom, before) = editable(entry, "replaceLines")
+    val document = TextFiles.splitLines(before)
     val lines = document.lines
     val lineCount = lines.length
     if from < 1 || to < from || to > lineCount then
@@ -230,12 +249,13 @@ private[host] trait HostFiles:
       )
     val old = lines.slice(from - 1, to)
     val updated = lines.take(from - 1) ++ TextFiles.splitLines(text).lines ++ lines.drop(to)
-    entry.write(document.copy(lines = updated).join)
+    entry.write(bom + document.copy(lines = updated).join)
     old.mkString(document.lineEnding)
 
   def insertLines(path: String, before: Int, text: String)(using fs: FileSystem): Unit =
     val entry = fs.access(path)
-    val document = TextFiles.splitLines(entry.read())
+    val (bom, existing) = editable(entry, "insertLines")
+    val document = TextFiles.splitLines(existing)
     val lines = document.lines
     val lineCount = lines.length
     if before < 1 || before > lineCount + 1 then
@@ -243,7 +263,7 @@ private[host] trait HostFiles:
         s"insertLines: `before` must be between 1 and ${lineCount + 1} (the file has $lineCount lines), got $before"
       )
     val updated = lines.take(before - 1) ++ TextFiles.splitLines(text).lines ++ lines.drop(before - 1)
-    entry.write(document.copy(lines = updated).join)
+    entry.write(bom + document.copy(lines = updated).join)
 
   def append(path: String, content: String)(using fs: FileSystem): Unit = fs.access(path).append(content)
 
