@@ -1,5 +1,6 @@
 package atc.host
 
+import atc.ScalaSource
 import atc.lib.*
 import atc.perms.GlobMatcher
 
@@ -40,7 +41,7 @@ private[host] trait HostNetwork:
         )
       case None if !policy.hostAllowed(scopeOf(net), host) =>
         throw SecurityException(
-          s"""Access denied: host '$host' matches no permitted pattern. Use requestNetwork(Set("$host"), reason) { ... } to ask the user."""
+          s"Access denied: host '$host' matches no permitted pattern. Use requestNetwork(Set(${ScalaSource.stringLiteral(host)}), reason) { ... } to ask the user."
         )
       case None => ()
 

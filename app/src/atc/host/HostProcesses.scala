@@ -3,7 +3,7 @@ package atc.host
 import atc.{LauncherEnvironment, ScalaSource}
 import atc.lib.*
 import atc.perms.ScopeId
-import atc.platform.Platform
+import atc.platform.{Platform, WindowsExecutable}
 
 import java.lang.ProcessBuilder.Redirect
 import java.nio.file.Path

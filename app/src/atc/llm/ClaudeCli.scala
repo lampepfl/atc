@@ -1,7 +1,7 @@
 package atc.llm
 
 import atc.{Debug, Main, Threads}
-import atc.host.WindowsExecutable
+import atc.platform.WindowsExecutable
 
 import java.io.{BufferedReader, IOException, InputStream, InputStreamReader, OutputStream}
 import java.nio.charset.StandardCharsets.UTF_8

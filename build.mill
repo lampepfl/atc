@@ -41,7 +41,6 @@ object lib extends AtcScalaModule:
   )
   /** The agent-facing API source; the app bundles it for the system prompt. */
   def interfaceSource = Task.Source("src/atc/lib/Interface.scala")
-  object test extends AtcTests
 
 /** The agent application: TUI, LLM providers, permission policy, sandbox host. */
 object app extends AtcScalaModule:

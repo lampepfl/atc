@@ -1,7 +1,7 @@
 package atc
 
-import atc.host.{CommandLine, WindowsExecutable}
-import atc.platform.Platform
+import atc.host.CommandLine
+import atc.platform.{Platform, WindowsExecutable}
 
 import java.nio.file.{Files, Path}
 
@@ -18,7 +18,7 @@ class PlatformProcessSuite extends munit.FunSuite:
   test("the low-level process boundary always enables strict Windows quoting"):
     assume(Platform.isWindows)
     System.setProperty("jdk.lang.Process.allowAmbiguousCommands", "true")
-    val argv = CommandLine.parseCommandLine(ProcessFixture.command("echo", "strict"))
+    val argv = ProcessFixture.argv(ProcessFixture.command("echo", "strict"))
     val result = ProcessFixture.run(ProcessBuilder(argv*), "test process", 10_000L)
     assertEquals(result.stdout.trim, "strict")
     assertEquals(System.getProperty("jdk.lang.Process.allowAmbiguousCommands"), "false")

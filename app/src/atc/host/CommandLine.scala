@@ -252,12 +252,3 @@ private[atc] object CommandLine:
         s"exec: a pipeline may have at most $MaxPipelineStages stages (got ${stages.size})"
       )
     Pipeline(stages.toList, stdinFile, stdoutFile, append)
-
-  /** Parse one program with no redirection (the form accepted with separate arguments). */
-  def parseCommandLine(line: String): List[String] =
-    val pipeline = parsePipeline(line)
-    if !pipeline.isSimple then
-      throw IllegalArgumentException(
-        s"expected one program, but \"$line\" is a pipeline or has a redirection: put it in the one-line form, exec(\"...\"), without separate args"
-      )
-    pipeline.stages.head.argv

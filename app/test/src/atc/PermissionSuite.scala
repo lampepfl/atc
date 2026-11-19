@@ -614,7 +614,7 @@ class PermissionSuite extends munit.FunSuite:
     // The server reflects the header verbatim. The response must nevertheless
     // stay classified; otherwise this endpoint launders the token into a String.
     assertEquals(echoed.toString, "Classified(***)")
-    assertEquals(ClassifiedImpl.get(echoed), "s3cr3t") // host-only test inspection
+    assertEquals(TestEnv.reveal(echoed), "s3cr3t") // host-only test inspection
 
   test("a failed classified secret header aborts the request without leaking the failure bit"):
     val env = TestEnv(hosts = List(host))
@@ -700,7 +700,7 @@ class PermissionSuite extends munit.FunSuite:
     )
     val secret = Map("Content-Type" -> env.host.classify("text/csv"))
     assertEquals(
-      ClassifiedImpl.get(env.host.httpPost(url("/content-type"), "x", "text/plain", Map.empty, secret)),
+      TestEnv.reveal(env.host.httpPost(url("/content-type"), "x", "text/plain", Map.empty, secret)),
       "[text/csv]"
     )
 

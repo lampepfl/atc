@@ -1,7 +1,7 @@
 package atc
 
 import atc.host.*
-import atc.lib.{Exec, FileSystem, IOCap, Network, Todo, UserIO}
+import atc.lib.{Classified, Exec, FileSystem, IOCap, Network, Todo, UserIO}
 import atc.perms.*
 import atc.platform.PlatformPath
 import atc.sandbox.{ReplSession, SandboxConfig}
@@ -158,6 +158,9 @@ final class ScriptedPrompter(var decisions: List[Decision] = Nil) extends Permis
       case Nil => Decision.Deny
 
 object TestEnv:
+  /** The value of `c`, which tests may read and agent code never can. */
+  def reveal[T](c: Classified[T]): T = ClassifiedImpl.unwrap(c).get
+
   private val tempDirs = ConcurrentLinkedQueue[Path]()
   java.lang.Runtime.getRuntime.nn.addShutdownHook(Thread(() => tempDirs.asScala.foreach(deleteTree)))
 

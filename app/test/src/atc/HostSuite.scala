@@ -308,14 +308,15 @@ class HostSuite extends munit.FunSuite:
     insertLines("empty2.txt", 1, "first")
     assertEquals(Files.readString(root.resolve("empty2.txt")), "first\n")
 
-  test("parseCommandLine, parsePipeline and PathGlob (pure helpers)"):
+  test("parsePipeline and PathGlob (pure helpers)"):
     val escapedTail = if Platform.isWindows then List("e\\", "f") else List("e f")
     assertEquals(
-      CommandLine.parseCommandLine("""git commit -m 'a b' --x="c d" e\ f"""),
+      ProcessFixture.argv("""git commit -m 'a b' --x="c d" e\ f"""),
       List("git", "commit", "-m", "a b", "--x=c d") ++ escapedTail
     )
-    intercept[IllegalArgumentException](CommandLine.parseCommandLine("a > b")) // one program only
-    intercept[IllegalArgumentException](CommandLine.parseCommandLine("a | b"))
+    // Separate arguments go with one program only.
+    assert(!CommandLine.parsePipeline("a > b").isSimple && !CommandLine.parsePipeline("a | b").isSimple)
+    intercept[IllegalArgumentException](exec("cat in.txt | sort", Seq("-u")))
     val p = CommandLine.parsePipeline("cat < in.txt | sort -u 2>&1 | head -3 >> out.txt")
     assertEquals(p.stages.map(_.argv), List(List("cat"), List("sort", "-u"), List("head", "-3")))
     assertEquals(p.stages.map(_.mergeErr), List(false, true, false))
@@ -349,8 +350,8 @@ class HostSuite extends munit.FunSuite:
       )
     do
       intercept[IllegalArgumentException](CommandLine.parsePipeline(bad))
-    intercept[IllegalArgumentException](CommandLine.parseCommandLine("a 'unterminated"))
-    assertEquals(CommandLine.parseCommandLine("'/path with space/x' arg"), List("/path with space/x", "arg"))
+    intercept[IllegalArgumentException](ProcessFixture.argv("a 'unterminated"))
+    assertEquals(ProcessFixture.argv("'/path with space/x' arg"), List("/path with space/x", "arg"))
     assertEquals(CommandLine.Stage(List("echo", "a b", "")).line, "echo \"a b\" \"\"")
     intercept[IllegalArgumentException](
       CommandLine.parsePipeline(List.fill(CommandLine.MaxPipelineStages + 1)("echo").mkString(" | "))
@@ -518,7 +519,7 @@ class HostSuite extends munit.FunSuite:
   test("classified: plain read denied, classified read ok, listing rules"):
     val e = intercept[SecurityException](read("secrets/key.txt"))
     assert(e.getMessage.nn.contains("readClassified"))
-    assertEquals(ClassifiedImpl.get(readClassified("secrets/key.txt")), "s3cret")
+    assertEquals(TestEnv.reveal(readClassified("secrets/key.txt")), "s3cret")
     assert(access("secrets/key.txt").isClassified)
     intercept[SecurityException](access("secrets/key.txt").size)
     // the classified dir itself is visible in its parent, but not enterable
@@ -526,13 +527,13 @@ class HostSuite extends munit.FunSuite:
     assert(top.contains("secrets"))
     assert(!top.contains("private"), top.toString) // no access -> invisible
     intercept[SecurityException](ls("secrets"))
-    val inside = ClassifiedImpl.get(access("secrets").childrenClassified).map(p => Path.of(p).getFileName.toString)
+    val inside = TestEnv.reveal(access("secrets").childrenClassified).map(p => Path.of(p).getFileName.toString)
     assertEquals(inside.sorted, List("key.txt", "sub"))
     val walked = walk(".").map(env.rel)
     assert(walked.contains("secrets"))
     assert(!walked.exists(_.startsWith("secrets/")), walked.toString)
     assert(!walked.exists(_.startsWith("private")))
-    val walkedC = ClassifiedImpl.get(access(".").walkClassified()).map(env.rel)
+    val walkedC = TestEnv.reveal(access(".").walkClassified()).map(env.rel)
     assert(walkedC.contains("secrets/sub/deep.txt"))
 
   test("a denial names the operation the agent called, and reads as a phrase in front of the path"):

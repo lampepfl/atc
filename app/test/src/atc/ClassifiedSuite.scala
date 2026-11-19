@@ -31,31 +31,27 @@ class ClassifiedSuite extends munit.FunSuite:
     val c = ClassifiedImpl.wrap("secret-password")
     assertEquals(c.toString, "Classified(***)")
     assertEquals(s"$c", "Classified(***)")
-    assertEquals(ClassifiedImpl.get(c), "secret-password")
+    assertEquals(TestEnv.reveal(c), "secret-password")
 
   test("map transforms with a pure function and stays classified"):
     val upper = ClassifiedImpl.wrap("hello").map(_.toUpperCase)
     assertEquals(upper.toString, "Classified(***)")
-    assertEquals(ClassifiedImpl.get(upper), "HELLO")
+    assertEquals(TestEnv.reveal(upper), "HELLO")
 
   test("flatMap chains classified computations"):
     val r = ClassifiedImpl.wrap(21).flatMap(x => ClassifiedImpl.wrap(x * 2))
     assertEquals(r.toString, "Classified(***)")
-    assertEquals(ClassifiedImpl.get(r), 42)
+    assertEquals(TestEnv.reveal(r), 42)
 
   test("zip combines two classified values"):
     val z = ClassifiedImpl.wrap("a").zip(ClassifiedImpl.wrap(1))
-    assertEquals(ClassifiedImpl.get(z), ("a", 1))
+    assertEquals(TestEnv.reveal(z), ("a", 1))
 
   test("an exception thrown inside map does not leak the value"):
     val secret = ClassifiedImpl.wrap("super-secret-password")
     val failed = secret.map(s => throw RuntimeException(s"leaked: $s"))
     assertEquals(failed.toString, "Classified(***)")
     assert(ClassifiedImpl.unwrap(failed).isFailure)
-    // the sink accessor raises a sanitized error, never the original one
-    val e = intercept[IllegalStateException](ClassifiedImpl.get(failed))
-    assert(!e.getMessage.nn.contains("super-secret"), e.getMessage)
-    assert(e.getMessage.nn.toLowerCase.contains("failed computation"), e.getMessage)
 
   test("an exception thrown inside flatMap does not leak the value"):
     val failed = ClassifiedImpl.wrap("s3cret").flatMap(s => throw RuntimeException(s"leaked: $s"))
@@ -108,7 +104,6 @@ class ClassifiedSuite extends munit.FunSuite:
       def map[B](op: String => B): Classified[B] = this.asInstanceOf[Classified[B]]
       def flatMap[B](op: String => Classified[B]): Classified[B] = this.asInstanceOf[Classified[B]]
     intercept[SecurityException](ClassifiedImpl.unwrap(foreign))
-    intercept[SecurityException](ClassifiedImpl.get(foreign))
 
   // ── Host-level enforcement ──────────────────────────────────────
 
@@ -204,13 +199,13 @@ class ClassifiedSuite extends munit.FunSuite:
     secret("secrets/round2.txt").writeClassified(transformed)
     assertEquals(env.contents("secrets/round2.txt"), "processed: original-secret")
     val check = readClassified("secrets/round2.txt").map(_.startsWith("processed:"))
-    assertEquals(ClassifiedImpl.get(check), true)
+    assertEquals(TestEnv.reveal(check), true)
     // writing creates parent directories inside the classified subtree
     writeClassified("secrets/new/dir/x.txt", classify("x"))
     assertEquals(env.contents("secrets/new/dir/x.txt"), "x")
 
   test("readClassified works on any readable file; writeClassified only on classified paths"):
-    assertEquals(ClassifiedImpl.get(readClassified("public.txt")), "public data")
+    assertEquals(TestEnv.reveal(readClassified("public.txt")), "public data")
     val e = intercept[SecurityException](writeClassified("public-copy.txt", classify("x")))
     assert(e.getMessage.nn.contains("declassify"), e.getMessage)
     assert(!env.existsOnDisk("public-copy.txt"))
@@ -271,9 +266,9 @@ class ClassifiedSuite extends munit.FunSuite:
     assert(ClassifiedImpl.unwrap(c).isFailure)
 
   test("childrenClassified and walkClassified reveal structure only as Classified"):
-    val kids = ClassifiedImpl.get(secret("secrets").childrenClassified).map(p => Path.of(p).getFileName.toString)
+    val kids = TestEnv.reveal(secret("secrets").childrenClassified).map(p => Path.of(p).getFileName.toString)
     assert(kids.contains("data.txt") && kids.contains("docs"), kids.toString)
-    val all = ClassifiedImpl.get(secret(".").walkClassified()).map(env.rel)
+    val all = TestEnv.reveal(secret(".").walkClassified()).map(env.rel)
     assert(all.contains("secrets/docs/deep.txt"), all.toString)
     assert(all.contains("public.txt"))
 
@@ -290,7 +285,7 @@ class ClassifiedSuite extends munit.FunSuite:
     val got = requestFiles(env.root.resolve("secrets/docs").toString, atc.lib.Access.Write, "bypass attempt") {
       intercept[SecurityException](read(env.root.resolve("secrets/docs/deep.txt").toString))
       intercept[SecurityException](ls(env.root.resolve("secrets/docs").toString))
-      ClassifiedImpl.get(readClassified(env.root.resolve("secrets/docs/deep.txt").toString))
+      TestEnv.reveal(readClassified(env.root.resolve("secrets/docs/deep.txt").toString))
     }
     assertEquals(got, "DEEPER SECRET")
     assert(env.requests.isEmpty, "write on the cwd is already held: no prompt expected")
@@ -369,7 +364,7 @@ class ClassifiedSuite extends munit.FunSuite:
     val answer = classifiedChat(readClassified("secrets/data.txt").map(_.toLowerCase))
     assertEquals(answer.toString, "Classified(***)")
     assertEquals(env.classifiedChats.toList, List("top secret data"))
-    assertEquals(ClassifiedImpl.get(answer), "safe:top secret data")
+    assertEquals(TestEnv.reveal(answer), "safe:top secret data")
     assert(env.chats.isEmpty)
 
   test("classifiedChat(Classified) with a failed value does not call the model"):

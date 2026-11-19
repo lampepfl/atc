@@ -1,6 +1,7 @@
 package atc.host
 
 import atc.lib.ProcessResult
+import atc.platform.WindowsExecutable
 
 import java.io.{IOException, InputStream}
 import java.nio.charset.StandardCharsets
