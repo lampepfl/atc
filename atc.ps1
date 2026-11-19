@@ -90,7 +90,7 @@ function Get-ReleaseAssets($release) {
   $assets = @{}
   foreach ($name in $ReleaseFiles) {
     $asset = @($release.assets | Where-Object { $_.name -ceq $name })[0]
-    if (-not $asset) { throw "Required asset $name was not found in the latest release." }
+    if (-not $asset) { throw "The latest release has no $name yet; it is attached when the release build finishes. Try again in a few minutes." }
     $url = [string]$asset.browser_download_url
     if (-not $url.StartsWith('https://')) { throw "Refusing a non-https download URL for ${name}: $url" }
     if ([string]$asset.digest -match '^sha256:([0-9a-fA-F]{64})$') {

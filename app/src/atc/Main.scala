@@ -9,10 +9,7 @@ import scala.util.control.NonFatal
 /** Command line entry point: parses the flags and starts [[App]]. */
 object Main:
   /** Written by the build (`Versions.atc` in `build.mill`) into `atc/version.txt`. */
-  lazy val Version: String =
-    sys.props.get("atc.version").map(_.trim).filter(_.nonEmpty)
-      .orElse(Resources.text("/atc/version.txt").map(_.trim).filter(_.nonEmpty))
-      .getOrElse("dev")
+  lazy val Version: String = Resources.text("/atc/version.txt").map(_.trim).filter(_.nonEmpty).getOrElse("dev")
 
   lazy val usage: String =
     s"""atc $Version: a minimal coding agent with tracked capabilities

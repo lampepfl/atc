@@ -7,7 +7,7 @@ $root = $PSScriptRoot
 # `-Xmx<size>` / `-Xms<size>` are the JVM's flags, not ATC's: take them out for java. The
 # value of an ATC option that takes one (-p 'text', -C dir, ...) is forwarded untouched even
 # when it starts with -Xm: the list of those options mirrors `FlagsWithValues` in
-# app/src/atc/Cli.scala (`atc`, start.sh and windows/atc.ps1 carry the same list).
+# app/src/atc/Cli.scala (`atc` and windows/atc.ps1 carry the same list).
 $optionsWithValues = @('-c', '--config', '-C', '--cwd', '-m', '--model', '-p', '--prompt', '--mode')
 $jvmOpts = @()
 $forwarded = [Collections.Generic.List[string]]::new()
@@ -54,7 +54,6 @@ function Import-EnvFile([string]$Only) {
 $dist = Join-Path $root 'out\dist.dest'
 $jar = Join-Path $dist 'atc.jar'
 $libJar = Join-Path $dist 'atc-lib.jar'
-$versionFile = Join-Path $dist 'version.txt'
 # Written after each build. Mill leaves the jars alone when the content they are built from
 # did not change, so a source only touched or checked out again would stay newer than them
 # and make every start rebuild.
@@ -94,19 +93,14 @@ if ($env:ATC_MODEL) { $argsList.Add('-m'); $argsList.Add($env:ATC_MODEL) }
 if ($AtcArgs) { $argsList.AddRange([string[]]$AtcArgs) }
 
 $javaArgs = [Collections.Generic.List[string]]::new()
-# JVM defaults as in the `atc` wrapper (the same list is repeated in atc, start.sh,
-# windows/atc.ps1 and the dist script in build.mill); ATC_JAVA_OPTS and then the command
-# line's -Xmx/-Xms come later and win.
+# JVM defaults as in the `atc` wrapper and windows/atc.ps1; ATC_JAVA_OPTS and then the
+# command line's -Xmx/-Xms come later and win.
 foreach ($option in @('-Xms256m', '-Xmx2g', '-Xss4m', '-XX:-UsePerfData')) { $javaArgs.Add($option) }
 if ($env:ATC_JAVA_OPTS) {
   foreach ($option in ($env:ATC_JAVA_OPTS -split '\s+' | Where-Object { $_ })) { $javaArgs.Add($option) }
 }
 foreach ($option in $jvmOpts) { $javaArgs.Add($option) }
 $javaArgs.Add('-Dfile.encoding=UTF-8')
-$appVersion = if (Test-Path -LiteralPath $versionFile -PathType Leaf) {
-  (Get-Content -LiteralPath $versionFile -Encoding UTF8 -Raw).Trim()
-} else { 'dev' }
-$javaArgs.Add("-Datc.version=$appVersion")
 $javaArgs.Add('-jar')
 $javaArgs.Add('atc.jar')
 

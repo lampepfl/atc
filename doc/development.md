@@ -29,11 +29,13 @@ parallel queue can duplicate compiler-intensive suites. If the Mill server canno
 use `./mill --no-server ...`. The permission suite starts a local HTTP server and needs
 permission to bind a loopback socket.
 
-`dist` writes `atc`, `atc.ps1`, `atc.cmd`, `atc.jar`, `atc-lib.jar` and `version.txt` to
-`out/dist.dest/`. The Unix launcher and JARs form the Unix distribution; Windows uses the
-PowerShell launcher with the same JARs. The batch launcher is a compatibility entry point.
+`dist` writes `atc.jar`, `atc-lib.jar`, `atc.ps1` and `atc.cmd` to `out/dist.dest/`, the
+files a release carries. The Unix `atc` wrapper downloads the two JARs; Windows uses the
+PowerShell launcher with the same JARs, and the batch launcher is a compatibility entry
+point. The version comes from `atc/version.txt` in the application JAR.
 
-`./start.sh` and `.\start.ps1` rebuild a stale distribution, then load `.env` and launch ATC.
+`./start.sh` and `.\start.ps1` rebuild a stale distribution, then load `.env` and launch ATC;
+`start.sh` launches through `atc run` with `ATC_CACHE_DIR` set to the distribution.
 Before the build they read only `ATC_SKIP_BUILD` from the environment file, so a Mill server
 the build starts does not keep API keys in its environment. The distribution is stale when a
 file in `build.mill`, `app/src`, `app/resources`, `lib/src` or `windows` is newer than
@@ -49,7 +51,7 @@ checkout; ATC keeps the launch directory unless `-C` overrides it.
 | `ATC_ENV_FILE` | Alternative environment file |
 | `ATC_SKIP_BUILD=1` | Skip the start script's rebuild check |
 | `ATC_JAVA_OPTS` | Additional JVM flags for every launcher, applied after the defaults and before the command line's `-Xmx`/`-Xms` |
-| `-Xmx<size>`, `-Xms<size>` (launcher arguments) | JVM heap flags that `atc`, `start.sh`, `start.ps1` and `atc.ps1` remove from the arguments (never the value of an option such as `-p`) and pass to `java` last, so they win |
+| `-Xmx<size>`, `-Xms<size>` (launcher arguments) | JVM heap flags that `atc` (and so `start.sh`), `start.ps1` and `windows/atc.ps1` remove from the arguments (never the value of an option such as `-p`) and pass to `java` last, so they win |
 | `ATC_STARTUP_CACHE=0` | Run without the JVM startup cache (`atc`, `start.sh`) |
 | `ATC_DEBUG` | Enable stack traces and stream/terminal diagnostics when set; logged text has terminal controls removed |
 | `ATC_ASCII` | Select ASCII terminal glyphs when set |
@@ -57,16 +59,15 @@ checkout; ATC keeps the launch directory unless `-C` overrides it.
 ### JVM settings
 
 Every launcher starts the JVM with `-Xms256m -Xmx2g -Xss4m -XX:-UsePerfData`
-(`DEFAULT_JVM_OPTS` in `atc`; the same list in `start.sh`, the dist `atc` script, `atc.ps1`
-and `start.ps1`). `VERSIONED_JVM_OPTS` adds `--sun-misc-unsafe-memory-access=allow` on Java
-23+, because Scala's `LazyVals` use `sun.misc.Unsafe` and JEP 471 otherwise prints four
-warning lines on every run, and `--enable-native-access=ALL-UNNAMED` on Java 24+, because
-JLine loads a native terminal library (JEP 472). The dist `atc` script does not detect the
-Java version and adds neither. With the dist jar and the echo model on JDK 25, a 100-turn
-session of reads, writes and commands keeps 130 to 230 MB live and runs down to `-Xmx192m`,
-so 2 GB is headroom. The cap also bounds a runaway sandbox computation: one line building a
-large vector reaches 5 GB under the JVM's quarter-of-RAM default, and under 2 GB it fails
-in five seconds with an out-of-memory error the session survives. `-Xss4m` lets the
+(`DEFAULT_JVM_OPTS` in `atc`, which `start.sh` runs; the same list in `windows/atc.ps1` and
+`start.ps1`). `VERSIONED_JVM_OPTS` adds `--sun-misc-unsafe-memory-access=allow` on Java 23+,
+because Scala's `LazyVals` use `sun.misc.Unsafe` and JEP 471 otherwise prints four warning
+lines on every run, and `--enable-native-access=ALL-UNNAMED` on Java 24+, because JLine
+loads a native terminal library (JEP 472). With the dist jar and the echo model on JDK 25, a
+100-turn session of reads, writes and commands keeps 130 to 230 MB live and runs down to
+`-Xmx192m`, so 2 GB is headroom. The cap also bounds a runaway sandbox computation: one line
+building a large vector reaches 5 GB under the JVM's quarter-of-RAM default, and under 2 GB
+it fails in five seconds with an out-of-memory error the session survives. `-Xss4m` lets the
 compiler's recursion guard report a 3000-term expression that overflows the 1 MB Linux
 default stack; stacks are only reserved, so it costs nothing.
 
@@ -77,9 +78,10 @@ since the JDK 25 cache carries method profiles): an AOT cache on Java 25+
 JDK and JVM options, and a stale one makes the JVM print errors (a CDS archive is not
 regenerated), so the launchers use one only when it is known to be current.
 `~/.atc/jars/startup/key.txt` (`out/dist.dest/startup/` for `start.sh`) records the JDK's
-`-version` output, the release marker, the version-gated JVM options, `ATC_JAVA_OPTS` and the
-command line's `-Xmx`/`-Xms`, and the cache is current when the key matches and no jar is
-newer than it. Otherwise one echo-model `-p 'run: 1 + 1'` run, whose output is discarded,
+`-version` output, the release marker, the default and version-gated JVM options,
+`ATC_JAVA_OPTS` and the command line's `-Xmx`/`-Xms`, and the cache is current when the key
+matches and no jar is newer than it. Otherwise one echo-model `-p 'run: 1 + 1'` run, whose
+output is discarded,
 builds the cache with the same options. A build that leaves no file writes the key anyway, so
 it is not retried until the JDK, release or options change. The cache is an optimization: an
 unwritable directory or key runs without it, and an interrupted training run removes its
@@ -1655,8 +1657,11 @@ The Unix `atc` wrapper installs to `~/.local/bin` and keeps the JARs and the sta
 in `~/.atc/jars`; `ATC_INSTALL_DIR` and `ATC_CACHE_DIR` override those locations. Release
 downloads require SHA-256 digests for both JARs. Metadata uses jq when available and a
 field-order-dependent fallback otherwise. A cache marker records `release-id|tag`; verified
-updates replace it with the downloaded artifacts. `atc setup` appends a marked snippet that
-puts the install directory on `PATH` to each existing rc file of the user's shell (`.zshrc`
+updates replace it with the downloaded artifacts. While the JARs are moved into place the
+marker reads `incomplete`, which a launch refuses, so an interrupted update cannot start a new
+application JAR with an old library JAR; a cache without a marker still launches. `atc setup`
+appends a marked snippet that puts the install directory on `PATH` to each existing rc file
+of the user's shell (`.zshrc`
 and `.zprofile` for zsh, `.bashrc`, `.bash_profile` and `.profile` for bash, `.profile`
 otherwise), creates the first of them when none exists, skips a file that already has the
 snippet or names the directory, and warns about a file it cannot write; for fish, which
@@ -1680,9 +1685,10 @@ failures explicitly because Bash conditional callers can disable `errexit`.
 
 The same check then offers a newer wrapper, at most once a day (the `self-check` stamp is
 touched before the check, so a failed download or a declined offer also waits a day) and
-only when the running script is the installed one at `INSTALL_PATH`, so a checkout's copy
-is never overwritten. It stages GitHub's `atc` with the download and `bash -n` check of
-`atc self update`, compares it with `cmp`, and on `y` moves it into place; bash keeps
+only when the running script is the installed one at `INSTALL_PATH` and neither is a
+symlink, so a checkout's copy, also one `INSTALL_PATH` links to, is never overwritten. It
+stages GitHub's `atc` with the download and `bash -n` check of `atc self update`, compares it
+with `cmp`, and on `y` moves it into place; bash keeps
 reading the running script from its old inode, so the new wrapper takes effect at the next
 start. A download that fails skips the offer instead of ending the launch, and an
 interrupted download or prompt removes the staged file. `atc dev <checkout>` copies an
@@ -1709,5 +1715,7 @@ application arguments through private `ATC_INTERNAL_*` environment variables.
 CI builds distributions and runs application tests on Linux, macOS and Windows. Linux
 checks formatting; Unix jobs run the Bash wrapper tests, and the Windows job runs the
 PowerShell wrapper tests under Windows PowerShell and PowerShell 7. Published release tags
-must match `Versions.atc` (with an optional `v` prefix). The release job builds and uploads
-the two JARs and Windows launchers after the platform jobs succeed.
+must match `Versions.atc` (with an optional `v` prefix). After the platform jobs succeed,
+`build-release` builds the two JARs and Windows launchers with read-only access, and
+`publish-release`, the only job with write access, uploads them without running project
+code. A release is public before its JARs are attached; both wrappers then say to try again.

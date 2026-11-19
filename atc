@@ -19,7 +19,7 @@ INSTALL_DIR="${ATC_INSTALL_DIR:-${HOME}/.local/bin}"
 INSTALL_PATH="${INSTALL_DIR}/atc"
 # JVM defaults for 'atc run' (measured; doc/development.md "JVM settings"). ATC_JAVA_OPTS
 # and -Xmx/-Xms on the command line come later and win. The same list is repeated in
-# start.sh, start.ps1, windows/atc.ps1 and the dist script in build.mill: change all five.
+# start.ps1 and windows/atc.ps1: change all three.
 DEFAULT_JVM_OPTS="-Xms256m -Xmx2g -Xss4m -XX:-UsePerfData"
 # Startup cache (AOT cache on Java 25+, CDS archive on 19-24): halves the cold start, but a
 # stale one makes the JVM print errors, so key.txt records the JDK, the release and the JVM
@@ -36,6 +36,9 @@ RELEASE_MARKER="${CACHE_DIR}/release.txt"
 # this directory, and marks the cache with "dev|<that directory>".
 DIST_SUBDIR="out/dist.dest"
 DEV_MARKER_PREFIX="dev|"
+# The marker while the jars are replaced: a launch refuses it, so an interrupted update
+# cannot start a new app jar with an old library jar.
+INCOMPLETE_MARKER="incomplete"
 PATH_MARKER_BEGIN="# >>> atc path >>>"
 PATH_MARKER_END="# <<< atc path <<<"
 
@@ -173,6 +176,7 @@ release_json() {
   case "$http_code" in
     2*) ;;
     403) fail "GitHub API returned 403 Forbidden for ${api_url}. You may be rate limited; set GITHUB_TOKEN to raise the rate limit." ;;
+    401) fail "GitHub API returned 401 for ${api_url}: the GITHUB_TOKEN in the environment was refused. Unset it (the repository is public) or renew it." ;;
     404) fail "GitHub API returned 404 for ${api_url}: ${OWNER_REPO} has no published release yet." ;;
     *) fail "GitHub API returned HTTP ${http_code} for ${api_url}." ;;
   esac
@@ -367,7 +371,8 @@ download_latest_release() (
     json="$(release_json)" || fail "failed to retrieve release metadata."
   fi
   release_key="$(release_key_from_json "$json")" || fail "failed to parse release metadata."
-  assets_info="$(extract_assets "$json")" || fail "failed to find the required release assets."
+  assets_info="$(extract_assets "$json")" ||
+    fail "the latest release has no jars yet; they are attached when its build finishes. Try again in a few minutes."
 
   if cached_release_matches "$release_key"; then
     local verify_status
@@ -421,10 +426,12 @@ download_latest_release() (
     verify_jar "${tmp_dir}/${name}" "$digest"
   done <<< "$assets_info"
 
+  # Write each marker in the private temp directory first, then rename it: a
+  # pre-existing release.txt symlink must never redirect this write.
+  printf '%s\n' "$INCOMPLETE_MARKER" > "${tmp_dir}/release.txt" || fail "cannot write the release marker."
+  mv "${tmp_dir}/release.txt" "$RELEASE_MARKER" || fail "cannot install the release marker."
   mv "${tmp_dir}/${APP_JAR_NAME}" "$APP_JAR" || fail "cannot install ${APP_JAR_NAME}."
   mv "${tmp_dir}/${LIB_JAR_NAME}" "$LIB_JAR" || fail "cannot install ${LIB_JAR_NAME}."
-  # Write the marker in the private temp directory first, then rename it: a
-  # pre-existing release.txt symlink must never redirect this write.
   printf '%s\n' "$release_key" > "${tmp_dir}/release.txt" || fail "cannot write the release marker."
   mv "${tmp_dir}/release.txt" "$RELEASE_MARKER" || fail "cannot install the release marker."
 
@@ -607,13 +614,17 @@ remove_profile_path() {
         for (i = 1; i <= last; i++) print lines[i]
       }
     ')"
-    printf '%s\n' "$cleaned" > "$file"
+    # A file uninstall cannot write must not stop it half way: say what is left to do.
+    if ! { printf '%s\n' "$cleaned" > "$file"; } 2>/dev/null; then
+      echo "Warning: cannot write ${file}; remove the lines between the atc path markers yourself." >&2
+      continue
+    fi
     echo "Cleaned PATH snippet from ${file}"
   done < <(SHELL=zsh profile_candidates; SHELL=bash profile_candidates)
 }
 
 self_path() {
-  printf '%s\n' "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")"
+  printf '%s\n' "$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")"
 }
 
 install_self() (
@@ -649,6 +660,8 @@ download_latest_self() { # $1 = output path, then extra curl arguments
 require_cached_jars() {
   [[ -f "$APP_JAR" && -f "$LIB_JAR" ]] \
     || fail "No ATC jars were found in ${CACHE_DIR}. Run 'atc setup' (first time) or 'atc update'."
+  [[ "$(cat "$RELEASE_MARKER" 2>/dev/null)" != "$INCOMPLETE_MARKER" ]] \
+    || fail "An update of the ATC jars in ${CACHE_DIR} did not finish. Run 'atc update'."
 }
 
 # ---------------------------------------------------------------------------
@@ -680,7 +693,7 @@ install_dev_build() (
 
   [[ -n "$dir" ]] || fail "atc dev needs the checkout directory: atc dev <checkout> (build it first with './mill dist')."
   [[ -d "$dir" ]] || fail "${dir} does not exist."
-  dir="$(cd "$dir" && pwd)"
+  dir="$(CDPATH='' cd -- "$dir" && pwd)"
   dist="${dir}/${DIST_SUBDIR}"
   app="${dist}/${APP_JAR_NAME}"
   lib="${dist}/${LIB_JAR_NAME}"
@@ -695,9 +708,11 @@ install_dev_build() (
   trap '[[ -z "$tmp_dir" ]] || rm -rf -- "$tmp_dir"' EXIT
   cp "$app" "${tmp_dir}/${APP_JAR_NAME}" && cp "$lib" "${tmp_dir}/${LIB_JAR_NAME}" \
     || fail "failed to copy the jars from ${dist}."
-  printf '%s%s\n' "$DEV_MARKER_PREFIX" "$dir" > "${tmp_dir}/release.txt"
+  printf '%s\n' "$INCOMPLETE_MARKER" > "${tmp_dir}/release.txt"
+  mv "${tmp_dir}/release.txt" "$RELEASE_MARKER"
   mv "${tmp_dir}/${APP_JAR_NAME}" "$APP_JAR"
   mv "${tmp_dir}/${LIB_JAR_NAME}" "$LIB_JAR"
+  printf '%s%s\n' "$DEV_MARKER_PREFIX" "$dir" > "${tmp_dir}/release.txt"
   mv "${tmp_dir}/release.txt" "$RELEASE_MARKER"
   rmdir "$tmp_dir"
   tmp_dir=""
@@ -790,11 +805,13 @@ cmd_self_update() (
 # Interactive starts also offer to replace the wrapper when GitHub's differs, at most once
 # a day (the stamp is touched before the check, so a failed download or a declined offer
 # waits a day too), and only for the installed copy at INSTALL_PATH: a checkout's or any
-# other copy is never overwritten from here.
+# other copy is never overwritten from here. An INSTALL_PATH that is a link (to a checkout's
+# atc, as a developer sets it up) is the same file as that copy, so links are left alone too.
 offer_self_update() {
   local source_path stamp answer
   source_path="$(self_path)"
-  [[ -f "$source_path" && "$source_path" -ef "$INSTALL_PATH" ]] || return 0
+  [[ -f "$source_path" && "$source_path" -ef "$INSTALL_PATH" && ! -L "$source_path" && ! -L "$INSTALL_PATH" ]] ||
+    return 0
   stamp="${CACHE_DIR}/self-check"
   [[ -z "$(find "$stamp" -mtime -1 2>/dev/null)" ]] || return 0
   { mkdir -p "$CACHE_DIR" && touch "$stamp"; } 2>/dev/null || return 0
@@ -829,12 +846,12 @@ validate_cache_removal() {
   [[ ! -L "$CACHE_DIR" ]] || fail "refusing to remove symbolic-link cache ${CACHE_DIR}."
 
   local cache_real home_real
-  cache_real="$(cd -- "$CACHE_DIR" && pwd -P)"
-  home_real="$(cd -- "$HOME" && pwd -P)"
+  cache_real="$(CDPATH='' cd -- "$CACHE_DIR" && pwd -P)"
+  home_real="$(CDPATH='' cd -- "$HOME" && pwd -P)"
   if [[ "$cache_real" == "/" || "$cache_real" == "$home_real" || "$home_real" == "$cache_real/"* ]]; then
     fail "refusing to remove broad ATC_CACHE_DIR ${CACHE_DIR}."
   fi
-  if [[ -d "$home_real/.atc" && "$cache_real" == "$(cd -- "$home_real/.atc" && pwd -P)" ]]; then
+  if [[ -d "$home_real/.atc" && "$cache_real" == "$(CDPATH='' cd -- "$home_real/.atc" && pwd -P)" ]]; then
     fail "refusing to remove ${CACHE_DIR}: it is ATC's configuration directory, not its jars subdirectory."
   fi
 
@@ -881,7 +898,7 @@ cmd_dev() {
 # java, and ATC itself does not know them. Leaves the rest, in order, in RUN_ARGS and the
 # flags in JVM_OPTS. The value of an ATC option that takes one (-p 'text', -C dir, ...) is
 # forwarded untouched even when it starts with -Xm: the list of those options mirrors
-# `FlagsWithValues` in app/src/atc/Cli.scala (start.sh and windows/atc.ps1 carry the same
+# `FlagsWithValues` in app/src/atc/Cli.scala (start.ps1 and windows/atc.ps1 carry the same
 # list). Bash 3.2: an empty array must be expanded as ${A[@]+"${A[@]}"} under `set -u`.
 extract_jvm_options() {
   JVM_OPTS=()
@@ -917,13 +934,14 @@ startup_cache_flags() {
 }
 
 # What the cache was built for: the JDK (its whole -version output, read once by
-# ensure_java), the release marker and the JVM options besides the defaults. The JVM refuses
-# a cache built with different module options, such as --enable-native-access, and prints
-# errors for one built with another GC or heap size, which ATC_JAVA_OPTS and -Xmx can set.
+# ensure_java), the release marker and every JVM option, the defaults included, since a
+# wrapper update may change them. The JVM refuses a cache built with different module
+# options, such as --enable-native-access, and prints errors for one built with another GC
+# or heap size, which ATC_JAVA_OPTS and -Xmx can set.
 startup_cache_key() {
   printf '%s\n' "$JAVA_VERSION"
   cat "$RELEASE_MARKER" 2>/dev/null || true
-  printf '%s\n' "${VERSIONED_JVM_OPTS[*]+"${VERSIONED_JVM_OPTS[*]}"}" "${ATC_JAVA_OPTS:-}" \
+  printf '%s\n' "$DEFAULT_JVM_OPTS" "${VERSIONED_JVM_OPTS[*]+"${VERSIONED_JVM_OPTS[*]}"}" "${ATC_JAVA_OPTS:-}" \
     "${JVM_OPTS[*]+"${JVM_OPTS[*]}"}"
 }
 
@@ -946,13 +964,20 @@ build_startup_cache() {
   # Removes the throwaway directory when the training run is interrupted.
   trap 'rm -rf -- "$tmp"; exit 130' INT TERM HUP
   printf '%s\n' '{"providers":{"echo":{"api":"echo","models":{"echo":{}}}},"model":"echo"}' > "${tmp}/train.json"
+  # The options are split into words, not matched against file names: `-Xlog:gc*` must not
+  # pick up files of the directory atc was started in.
+  set -f
   # shellcheck disable=SC2086
   java ${DEFAULT_JVM_OPTS} ${VERSIONED_JVM_OPTS[@]+"${VERSIONED_JVM_OPTS[@]}"} "$STARTUP_CACHE_CREATE" \
     ${ATC_JAVA_OPTS:-} ${JVM_OPTS[@]+"${JVM_OPTS[@]}"} -Dfile.encoding=UTF-8 -Datc.lib.classpath="$LIB_JAR" \
     -jar "$APP_JAR" -c "${tmp}/train.json" -C "$tmp" -p 'run: 1 + 1' >/dev/null 2>&1 || true
+  set +f
   rm -rf -- "$tmp"
   trap - INT TERM HUP
-  startup_cache_key > "$STARTUP_CACHE_KEY"
+  # Readable by the owner only: the key records the JVM options, and a proxy password or a
+  # token can be among them (the JDK prints JAVA_TOOL_OPTIONS with its version).
+  rm -f -- "$STARTUP_CACHE_KEY"
+  (umask 077 && startup_cache_key > "$STARTUP_CACHE_KEY")
   for jar in "$APP_JAR" "$LIB_JAR"; do
     [[ -z "$(find "$jar" -newer "$STARTUP_CACHE_KEY" 2>/dev/null)" ]] || touch -r "$jar" "$STARTUP_CACHE_KEY"
   done
@@ -988,6 +1013,8 @@ cmd_run() {
   [[ -z "$dev_dir" ]] || echo "atc: running the local build from ${dev_dir} ('atc update' restores the release)" >&2
   prepare_startup_cache
   # Later flags win: the defaults, then ATC_JAVA_OPTS, then -Xmx/-Xms from the command line.
+  # They are split into words, not matched against file names (see build_startup_cache).
+  set -f
   # shellcheck disable=SC2086
   exec java ${DEFAULT_JVM_OPTS} ${VERSIONED_JVM_OPTS[@]+"${VERSIONED_JVM_OPTS[@]}"} ${STARTUP_CACHE_OPTS[@]+"${STARTUP_CACHE_OPTS[@]}"} ${ATC_JAVA_OPTS:-} ${JVM_OPTS[@]+"${JVM_OPTS[@]}"} -Dfile.encoding=UTF-8 -Datc.lib.classpath="$LIB_JAR" -jar "$APP_JAR" "$@"
 }

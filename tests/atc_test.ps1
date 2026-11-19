@@ -77,7 +77,7 @@ try {
   Check 'the key is the id and the tag' ((Get-ReleaseKey $release) -ceq '7|0.2.0')
   $noLauncher = New-Release 7 '0.2.0'
   $noLauncher.assets = @($noLauncher.assets | Where-Object { $_.name -ne 'atc.ps1' })
-  Check 'a missing file fails' ((Get-Failure { Get-ReleaseAssets $noLauncher }) -like '*atc.ps1 was not found*')
+  Check 'a missing file fails' ((Get-Failure { Get-ReleaseAssets $noLauncher }) -like '*has no atc.ps1 yet*')
   $noDigest = New-Release 7 '0.2.0' @{ 'atc-lib.jar' = '' }
   Check 'a file without a digest fails' ((Get-Failure { Get-ReleaseAssets $noDigest }) -like '*digest*atc-lib.jar*')
   $md5 = New-Release 7 '0.2.0' @{ 'atc.jar' = 'md5:0123456789abcdef0123456789abcdef' }

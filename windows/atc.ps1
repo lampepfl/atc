@@ -6,7 +6,7 @@ $launchCwd = (Get-Location).Path
 # `-Xmx<size>` / `-Xms<size>` are the JVM's flags, not ATC's: take them out for java. The
 # value of an ATC option that takes one (-p 'text', -C dir, ...) is forwarded untouched even
 # when it starts with -Xm: the list of those options mirrors `FlagsWithValues` in
-# app/src/atc/Cli.scala (`atc`, start.sh and start.ps1 carry the same list).
+# app/src/atc/Cli.scala (`atc` and start.ps1 carry the same list).
 $optionsWithValues = @('-c', '--config', '-C', '--cwd', '-m', '--model', '-p', '--prompt', '--mode')
 $jvmOpts = @()
 $forwarded = New-Object System.Collections.Generic.List[string]
@@ -68,9 +68,8 @@ $major = [int]$Matches.major
 if ($major -eq 1 -and $Matches.minor) { $major = [int]$Matches.minor }
 if ($major -lt 17) { throw "Java 17 or newer is required; '$java' reports major version $major." }
 
-# JVM defaults as in the Unix `atc` wrapper (the same list is repeated in atc, start.sh,
-# start.ps1 and the dist script in build.mill). Later flags win: the defaults, then
-# ATC_JAVA_OPTS, then the command line's -Xmx/-Xms.
+# JVM defaults as in the Unix `atc` wrapper and start.ps1. Later flags win: the defaults,
+# then ATC_JAVA_OPTS, then the command line's -Xmx/-Xms.
 $javaArgs = @('-Xms256m', '-Xmx2g', '-Xss4m', '-XX:-UsePerfData')
 # Scala's LazyVals still use sun.misc.Unsafe; Java 23+ warns about it on every run (JEP 471).
 if ($major -ge 23) { $javaArgs += '--sun-misc-unsafe-memory-access=allow' }
@@ -79,7 +78,7 @@ if ($major -ge 24) { $javaArgs += '--enable-native-access=ALL-UNNAMED' }
 if ($env:ATC_JAVA_OPTS) {
   $javaArgs += @($env:ATC_JAVA_OPTS -split '\s+' | Where-Object { $_ })
 }
-$javaArgs = $javaArgs + $jvmOpts + @('-Dfile.encoding=UTF-8', '-Datc.version=@ATC_VERSION@', '-jar', 'atc.jar')
+$javaArgs = $javaArgs + $jvmOpts + @('-Dfile.encoding=UTF-8', '-jar', 'atc.jar')
 $savedLaunchCwd = $env:ATC_INTERNAL_LAUNCH_CWD
 $savedLibClasspath = $env:ATC_INTERNAL_LIB_CLASSPATH
 $internalArgNames = @('ATC_INTERNAL_ARG_COUNT')

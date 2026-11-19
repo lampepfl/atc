@@ -6,11 +6,12 @@
 #   ./start.sh -p "run: 1 + 1"     # one non-interactive turn
 #   ./start.sh -Xmx4g              # -Xmx/-Xms go to the JVM, everything else to atc
 #
+# Needs bash for the `atc` wrapper, which starts the JVM.
 # Environment (see .env.example): ANTHROPIC_API_KEY, OPENAI_API_KEY, ATC_MODEL,
 # ATC_CONFIG, ATC_CWD, ATC_JAVA_OPTS, ATC_DEBUG, ATC_ENV_FILE, ATC_SKIP_BUILD.
 set -eu
 
-ROOT=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 ENV_FILE=${ATC_ENV_FILE:-$ROOT/.env}
 
 # Load literal KEY=value entries without replacing non-empty exported values; with an
@@ -67,103 +68,16 @@ if [ "$needs_build" = 1 ]; then
   touch "$STAMP"
 fi
 load_env
-
-# `-Xmx<size>` / `-Xms<size>` are the JVM's flags, not ATC's: take them out for java. The
-# value of an ATC option that takes one (-p 'text', -C dir, ...) is forwarded untouched even
-# when it starts with -Xm: the list of those options mirrors `FlagsWithValues` in
-# app/src/atc/Cli.scala (`atc` and the PowerShell launchers carry the same list).
-JVM_OPTS=
-expect_value=
-for arg in "$@"; do
-  shift
-  if [ -n "$expect_value" ]; then
-    expect_value=
-    set -- "$@" "$arg"
-    continue
-  fi
-  case "$arg" in
-    -c|--config|-C|--cwd|-m|--model|-p|--prompt|--mode)
-      expect_value=1
-      set -- "$@" "$arg" ;;
-    -Xmx*|-Xms*)
-      size=${arg#-Xm?}
-      case "${size%[kKmMgG]}" in
-        ''|*[!0-9]*)
-          echo "[start.sh] Invalid JVM heap size '$arg': use a number with an optional k, m or g suffix, e.g. -Xmx4g or -Xms512m" >&2
-          exit 1 ;;
-      esac
-      JVM_OPTS="$JVM_OPTS $arg" ;;
-    *) set -- "$@" "$arg" ;;
-  esac
-done
+if [ ! -f "$JAR" ] || [ ! -f "$LIBJAR" ]; then
+  echo "[start.sh] no distribution in $DIST: run ./mill dist, or start without ATC_SKIP_BUILD=1" >&2
+  exit 1
+fi
 
 [ -n "${ATC_MODEL:-}" ]  && set -- -m "$ATC_MODEL" "$@"
 [ -n "${ATC_CONFIG:-}" ] && set -- -c "$ATC_CONFIG" "$@"
 [ -n "${ATC_CWD:-}" ]    && set -- -C "$ATC_CWD" "$@"
 
-# JVM defaults as in the `atc` wrapper (doc/development.md "JVM settings"); the same list
-# is repeated in atc, start.ps1, windows/atc.ps1 and the dist script in build.mill.
-DEFAULT_JVM_OPTS="-Xms256m -Xmx2g -Xss4m -XX:-UsePerfData"
-
-# Startup cache as in the `atc` wrapper: an AOT cache (Java 25+) or a CDS archive (Java
-# 19-24) under out/dist.dest/startup/, rebuilt by one echo-model run when the jars (every
-# ./mill dist) or the JDK change. ATC_STARTUP_CACHE=0 disables it. The version line need not
-# come first: JAVA_TOOL_OPTIONS and similar variables add a "Picked up ..." line before it.
-java_version=$(java -version 2>&1)
-java_major=$(printf '%s\n' "$java_version" | grep -m1 ' version "' | sed -n 's/^[^"]*"\([0-9]*\).*/\1/p')
-case "$java_major" in ''|*[!0-9]*) java_major=0 ;; esac
-# Scala's LazyVals still use sun.misc.Unsafe; Java 23+ warns about it on every run (JEP 471).
-VERSIONED_JVM_OPTS=
-[ "$java_major" -lt 23 ] || VERSIONED_JVM_OPTS="--sun-misc-unsafe-memory-access=allow"
-# JLine loads a native library; Java 24+ warns about that on every run (JEP 472).
-[ "$java_major" -lt 24 ] || VERSIONED_JVM_OPTS="$VERSIONED_JVM_OPTS --enable-native-access=ALL-UNNAMED"
-
-STARTUP_OPTS=
-if [ "${ATC_STARTUP_CACHE:-1}" != 0 ]; then
-  cache_dir="$DIST/startup"
-  cache_key="$cache_dir/key.txt"
-  # The JDK and the JVM options besides the defaults the cache was built with (the JVM refuses
-  # a cache built with different module options and prints errors for another GC or heap size).
-  key_text="$java_version
-$VERSIONED_JVM_OPTS
-${ATC_JAVA_OPTS:-}$JVM_OPTS"
-  if [ "$java_major" -ge 25 ]; then
-    cache="$cache_dir/atc.aot"; create="-XX:AOTCacheOutput=$cache"; use="-XX:AOTCache=$cache"
-  elif [ "$java_major" -ge 19 ]; then
-    cache="$cache_dir/atc.jsa"; create="-XX:ArchiveClassesAtExit=$cache"; use="-XX:SharedArchiveFile=$cache"
-  else
-    cache=
-  fi
-  if [ -n "$cache" ]; then
-    if [ ! -f "$cache_key" ] || [ "$(cat "$cache_key")" != "$key_text" ] || [ -n "$(find "$JAR" "$LIBJAR" -newer "$cache_key")" ]; then
-      # The cache is an optimisation: ATC runs without it when its directory cannot be
-      # created or written, and a key that cannot be written does not stop the start.
-      if { mkdir -p "$cache_dir" && [ -w "$cache_dir" ]; } 2>/dev/null; then
-        echo "[start.sh] preparing the JVM startup cache (a few seconds)..." >&2
-        rm -f "$cache"
-        tmp=$(mktemp -d "${TMPDIR:-/tmp}/atc-startup-cache.XXXXXX")
-        trap 'rm -rf "$tmp"; exit 130' INT TERM HUP
-        printf '%s\n' '{"providers":{"echo":{"api":"echo","models":{"echo":{}}}},"model":"echo"}' > "$tmp/train.json"
-        # shellcheck disable=SC2086
-        java $DEFAULT_JVM_OPTS $VERSIONED_JVM_OPTS "$create" ${ATC_JAVA_OPTS:-} $JVM_OPTS \
-          -Dfile.encoding=UTF-8 -Datc.lib.classpath="$LIBJAR" -jar "$JAR" \
-          -c "$tmp/train.json" -C "$tmp" -p 'run: 1 + 1' >/dev/null 2>&1 || true
-        rm -rf "$tmp"
-        trap - INT TERM HUP
-        printf '%s\n' "$key_text" > "$cache_key" || true
-        for jar in "$JAR" "$LIBJAR"; do
-          [ -z "$(find "$jar" -newer "$cache_key" 2>/dev/null)" ] || touch -r "$jar" "$cache_key"
-        done
-        [ -s "$cache" ] || { rm -f "$cache"; echo "[start.sh] could not build the startup cache; running without it." >&2; }
-      else
-        cache=
-      fi
-    fi
-    [ -s "$cache" ] && STARTUP_OPTS=$use
-  fi
-fi
-
-# Later flags win: the defaults, then ATC_JAVA_OPTS, then -Xmx/-Xms from the command line.
-# The cache flag holds a path, which may contain spaces, so it stays one argument.
-# shellcheck disable=SC2086
-exec java $DEFAULT_JVM_OPTS $VERSIONED_JVM_OPTS ${STARTUP_OPTS:+"$STARTUP_OPTS"} ${ATC_JAVA_OPTS:-} $JVM_OPTS -Dfile.encoding=UTF-8 -Datc.lib.classpath="$LIBJAR" -jar "$JAR" "$@"
+# The `atc` wrapper runs the build as it runs a release, with its JVM options, the -Xmx/-Xms
+# of the command line and the startup cache, here under out/dist.dest/startup/. It looks for
+# no update, and the build carries no release marker.
+ATC_CACHE_DIR="$DIST" ATC_CHECK_UPDATES=0 exec bash "$ROOT/atc" run "$@"
