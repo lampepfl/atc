@@ -322,6 +322,14 @@ class PermissionSuite extends munit.FunSuite:
       env.host.withEnv(Map("LEVEL" -> "info", "OTHER" -> "x")) { env.host.exec(show) }
     assert(e.getMessage.nn.contains(s"'OTHER=x ${stageLine(show)}'"), e.getMessage)
 
+  test("a star in a variable's value cannot reach the command its pattern names"):
+    // The agent picks the value: `LEVEL="x git y" show` once matched `LEVEL=* git *`.
+    val env = TestEnv(commands = List(valuePattern, "LEVEL=* git *"))
+    import env.given
+    val show = fixture("value", "LEVEL")
+    val e = intercept[SecurityException](env.host.withEnv(Map("LEVEL" -> "x git y")) { env.host.exec(show) })
+    assert(e.getMessage.nn.contains("LEVEL=\\\"x git y\\\""), e.getMessage)
+
   test("only a pattern that begins with NAME= permits a variable"):
     // `*` and `*value*` match every assignment line too; they permit commands, not variables.
     val env = TestEnv(commands = List("*", s"*value *"))

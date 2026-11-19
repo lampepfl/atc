@@ -369,12 +369,46 @@ class PolicySuite extends munit.FunSuite:
     assertEquals(quoted, "MSG=\"a \\\"b\\\" c\"")
     assert(GlobMatcher.matchesCommand(s"$quoted git status", "MSG=* git status"))
     assert(!GlobMatcher.matchesCommand("RUST_LOG=Debug cargo test", "RUST_LOG=debug cargo"), "values keep their case")
+    assert(GlobMatcher.permitsCommand("RUST_LOG=debug make build", "RUST_LOG=*"), "no command after it: any command")
+    // An allow pattern matches the value and the command apart: a `*` in the value cannot take in
+    // the command word.
+    val reaching = CommandLine.assignment("PATH", "/tmp/evil: npm :/usr/bin")
+    assert(GlobMatcher.permitsCommand("PATH=/opt/bin npm test", "PATH=* npm *"))
+    assert(!GlobMatcher.permitsCommand(s"$reaching make build", "PATH=* npm *"))
+    assert(!GlobMatcher.permitsCommand("LC_ALL=C report git status", "LC_ALL=* git *"))
+    // A deny pattern matches the whole line, so a `*` may span the value and the command.
+    assert(GlobMatcher.matchesCommand("FOO=1 curl x", "FOO=*curl*"))
+    val proxy = CommandLine.assignment("GIT_SSH_COMMAND", "ssh -o ProxyCommand=x")
+    assert(GlobMatcher.matchesCommand(s"$proxy git fetch", "GIT_SSH_COMMAND=*-o ProxyCommand*"))
     if Platform.isWindows then
       // The name ignores case like the variable itself; the command after it is normalized,
       // so a deny pattern that names one cannot be dodged as `GIT.EXE`.
       assert(GlobMatcher.matchesCommand("Path=x git status", "PATH=*"))
       assert(GlobMatcher.matchesCommand("GIT_DIR=x GIT.EXE push", "GIT_DIR=* git push*"))
       assert(GlobMatcher.matchesCommand(s"$quoted GIT.EXE status", "MSG=* git status"))
+
+  test("a program name is compared as the platform looks it up, without case on Windows and macOS"):
+    val p = Policy(Nil, List("*"), Nil, _ => Decision.AllowSession, List("bash", "git push*"))
+    assertEquals(p.commandDenied("bash -c id"), Some("bash"))
+    if Platform.caseInsensitivePaths then
+      // `BASH` runs `bash` there, and so does a name with a letter the file system folds.
+      for spelled <- List("BASH -c id", "Bash -c id", "ba\u017fh -c id") do
+        assertEquals(p.commandDenied(spelled), Some("bash"), spelled)
+        assert(!p.commandAllowed(ScopeId.Base, spelled), spelled)
+      assertEquals(p.commandDenied("GIT push origin"), Some("git push*"))
+      // A request for such a spelling is refused like the name itself, before the user is asked.
+      intercept[SecurityException](p.requestExec(ScopeId.Base, List("BASH -c *"), ""))
+      // Arguments keep their case, and an allow pattern takes the other spelling of its program.
+      assertEquals(p.commandDenied("git PUSH origin"), None)
+      assert(GlobMatcher.permitsCommand("GIT status --short", "git status"))
+      assert(GlobMatcher.permitsCommand("RUST_LOG=debug MAKE build", "RUST_LOG=* make"))
+    else
+      // Where names differ by case they are different programs.
+      assertEquals(p.commandDenied("BASH -c id"), None)
+      assert(!GlobMatcher.permitsCommand("GIT status", "git status"))
+    if !Platform.isWindows then
+      // A variable's name keeps its case outside Windows.
+      assert(!GlobMatcher.permitsCommand("rust_log=debug make build", "RUST_LOG=*"))
 
   test("normalizeHost canonicalises equivalent spellings so a deny rule cannot be dodged"):
     // Lowercase a hostname and drop a trailing dot; never resolve it.

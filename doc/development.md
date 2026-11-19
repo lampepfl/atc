@@ -526,7 +526,9 @@ OS-level transactional sandbox. On Windows and macOS (`Platform.caseInsensitiveP
 pattern, exact paths and the root of an anchored glob included, compares names
 case-insensitively, because canonicalization corrects the case of existing names only: a new
 `.ATC` or `SECRETS` is the same directory as `.atc` or `secrets` there and must fall under its
-rule. An agent path on a UNC share other than the working directory's is refused before
+rule. The choice is per platform, not per volume: on a case-sensitive APFS volume a rule also
+covers names that differ from it only in case, which widens grants as well as protections. An
+agent path on a UNC share other than the working directory's is refused before
 canonicalization, which would otherwise contact the server even from a read-only file system.
 
 `GitIgnore` controls visibility in listings and recursive searches, independently of
@@ -884,9 +886,12 @@ A command run inside `withEnv` is checked by itself and then once per variable, 
 every one of these lines. One variable at a time keeps a `*` from reaching over a second
 assignment (`GIT_TRACE=* git *` must not cover `LD_PRELOAD=…`), and requiring the bare command
 keeps a grant of `NAME=value` alone, a word prefix of every such line, from permitting any
-command. Only an allow pattern that itself begins with `NAME=` permits such a line, so `*`
-or `*.sh` permits commands but no variable; deny patterns match either way. So `"RUST_LOG=*"`
-permits any value of that variable on commands permitted anyway, and
+command. An allow pattern that begins with `NAME=` matches in two parts, the assignment and
+then the command, so a `*` in the value cannot take in the command word: `PATH=* npm *` does
+not permit `PATH="x npm y" make`. A deny pattern matches the whole line, so `FOO=*curl*`
+refuses `FOO=1 curl x`. Only an allow pattern that itself begins with `NAME=` permits such a
+line, so `*` or `*.sh` permits commands but no variable; deny patterns match either way. So
+`"RUST_LOG=*"` permits any value of that variable on commands permitted anyway, and
 `"denyCommands": ["LD_PRELOAD=*"]` refuses that variable everywhere. A program word of
 the form `NAME=…` is refused, which keeps these lines distinct from command lines. On Windows
 the name in such a line ignores case and the command after it is normalized like a bare one.
@@ -896,7 +901,10 @@ are not followed. `denyCommands` and `denyHosts` use the same syntax: a deny rul
 every allow rule, including a session grant, an open `request*` scope, and `--approve-all`.
 The template's shell denials are bare names: `"bash"` blocks both `bash` and `bash -c ...`,
 but not an explicit `/bin/bash`, a wrapper, or a renamed interpreter; no finite deny list
-can classify every program that might execute code. The project template pre-approves only
+can classify every program that might execute code. Where program lookup ignores case, on
+Windows and on macOS (`Platform.caseInsensitivePaths`), the program word of a command line is
+compared with a pattern without case, so `"bash"` also blocks `BASH`, which runs the same
+program there; arguments keep their case. The project template pre-approves only
 git commands whose options cannot reach files outside the repository once `--output` is
 denied: `git diff` reads any file when one of two paths lies outside the repository or the
 directory is not one (`git diff .env /dev/null`), and `git blame` through `--contents`,

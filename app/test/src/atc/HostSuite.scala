@@ -364,6 +364,8 @@ class HostSuite extends munit.FunSuite:
     assert(!glob("a/*.md")("a/b/c.md"))
     assert(!glob("a[!x]b")("a/b") && !glob("a[+-0]b")("a/b")) // a class stays within one name
     assert(glob("{a,{b,c}}")("c"))
+    // A name may hold a line terminator; `**` crosses it like any character.
+    assert(glob("**/secret.txt")("a\nb/c\u2028d/secret.txt") && glob("x/**")("x/a\rb/c"))
     for bad <- List("a/{b,c", "[abc", "[]]") do
       assert(intercept[IllegalArgumentException](PathGlob.pattern(bad)).getMessage.nn.contains("bad glob"), bad)
     assertEquals(glob("SRC/**/*.SCALA")("src/main/A.scala"), Platform.caseInsensitivePaths)
