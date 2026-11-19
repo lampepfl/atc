@@ -379,6 +379,25 @@ class PermissionSuite extends munit.FunSuite:
       val e = intercept[IllegalArgumentException](env.host.exec(command))
       assert(e.getMessage.nn.contains("withEnv(Map(\"A\" -> ...))"), e.getMessage)
 
+  test("every command has git refuse a directory that only looks like a bare repository"):
+    val env = TestEnv(commands =
+      List(valuePattern, "GIT_CONFIG_COUNT=*", "GIT_CONFIG_KEY_0=*", "GIT_CONFIG_VALUE_0=*", "GIT_CONFIG_PARAMETERS=*")
+    )
+    import env.given
+    def show(name: String)(using Exec) = env.host.exec(fixture("value", name)).stdout.trim
+    assertEquals((show("GIT_CONFIG_COUNT"), show("GIT_CONFIG_KEY_0")), ("1", "safe.bareRepository"))
+    // Added after the agent's own parameters, so a later one cannot turn it off.
+    val own = Map("GIT_CONFIG_COUNT" -> "1", "GIT_CONFIG_KEY_0" -> "core.pager", "GIT_CONFIG_VALUE_0" -> "cat")
+    val seen = env.host.withEnv(own) {
+      (show("GIT_CONFIG_COUNT"), show("GIT_CONFIG_KEY_0"), show("GIT_CONFIG_KEY_1"), show("GIT_CONFIG_VALUE_1"))
+    }
+    assertEquals(seen, ("2", "core.pager", "safe.bareRepository", "explicit"))
+    // Git reads GIT_CONFIG_PARAMETERS after the numbered ones, and the last value wins there.
+    val parameters = env.host.withEnv(Map("GIT_CONFIG_PARAMETERS" -> "'safe.bareRepository'='all'")) {
+      show("GIT_CONFIG_PARAMETERS")
+    }
+    assertEquals(parameters, "'safe.bareRepository'='all' 'safe.bareRepository=explicit'")
+
   test("a variable replaces the inherited one, also after the key variables are stripped"):
     val plain = TestEnv(commands = List(valuePattern, "PATH=*"))
     val keyed = Host(plain.policy, plain.root, plain.output, plain.llm, plain.ui, keyVariables = () => Set("PATH"))
@@ -539,6 +558,16 @@ class PermissionSuite extends munit.FunSuite:
     assertEquals(env.host.exec(s"${fixture("cat")} < ${around}k/config").stdout, "original\n")
     assertEquals(Path.of(env.host.exec(fixture("pwd"), Nil, s"${around}k").stdout.trim), env.root.resolve("kept"))
 
+  test("input sent right after spawn comes after the input given at the start"):
+    val env = TestEnv(commands = permits("cat"))
+    import env.given
+    val first = "x" * 200000 + "\n" // more than a pipe holds, so its write takes a while
+    val cat = env.host.spawn(fixture("cat"), ExecOptions(stdin = first))
+    cat.send("second\n")
+    cat.closeStdin()
+    val out = cat.waitFor(10000).map(_.stdout).getOrElse("")
+    assertEquals(out, first + "second\n")
+
   test("spawn: talk to a process while it runs, read what it says, and it is reported to the user"):
     val env = TestEnv(commands = permits("cat", "sort"))
     import env.given
@@ -603,6 +632,9 @@ class PermissionSuite extends munit.FunSuite:
     assertEquals(env.host.killProcess("p1"), Left("no running process 'p1' (see /ps)")) // p1 (the sleeper) is gone
     assert(env.host.killProcess(s"p${many.head.id}").exists(_.startsWith("killed p")))
     assert(env.host.processSummary.linesIterator.size == Host.MaxProcesses - 1)
+    // A bare /kill stops nothing: stopping every process takes the word.
+    assert(env.host.killProcess("").left.exists(_.contains("/kill all")))
+    assertEquals(env.host.runningProcesses.size, Host.MaxProcesses - 1)
     env.host.killProcesses() // what the app does when the session ends
     assert(many.forall(p => p.waitFor(5000).isDefined))
     assertEquals(env.host.runningProcesses, Nil)

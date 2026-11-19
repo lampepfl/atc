@@ -472,7 +472,8 @@ and the configured permissions.
   mode. **Pre-approve narrow, specific subcommands (`git status`, `./mill app.test`); never
   grant an interpreter, a shell, or a wildcard like `git *` over a tool that can run code.**
   Even `git status` runs programs named in the configuration of the repository it runs in, so
-  keep every `.git` read-only, as the starter project config does.
+  keep every `.git` read-only, as the starter project config does; with git 2.38 or newer, ATC
+  also has git refuse a directory that only looks like a repository.
 - **Allowed hosts can receive data.** The agent may send any non-classified data available
   to it to an allowed host. The type system prevents this only for `classified` content.
   Allow only hosts you trust to receive project data.

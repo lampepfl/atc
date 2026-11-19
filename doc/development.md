@@ -641,7 +641,10 @@ each; `TextSink` decodes UTF-8 and BOM-marked UTF-16 output incrementally. Foreg
 commands retain prefixes; spawned processes retain recent output. Results use the rightmost
 non-zero pipeline exit code. `readUntil` consumes through a regex match; on timeout it throws
 and keeps output unread. `waitFor` returns `None` on timeout. Process termination includes
-pipeline stages and descendants. Shutdown kills registered processes.
+pipeline stages and descendants. Shutdown kills registered processes. Descendants are found
+through the stages while they run: a process that a stage leaves behind when it exits (a
+launcher that daemonizes a server) is reparented, and neither `/ps`, `/kill`, scope exit nor
+shutdown reaches it. Java offers no portable process group to close that gap.
 
 `parallel(tasks)` runs the tasks on a pool of at most eight daemon threads created for that
 call. A nested call, made from one of those threads, runs its tasks one after another on
@@ -928,12 +931,19 @@ after which `git branch` deletes, moves and renames; the template denies `git br
 Git also runs programs named in the configuration of the repository it finds from its working
 directory (`core.fsmonitor` for `git status`), and a command's working directory needs only
 read access. The template's `.git` rule is therefore a component pattern: with `./.git` alone
-the agent could write `x/.git/config` and run `git status` in `x`. Git also accepts a
-directory laid out as a bare repository (`HEAD`, `objects`, `refs`), which no `.git` rule
-covers. The template names documentation hosts one by one: a wildcard such as `*.golang.org`
-or `*.scala-lang.org` also covers services that fetch a URL the caller names (the Go module
-proxy) or publish what they are sent (code playgrounds), which would carry data on to hosts
-that no list names.
+the agent could write `x/.git/config` and run `git status` in `x`. Git would also take a
+directory laid out as a bare repository (`HEAD`, `objects`, `refs`) for one, which no `.git`
+rule covers, and run the `textconv` or `diff.external` program its `config` names during
+`git show` or `git log -p`. Every command ATC starts therefore gets
+`safe.bareRepository=explicit` through `GIT_CONFIG_COUNT`, appended after the numbered
+parameters it inherits or the agent sets, and at the end of `GIT_CONFIG_PARAMETERS` when that
+is set, since git reads it afterwards and the last value wins
+(`HostProcesses.refuseImplicitBareRepositories`). A `-c` on git's own command line comes later
+still and needs a command pattern that permits it. Git before 2.38 ignores the setting. The
+template names documentation hosts one by one: a wildcard such as `*.golang.org` or
+`*.scala-lang.org` also covers services that fetch a URL the caller names (the Go module proxy)
+or publish what they are sent (code playgrounds), which would carry data on to hosts that no
+list names.
 
 **Windows.** Use `/` separators in configuration on every platform: in JSON,
 `"C:/Users/alice/project"` (a native backslash starts a JSON escape, so the equivalent form

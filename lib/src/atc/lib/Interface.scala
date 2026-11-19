@@ -147,7 +147,9 @@ abstract class Network private[atc] () extends caps.ExclusiveCapability
 /** A process started with `spawn` that you can interact with while it runs (a
  *  REPL, a dev server, a watcher). It captures the `ex` used to start it, so it
  *  cannot be used inside `Classified.map`. It lives until it exits, you `kill()`
- *  it, or the session ends; `runningProcesses` finds the live ones again. One
+ *  it, or the session ends; `runningProcesses` finds the live ones again. A
+ *  program it leaves running after it exits is no longer tracked or killed, so
+ *  spawn the server itself, not a launcher that starts it in the background. One
  *  spawned inside a `requestExec` block is also killed when that block ends,
  *  however the user answered, so start a long-lived process outside such a block;
  *  one spawned inside `withEnv` keeps running.
@@ -537,7 +539,8 @@ trait Interface:
    *  (`execOutput` does). Pipelines have at most 16 stages.
    *
    *  The default working directory is `.`. Bare programs are found on `PATH`, not
-   *  implicitly in the working directory; use `./program` to select one there.
+   *  implicitly in the working directory (unless the user's `PATH` itself has an empty or
+   *  relative entry); use `./program` to select one there.
    *  Quote arguments containing spaces (on Windows, `\` is a path separator).
    *  A timeout throws with the output so far. Requires both `Exec^` and
    *  `FileSystem^`. */
