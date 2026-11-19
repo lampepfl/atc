@@ -171,6 +171,9 @@ class RenderSuite extends munit.FunSuite:
     assertEquals(plain(lines.mkString("\n")), "val s = \"\"\"a\nb\"\"\"\nval y = 1")
     assertEquals(plain(Highlight.scala("val = (((\"x").mkString), "val = (((\"x")
     assert(!Highlight.scala("// c").head.contains(s"$E[34m")) // comments not blue
+    // The highlighter's parser overflows the stack on code nested this deep: it is shown plain.
+    val nested = "val x = " + "(" * 20000 + "1" + ")" * 20000
+    assertEquals(Highlight.scala(nested), List(nested))
 
   test("a long comment in a scala fence stays a comment to its end, with the compiler's highlighter"):
     val m = MarkdownStream(glyphs, Highlight.scalaTail)

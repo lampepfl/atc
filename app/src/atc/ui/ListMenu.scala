@@ -197,8 +197,11 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
     val in = screen.terminal.reader()
     def next(timeout: Long) =
       try in.read(timeout)
-      catch case _: IOException => -1
-    val opened = System.nanoTime()
+      catch
+        case _: IOException => -1
+    // Enter counts once the menu has been open, and free of typed text it ignores, for
+    // `EnterDelayNanos`: a line the user was typing as the menu opened must not end on a choice.
+    var quietSince = System.nanoTime()
     var pasting = false
     var size = (screen.width, screen.height)
     var outcome: MenuState.Outcome = MenuState.Outcome.Continue
@@ -214,7 +217,12 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
             case MenuKey.PasteStart => pasting = true
             case MenuKey.PasteEnd => pasting = false
             case _ if pasting => ()
-            case MenuKey.Enter if System.nanoTime() - opened < ListMenu.EnterDelayNanos => ()
+            // Too early, and the wait starts over: a held key or an impatient second press
+            // must not land on the row the menu opened on.
+            case MenuKey.Enter if System.nanoTime() - quietSince < ListMenu.EnterDelayNanos =>
+              quietSince = System.nanoTime()
+            case MenuKey.Text(_) | MenuKey.Backspace if !state.filterable => quietSince = System.nanoTime()
+            case MenuKey.Space if !state.filterable && !state.multi => quietSince = System.nanoTime()
             case MenuKey.FocusIn => alerts.focusChanged(true)
             case MenuKey.FocusOut => alerts.focusChanged(false)
             case key =>
@@ -223,7 +231,7 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
     outcome
 
 private[ui] object ListMenu:
-  /** How long after a menu opens Enter is ignored. */
+  /** How long after a menu opens, or after text typed into a menu that takes none, Enter is ignored. */
   val EnterDelayNanos: Long = 300_000_000L
 
   /** The keys a menu takes, for the footer, separated by `dot`. */

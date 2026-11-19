@@ -37,6 +37,9 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
   private val terminal: Terminal = screen.terminal
   private val plain = screen.plain
 
+  /** Ctrl-O in a read: `Tui` switches between the compact and the expanded view. */
+  @volatile var onToggle: () => Unit = () => ()
+
   /** The predicted next message (`suggest`), drawn as ghost text after what
     * is typed as long as that is a prefix of it, at the main prompt only. */
   @volatile var suggestion: Option[String] = None
@@ -165,12 +168,18 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
   private val keyMap = reader.getKeyMaps.get(LineReader.MAIN)
 
   if !plain && keyMap != null then
+    // At the main prompt only: the key map is shared with answers and secrets, where the
+    // line this submits would be taken as the answer, the instructions or the key.
     val cycle: Widget = () =>
-      if reader.getBuffer.length == 0 then
+      if mainPrompt && reader.getBuffer.length == 0 then
         reader.getBuffer.write(PromptReader.CycleModeLine)
         reader.callWidget(LineReader.ACCEPT_LINE)
       true
     reader.getWidgets.put("atc-cycle-mode", cycle)
+    // JLine binds Ctrl-O to accept-line-and-down-history, which would send a half-typed
+    // request; here it switches the view, as it does during a turn.
+    reader.getWidgets.put("atc-toggle-view", (() => { onToggle(); true }): Widget)
+    keyMap.bind(Reference("atc-toggle-view"), "\u000f")
     /** What `capability` sends according to the terminfo, when it says, then the usual `fallbacks`. */
     def key(capability: InfoCmp.Capability, fallbacks: String*): List[String] =
       (Option(KeyMap.key(terminal, capability)).toList ++ fallbacks).distinct.filter(_.nonEmpty)

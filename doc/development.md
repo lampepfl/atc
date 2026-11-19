@@ -29,14 +29,16 @@ parallel queue can duplicate compiler-intensive suites. If the Mill server canno
 use `./mill --no-server ...`. The permission suite starts a local HTTP server and needs
 permission to bind a loopback socket.
 
-`dist` writes `atc`, `atc.ps1`, `atc.cmd`, `atc.jar`, `atc-lib.jar` and `version.txt` to
-`out/dist.dest/`. The Unix launcher and JARs form the Unix distribution; Windows uses the
-PowerShell launcher with the same JARs. The batch launcher is a compatibility entry point.
+`dist` writes `atc.jar` and `atc-lib.jar` to `out/dist.dest/`, the files a release carries.
+The Unix `atc` wrapper and the Windows `atc.ps1` wrapper download them and start Java
+themselves. The version comes from `atc/version.txt` in the application JAR.
 
-`./start.sh` and `.\start.ps1` rebuild a stale distribution, then load `.env` and launch ATC.
+`./start.sh` and `.\start.ps1` rebuild a stale distribution, then load `.env` and launch ATC
+through the wrapper: `start.sh` runs `atc run` with `ATC_CACHE_DIR` set to the distribution,
+and `start.ps1` loads `atc.ps1`'s functions and calls `Start-Atc` on it.
 Before the build they read only `ATC_SKIP_BUILD` from the environment file, so a Mill server
 the build starts does not keep API keys in its environment. The distribution is stale when a
-file in `build.mill`, `app/src`, `app/resources`, `lib/src` or `windows` is newer than
+file in `build.mill`, `app/src`, `app/resources` or `lib/src` is newer than
 `out/dist.dest/build.stamp`, which the scripts write after each successful build; the stamp
 is the reference because Mill does not rewrite a jar whose inputs have the same content.
 Environment files hold literal `KEY=value` entries without shell expansion, and a non-empty
@@ -49,7 +51,7 @@ checkout; ATC keeps the launch directory unless `-C` overrides it.
 | `ATC_ENV_FILE` | Alternative environment file |
 | `ATC_SKIP_BUILD=1` | Skip the start script's rebuild check |
 | `ATC_JAVA_OPTS` | Additional JVM flags for every launcher, applied after the defaults and before the command line's `-Xmx`/`-Xms` |
-| `-Xmx<size>`, `-Xms<size>` (launcher arguments) | JVM heap flags that `atc`, `start.sh`, `start.ps1` and `atc.ps1` remove from the arguments (never the value of an option such as `-p`) and pass to `java` last, so they win |
+| `-Xmx<size>`, `-Xms<size>` (launcher arguments) | JVM heap flags that `atc` and `atc.ps1` (and so `start.sh` and `start.ps1`) remove from the arguments (never the value of an option such as `-p`) and pass to `java` last, so they win |
 | `ATC_STARTUP_CACHE=0` | Run without the JVM startup cache (`atc`, `start.sh`) |
 | `ATC_DEBUG` | Enable stack traces and stream/terminal diagnostics when set; logged text has terminal controls removed |
 | `ATC_ASCII` | Select ASCII terminal glyphs when set |
@@ -57,16 +59,16 @@ checkout; ATC keeps the launch directory unless `-C` overrides it.
 ### JVM settings
 
 Every launcher starts the JVM with `-Xms256m -Xmx2g -Xss4m -XX:-UsePerfData`
-(`DEFAULT_JVM_OPTS` in `atc`; the same list in `start.sh`, the dist `atc` script, `atc.ps1`
-and `start.ps1`). `VERSIONED_JVM_OPTS` adds `--sun-misc-unsafe-memory-access=allow` on Java
-23+, because Scala's `LazyVals` use `sun.misc.Unsafe` and JEP 471 otherwise prints four
-warning lines on every run, and `--enable-native-access=ALL-UNNAMED` on Java 24+, because
-JLine loads a native terminal library (JEP 472). The dist `atc` script does not detect the
-Java version and adds neither. With the dist jar and the echo model on JDK 25, a 100-turn
-session of reads, writes and commands keeps 130 to 230 MB live and runs down to `-Xmx192m`,
-so 2 GB is headroom. The cap also bounds a runaway sandbox computation: one line building a
-large vector reaches 5 GB under the JVM's quarter-of-RAM default, and under 2 GB it fails
-in five seconds with an out-of-memory error the session survives. `-Xss4m` lets the
+(`DEFAULT_JVM_OPTS` in `atc`, which `start.sh` runs; the same list in `Get-JvmOptions` of
+`atc.ps1`, which `start.ps1` runs). `VERSIONED_JVM_OPTS` adds
+`--sun-misc-unsafe-memory-access=allow` on Java 23+, because Scala's `LazyVals` use
+`sun.misc.Unsafe` and JEP 471 otherwise prints four warning lines on every run, and
+`--enable-native-access=ALL-UNNAMED` on Java 24+, because JLine loads a native terminal
+library (JEP 472). With the dist jar and the echo model on JDK 25, a
+100-turn session of reads, writes and commands keeps 130 to 230 MB live and runs down to
+`-Xmx192m`, so 2 GB is headroom. The cap also bounds a runaway sandbox computation: one line
+building a large vector reaches 5 GB under the JVM's quarter-of-RAM default, and under 2 GB
+it fails in five seconds with an out-of-memory error the session survives. `-Xss4m` lets the
 compiler's recursion guard report a 3000-term expression that overflows the 1 MB Linux
 default stack; stacks are only reserved, so it costs nothing.
 
@@ -77,9 +79,10 @@ since the JDK 25 cache carries method profiles): an AOT cache on Java 25+
 JDK and JVM options, and a stale one makes the JVM print errors (a CDS archive is not
 regenerated), so the launchers use one only when it is known to be current.
 `~/.atc/jars/startup/key.txt` (`out/dist.dest/startup/` for `start.sh`) records the JDK's
-`-version` output, the release marker, the version-gated JVM options, `ATC_JAVA_OPTS` and the
-command line's `-Xmx`/`-Xms`, and the cache is current when the key matches and no jar is
-newer than it. Otherwise one echo-model `-p 'run: 1 + 1'` run, whose output is discarded,
+`-version` output, the release marker, the default and version-gated JVM options,
+`ATC_JAVA_OPTS` and the command line's `-Xmx`/`-Xms`, and the cache is current when the key
+matches and no jar is newer than it. Otherwise one echo-model `-p 'run: 1 + 1'` run, whose
+output is discarded,
 builds the cache with the same options. A build that leaves no file writes the key anyway, so
 it is not retried until the JDK, release or options change. The cache is an optimization: an
 unwritable directory or key runs without it, and an interrupted training run removes its
@@ -340,12 +343,25 @@ a timeout still ends the evaluation. Nothing else a classified callback throws c
 the classified value, so no catch or `finally` in agent code can observe a secret-dependent
 failure. Authorized output methods apply the same rule to user-defined rendering, including
 `toString` and `getMessage`: a failure there becomes user-only text and never reaches the
-model.
+model. An evaluation captures `System.out` and `System.err` for the model, and
+`Throwable.printStackTrace` writes there without any capability, so the capture drops what a
+thread writes while it runs classified code (`ClassifiedImpl.running`).
 
 `classifiedChat(String)` is treated as pure. This assumes the configured endpoint is
 isolated and has no observable effects beyond its result; ATC cannot establish that about
 an arbitrary endpoint. Timing, termination and resource-consumption side channels are
 outside the classified-data guarantees.
+
+The purity of a callback rests on the compiler tracking every piece of mutable state the
+callback could write. With the pinned compiler, safe mode admits some untracked: a callback
+can write its argument into such an object made outside it, and plain code reads it back.
+The compiler rejects `scala.collection.mutable` and the `StringBuilder` class and companion,
+but admits `new StringBuilder` through the alias in package `scala`; the validator refuses
+that name in safe mode (`mutable-builder`). Still admitted, and each one a way to read a
+classified value, are a builder from `List.newBuilder` and its kind, an iterator, a
+`LazyList`, a Java stream, a `Matcher`, and a `Throwable` through `addSuppressed` or
+`initCause`. Closing these belongs to safe mode, which must track or reject them; a list
+of names in the validator cannot be complete.
 
 **Use overloads instead of default arguments on capability-taking API methods.** Default
 arguments have allowed method wrappers to lose required captures when passed to
@@ -364,9 +380,17 @@ ATC's design is derived from [TACIT](https://github.com/lampepfl/tacit).
 
 Safe mode and capture checking enforce the static capability boundary. `CodeValidator`
 provides early diagnostics for common restricted APIs and unsupported catches. It is a
-lexical check, with possible false positives and false negatives. Keep it small; accepting
-code here does not establish that the code is safe. Disabling safe mode removes the
-compiler's API restrictions.
+lexical check, with possible false positives and false negatives. It takes the positions of
+string literals, character literals and comments from the compiler's scanner, so it reads
+as code exactly what the compiler reads as code: a scan of its own would differ somewhere
+(the `$"` escape, a `\${...}` after `raw`, a quote inside backticks), and code in the
+difference would pass the catch rules unchecked. Keep it small; accepting code here does not
+establish that the code is safe. Disabling safe mode removes the compiler's API restrictions.
+Two rules stand in for restrictions the pinned compiler's safe
+mode lacks: it admits `scala.util.Properties`, which reads any environment variable or
+system property, and `scala.runtime`, where `LazyVals` reaches `sun.misc.Unsafe` and
+`coverage.Invoker` writes a file into a directory of the caller's choice. The validator
+refuses both (`sys-properties`, `scala-runtime`) until safe mode does.
 
 Every catch arm must be a typed pattern (`case e: IllegalStateException =>`) of a type that
 is not fatal. A bare catch-all, a catch of `Throwable` or `Error`, and an extractor or
@@ -405,10 +429,23 @@ which would silence it. Compiler diagnostics and runtime results are returned
 as `ExecutionResult`; an exception recorded by `CappedRendering` marks evaluation failure.
 A string containing the word `error` in ordinary output does not determine run success.
 
-With an execution timeout configured, evaluation runs on a daemon worker. `ExecutionClock`
+Evaluation runs on a daemon worker, with or without an execution timeout. `ExecutionClock`
 excludes nested waits for user input, external commands and model calls that have their own
 timeouts. Interrupts set the compiler's REPL stop flag and interrupt blocking operations.
-`skipInvalidWrapper` advances past a potentially incomplete wrapper class. Completed file,
+A stop that arrives while the code is validated or parsed still keeps it from running, and so
+does one that arrived just before the run, which the turn's cancellation passed to `run`
+shows. An interrupt returns after the same two-second grace a timeout gives, even when the
+evaluation is in host code that ignores it; that evaluation keeps running, like one a timeout
+cannot stop.
+Pattern matching is host code of that kind, and a glob or regular expression from the agent,
+a config or a `.gitignore` can run for longer than any timeout on the right text (`*a*a*…*b`
+against a long name of `a`s). It reads its input through `Interruptible`, which gives up once
+the thread is interrupted, so such a match ends with the stop. A loop inside library code that
+agent code calls, such as `LazyList.from(0).iterator.size`, is still not stopped.
+`skipInvalidWrapper` advances past a potentially incomplete wrapper class, also when an
+exception escapes the driver, as one from a value's `toString` does while the REPL shows the
+value: the wrapper is loaded then, but the driver returned no state for it. The message of
+such an exception is agent code and is read on the evaluation thread. Completed file,
 process or network effects are not rolled back after interruption or timeout. A timed-out
 result still carries what the snippet printed before the limit (the worker's output if it
 stopped within the two-second grace, else a snapshot of the capture buffer it is still
@@ -520,13 +557,27 @@ Neither decision adds a permanent deny rule; configured deny rules remain unchan
 File patterns match a path or an ancestor. Component globs match at any depth; relative
 patterns with separators use the layer's base; absolute patterns and `~` use an absolute
 path. `PathGlob` handles slash-based globs on all platforms. Canonicalization resolves
-symlinks, including dangling write targets. Directory traversal does not follow symlinked
+symlinks, including dangling write targets, and no name of its result is a link, so the path
+that is judged is the path that is opened. Where the OS gives up on a lookup for the number of
+links in it, `PlatformPath.canonical` resolves the path name by name under a real parent; a
+loop, or a chain of more than 40 links beyond those the OS follows, is refused with a
+`FileSystemException`. A link that cannot be resolved is left out of listings and cannot be
+deleted or moved through the file API. A `FileEntry` resolves its path again at every
+operation and checks and acts on that result, so a link planted after `access` is judged by
+its own target. A path whose last name is a link, and a link in a listing, keep the link's own
+path, judged by what it reaches; `delete` and the source side of `move` remove the link itself,
+checked as a write where the link sits and at what it reaches (a rule names the target), so
+deleting a tree leaves what its links reach and a link cannot be replaced past a read-only
+rule. A denied link names its directory in the suggested request, since a request for the
+link would be resolved to its target. Directory traversal does not follow symlinked
 directories or Windows junctions. Filesystem checks and subsequent operations are not an
 OS-level transactional sandbox. On Windows and macOS (`Platform.caseInsensitivePaths`) every
 pattern, exact paths and the root of an anchored glob included, compares names
 case-insensitively, because canonicalization corrects the case of existing names only: a new
 `.ATC` or `SECRETS` is the same directory as `.atc` or `secrets` there and must fall under its
-rule. An agent path on a UNC share other than the working directory's is refused before
+rule. The choice is per platform, not per volume: on a case-sensitive APFS volume a rule also
+covers names that differ from it only in case, which widens grants as well as protections. An
+agent path on a UNC share other than the working directory's is refused before
 canonicalization, which would otherwise contact the server even from a read-only file system.
 
 `GitIgnore` controls visibility in listings and recursive searches, independently of
@@ -538,10 +589,11 @@ holds the configured rules and the session grants; request scopes do not count. 
 `.gitignore` is judged by its target. A refusal lasts only until the session grants change,
 so a `.gitignore` applies from the first listing after the user grants access for the session.
 
-Host patterns are case-insensitive and normalize numeric IP literals. Deny rules are checked
-at use, even when a requested pattern was previously approved. Each permission decision is
-included in the tool result so the model knows whether approval was temporary, session-wide
-or denied.
+Host patterns are case-insensitive and normalize numeric IP literals. Names are never
+resolved, so a `denyHosts` entry for an address does not cover a name that resolves to it.
+Deny rules are checked at use, even when a requested pattern was previously approved. Each
+permission decision is included in the tool result so the model knows whether approval was
+temporary, session-wide or denied.
 
 ### Request blocks from the agent's side
 
@@ -609,7 +661,7 @@ the `${VAR}`s of `key` and `headers`, `keyEnv`, and the secrets the SDK reads fr
 environment for a provider without a `url`, whatever spelling of its `api` it uses), since a
 command that prints its environment would hand them to the model. They lose the SDK
 variables even when a key is configured, because a key whose variable is unset lets the SDK
-read them. They also lose the `ATC_INTERNAL_*` variables in which the Windows launchers pass
+read them. They also lose the `ATC_INTERNAL_*` variables in which the Windows wrapper passes
 the original command line.
 
 `withEnv` hands its block an `ExecImpl` with the parent's scope and the merged variables, and
@@ -625,7 +677,10 @@ each; `TextSink` decodes UTF-8 and BOM-marked UTF-16 output incrementally. Foreg
 commands retain prefixes; spawned processes retain recent output. Results use the rightmost
 non-zero pipeline exit code. `readUntil` consumes through a regex match; on timeout it throws
 and keeps output unread. `waitFor` returns `None` on timeout. Process termination includes
-pipeline stages and descendants. Shutdown kills registered processes.
+pipeline stages and descendants. Shutdown kills registered processes. Descendants are found
+through the stages while they run: a process that a stage leaves behind when it exits (a
+launcher that daemonizes a server) is reparented, and neither `/ps`, `/kill`, scope exit nor
+shutdown reaches it. Java offers no portable process group to close that gap.
 
 `parallel(tasks)` runs the tasks on a pool of at most eight daemon threads created for that
 call. A nested call, made from one of those threads, runs its tasks one after another on
@@ -636,7 +691,9 @@ the snippet; the first failure in task order is rethrown, and a fatal throwable 
 ordinary exceptions so that the REPL's stop signal reaches the evaluation thread. Every
 instrumented REPL class checks the stop flag on every thread, so an interrupt or timeout
 stops busy tasks too, and interrupting the calling thread interrupts workers blocked in a
-host call. Shared host state is thread-safe: the TUI's output methods are synchronized,
+host call. An interrupted call returns once its workers have ended, or after two seconds, so
+the stop flag is still raised while they finish and a later evaluation does not clear it
+under them. Shared host state is thread-safe: the TUI's output methods are synchronized,
 `Policy`, the process registry and the TODO list lock their mutable state, and
 `Tui.popupBlock` shows questions and permission prompts from several tasks one at a time.
 
@@ -656,10 +713,17 @@ transport and response failures within `Classified`.
 ## Configuration semantics
 
 Layers load in this order: global, nearest project, explicit `-c` file. A project is the
-nearest ancestor containing `.atc/config.json` or `.atc/keys.properties`. A file named
-twice, compared by canonical path so that a link to it counts as the same file, retains its
-first role. Project rules are anchored to the directory containing
-`.atc` and grant access only within it; their restrictions apply wherever they match.
+nearest ancestor containing `.atc/config.json` or `.atc/keys.properties`. One whose `.atc`
+directory or project files belong to another user is passed over, with a warning, for the
+next one above (`Config.foreignProjects`): in a shared directory such as `/tmp` anyone can
+put a config above where ATC runs, and its file rules and instructions need no trust. Files
+of the administrator (`root`, and on Windows the Administrators group, `SYSTEM` and
+`TrustedInstaller` by their English names) count as the user's own, as does everything on a
+file system that records no owner. When the project config in use lies above the working
+directory, the start names it. A file named twice, compared by canonical path so that a link
+to it counts as the same file, retains its first role. Project rules are anchored to the
+directory containing `.atc` and grant access only within it; their restrictions apply
+wherever they match.
 
 | Setting | Merge rule |
 |---|---|
@@ -690,15 +754,24 @@ the offered starter config) are trusted as they are written, unless the director
 waited for trust, such as for a `keys.properties` the repository shipped: the prompt then
 shows the starter config's grants with it. Neither writes the home directory's
 `.atc/config.json`, which is the global config, nor through a symbolic link at `.atc`, its
-`config.json` or its `.gitignore`. Other edits, such as a new `model`, do not change the
-fingerprint.
+`config.json` or its `.gitignore`. The commands that edit a project config (`/model`,
+`/effort`, `/classifiedmodel`, `/config`, `/providers`) refuse a linked `.atc` or
+`config.json` too: a repository can ship either to point the write at another file. The
+global config is the user's own and is written through a link they made. Other edits, such
+as a new `model`, do not change the fingerprint.
 
 Only explicitly defined project settings narrow a value. `executionTimeoutMs` defaults to
 300000; a JSON `null` clears it and means no limit. Reading a layer
-(`ConfigValidation.requireExact`) refuses a `null` for a setting that is not optional, which
-the JSON reader would take as `null`, `0` or `false`, and a number that an integer setting
-would truncate or clamp, such as `1.5` or `1e10`. `Configuration.rules` is the complete rule
-list; do not build policy from `settings.files`, which contains only granting-layer entries.
+(`ConfigValidation.requireExact`) refuses a key that is not a setting, which the JSON reader
+would skip, so that a misspelt `denyCommands` cannot load and deny nothing. It refuses a
+`null` for a setting that is not optional, which the JSON reader would take as `null`, `0`
+or `false`, a number that an integer setting would truncate or clamp, such as `1.5` or
+`1e10`, and a value of another kind than its setting, which the reader would convert:
+`"true"` for a boolean, `5` for a string, `"7"` for a number. Project trust finds the
+settings that need it by the kind written, so a `"webSearch": "true"` must not be in force
+unasked. A `contextWindow` alone may be a number or text such as `"256k"`.
+`Configuration.rules` is the complete rule list; do not build policy from `settings.files`,
+which contains only granting-layer entries.
 Configuration validation checks modes, limits, file rules, provider and model settings and
 the uniqueness of model references before execution; `model` and `classifiedModel` are
 resolved at the start (see [Models and providers](#models-and-providers)).
@@ -805,8 +878,9 @@ writes a global config naming only that provider, binds the key in
 `~/.atc/keys.properties` (`KeyBindings.bind`, owner-only, other lines kept), stores the
 list and records the model as the last one, so the session starts without another fetch.
 *Configure providers myself* writes the starting config with every preset and exits;
-*Not now* or Esc runs on the built-in starting config. `-p` runs and terminals without
-menus never ask.
+*Not now* or Esc runs on the built-in starting config, whose providers that need no key (a
+ChatGPT sign-in, a signed-in Claude Code) are then the ones in use. `-p` runs never ask, and a
+terminal without menus is asked only whether to write the starting config.
 
 The first run and `/providers` → *Add a provider* also offer a custom OpenAI-compatible
 (`api` `openai`, Chat Completions) or Anthropic-compatible server (`FirstRun.custom`): a name
@@ -865,10 +939,11 @@ rule applies to the matched path **and its entire subtree**. Every matching rule
 and a project rule grants only inside its project ([Policy algebra](#policy-algebra)). A
 path is classified or locked if any matching rule says so.
 
-**Classified** content is only observable as `Classified[String]`, and a classified
-directory's structure is classified too (listing it needs `childrenClassified`/`walkClassified`;
-`walk`/`grepRecursive`/`find` do not descend into it). A plain `write` to a classified path
-is refused, and so is `writeClassified` to a non-classified path. **Locked** means no prompt
+**Classified** content is only observable as `Classified[String]`, and so is a classified
+directory's listing (`childrenClassified`/`walkClassified`; `walk`/`grepRecursive`/`find` do
+not descend into it). A path named inside it can still be probed: `exists`, `isDirectory` and
+`isClassified` answer for it. A plain `write` to a classified path is refused, and so is
+`writeClassified` to a non-classified path. **Locked** means no prompt
 can widen the rule. `"respectGitignore": true` (the default) additionally hides what git
 ignores from listings; that is visibility, not permission, so an ignored file is still
 readable by name.
@@ -884,9 +959,12 @@ A command run inside `withEnv` is checked by itself and then once per variable, 
 every one of these lines. One variable at a time keeps a `*` from reaching over a second
 assignment (`GIT_TRACE=* git *` must not cover `LD_PRELOAD=…`), and requiring the bare command
 keeps a grant of `NAME=value` alone, a word prefix of every such line, from permitting any
-command. Only an allow pattern that itself begins with `NAME=` permits such a line, so `*`
-or `*.sh` permits commands but no variable; deny patterns match either way. So `"RUST_LOG=*"`
-permits any value of that variable on commands permitted anyway, and
+command. An allow pattern that begins with `NAME=` matches in two parts, the assignment and
+then the command, so a `*` in the value cannot take in the command word: `PATH=* npm *` does
+not permit `PATH="x npm y" make`. A deny pattern matches the whole line, so `FOO=*curl*`
+refuses `FOO=1 curl x`. Only an allow pattern that itself begins with `NAME=` permits such a
+line, so `*` or `*.sh` permits commands but no variable; deny patterns match either way. So
+`"RUST_LOG=*"` permits any value of that variable on commands permitted anyway, and
 `"denyCommands": ["LD_PRELOAD=*"]` refuses that variable everywhere. A program word of
 the form `NAME=…` is refused, which keeps these lines distinct from command lines. On Windows
 the name in such a line ignores case and the command after it is normalized like a bare one.
@@ -896,11 +974,32 @@ are not followed. `denyCommands` and `denyHosts` use the same syntax: a deny rul
 every allow rule, including a session grant, an open `request*` scope, and `--approve-all`.
 The template's shell denials are bare names: `"bash"` blocks both `bash` and `bash -c ...`,
 but not an explicit `/bin/bash`, a wrapper, or a renamed interpreter; no finite deny list
-can classify every program that might execute code. The project template pre-approves only
+can classify every program that might execute code. Where program lookup ignores case, on
+Windows and on macOS (`Platform.caseInsensitivePaths`), the program word of a command line is
+compared with a pattern without case, so `"bash"` also blocks `BASH`, which runs the same
+program there; arguments keep their case. The project template pre-approves only
 git commands whose options cannot reach files outside the repository once `--output` is
 denied: `git diff` reads any file when one of two paths lies outside the repository or the
 directory is not one (`git diff .env /dev/null`), and `git blame` through `--contents`,
-`--ignore-revs-file`, `-S` and their abbreviations, so neither is in the template.
+`--ignore-revs-file`, `-S` and their abbreviations, so neither is in the template. A pattern
+without `*` is a word prefix, and git lets a later `--no-list` (or `--no-l`) undo `--list`,
+after which `git branch` deletes, moves and renames; the template denies `git branch *--no-l*`.
+Git also runs programs named in the configuration of the repository it finds from its working
+directory (`core.fsmonitor` for `git status`), and a command's working directory needs only
+read access. The template's `.git` rule is therefore a component pattern: with `./.git` alone
+the agent could write `x/.git/config` and run `git status` in `x`. Git would also take a
+directory laid out as a bare repository (`HEAD`, `objects`, `refs`) for one, which no `.git`
+rule covers, and run the `textconv` or `diff.external` program its `config` names during
+`git show` or `git log -p`. Every command ATC starts therefore gets
+`safe.bareRepository=explicit` through `GIT_CONFIG_COUNT`, appended after the numbered
+parameters it inherits or the agent sets, and at the end of `GIT_CONFIG_PARAMETERS` when that
+is set, since git reads it afterwards and the last value wins
+(`HostProcesses.refuseImplicitBareRepositories`). A `-c` on git's own command line comes later
+still and needs a command pattern that permits it. Git before 2.38 ignores the setting. The
+template names documentation hosts one by one: a wildcard such as `*.golang.org` or
+`*.scala-lang.org` also covers services that fetch a URL the caller names (the Go module proxy)
+or publish what they are sent (code playgrounds), which would carry data on to hosts that no
+list names.
 
 **Windows.** Use `/` separators in configuration on every platform: in JSON,
 `"C:/Users/alice/project"` (a native backslash starts a JSON escape, so the equivalent form
@@ -951,8 +1050,9 @@ read at request time; `Models` caches one client per reference, so `/model` sets
 client's effort back to `ChatModel.defaultEffort` (its `reasoning`).
 
 Web search is best effort. `ModelCatalog` gives every model without its own `webSearch`
-the top-level one, listed models included. `SpecModel.withWebSearchFallback` resends a
-streaming request without the tool when the provider answers 400 or 422 naming web
+the top-level one, listed models included. Only a request that offers tools carries it
+(`SpecModel.searches`), so compaction makes no searches. `SpecModel.withWebSearchFallback`
+resends a streaming request without the tool when the provider answers 400 or 422 naming web
 search before anything was streamed, and turns the tool off for that client. A gateway
 that drops the tool silently cannot be detected. `ChatModel` has streaming `complete` and
 one-shot `simple` operations. Provider adapters normalize stop reasons into `CompletionStop`;
@@ -1064,8 +1164,10 @@ context outside ATC turned off: `--tools=` (no built-in tools; `WebSearch` alone
 `webSearch` is on), `--setting-sources=` (no settings files, hooks, plugins or skills),
 `--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence`, and
 `--permission-mode=dontAsk --permission-prompts=none` with only ATC's MCP server allowed. The
-environment disables CLAUDE.md files, auto memory, claude.ai connectors, auto-compaction (ATC
-compacts) and updates, and drops `ANTHROPIC_API_KEY`, which would replace the subscription.
+environment disables CLAUDE.md files, `@path` file mentions in prompts (the prompts hold tool
+output and file contents, and a mention would attach a file outside ATC's permissions), auto
+memory, claude.ai connectors, auto-compaction (ATC compacts) and updates, and drops
+`ANTHROPIC_API_KEY`, which would replace the subscription.
 The system prompt goes in the `initialize` control request, since it exceeds Windows'
 command-line limit. The CLI asks the API to omit thinking text by default; the hidden
 `--thinking-display=summarized` flag brings back a summary, or the full text from models that
@@ -1082,9 +1184,9 @@ arrives first waits for its call. A completion carries a `NativeTurn` marker, so
 request can tell whether its history extends what the session has seen: the results of the
 pending calls, or user messages after a finished answer. Any other history (compaction, a
 context cut, an interrupt, a model switch, a restored session), or a changed system prompt,
-tool list or effort, ends the process and starts one that gets the history as a transcript.
-A cancelled request stops its process. One-shot calls run in their own process without
-tools. The model list comes from the `initialize` answer, and each model's context
+tool list, effort or web search setting, ends the process and starts one that gets the
+history as a transcript. A cancelled request stops its process. One-shot calls run in their
+own process without tools. The model list comes from the `initialize` answer, and each model's context
 window from `set_model` followed by `get_context_usage` (`rawMaxTokens`); none of these
 makes a model request. A configured model without `contextWindow` learns its window the
 same way when a session starts, until the CLI has answered once; the session is published
@@ -1101,9 +1203,11 @@ do not change the prompt prefix. Repository-derived scalar values are JSON-quote
 instruction and permission blocks are marked as data.
 
 `CompletionPolicy` selects tool execution, continuation or completion. Calls from truncated
-or blocked responses are not executed, and the assistant message says so even when it has
-text. Output limits add `Msg.Continuation`; server-side pauses can resume directly. A tool
-call the output limit cut gets its own continuation (`AgentMessages.truncatedToolCall`: the
+or blocked responses are not executed. A response that resumes says so in its assistant
+message even when it has text, or the model only sends the calls again; a blocked response
+keeps its text as the provider sent it, and only the user is warned. Output limits add
+`Msg.Continuation`; server-side pauses can resume directly. A tool call the output limit cut
+gets its own continuation (`AgentMessages.truncatedToolCall`: the
 call did not run, split it), since after a plain continuation models send the same call
 again, and at most `Agent.MaxTruncatedCalls` retries. Resume and tool-budget rejection counts
 bound repeated work. The interactive tool budget may be extended by the user;
@@ -1268,9 +1372,13 @@ runs and redirected input neither save nor offer to resume.
 `SessionStore.checkpoint` writes an exclusive temporary file with the usual size limit and
 permissions, then replaces the previous save with an atomic move, or a replacement move where
 the file system has none. Failed writes leave the previous checkpoint intact; temporary
-files are removed. Concurrent instances in one directory share the checkpoint, so the last
-successful save becomes the resume point. A missing or invalid checkpoint never prevents
-startup. ATC installs no shutdown hook, so a forced termination loses the turn in progress.
+files are removed. A save checks tool-call/result pairing as `/resume` does, so a history
+that could not be resumed never replaces the previous checkpoint, and a turn that fails, by
+a fatal error too, first answers its open tool calls. Concurrent instances in one directory
+share the checkpoint, so the last successful save becomes the resume point. A missing or
+invalid checkpoint never prevents
+startup. No shutdown hook saves the session (the one ATC installs kills spawned processes),
+so a forced termination loses the turn in progress.
 
 ### Input prediction
 
@@ -1298,7 +1406,11 @@ plural forms of status and summary lines. `Glyphs` chooses Unicode or ASCII mark
 markers and control separators included: ASCII with `ATC_ASCII` or on a terminal that
 reports no UTF encoding. `Ansi` removes terminal controls from external text before display.
 Keep model-visible capture text unchanged; sanitize only at display boundaries. A `-p` run
-uses a dumb UTF-8 terminal.
+uses a dumb UTF-8 terminal on standard error, and writes the model's own answer to standard
+output (`Screen.writeAnswer`), without bullets or indentation, so a script can take the answer
+alone. Notices, progress lines, tool blocks and the statistics go to standard error. The two
+streams share one line position, so a terminal that shows both looks as before. A run that
+took its model itself, because neither `-m` nor a config named one, says which.
 
 `Continuation` handles open brackets, strings and comments for `/run`. Shift-Enter and
 backslash followed by Enter insert a newline. An empty line submits a code block; Ctrl-C
@@ -1330,8 +1442,16 @@ row last chosen; when it ends, one line says what was chosen. Menus read focus r
 a resize redraws them at the new size. A menu turns bracketed paste on while it reads and
 takes nothing inside a paste as a key, and Enter counts only 300 ms after it opens
 (`ListMenu.EnterDelayNanos`), so a newline typed or pasted just before a permission request
-cannot choose its first row, Allow once. The turn's key reader leaves paste mode after a
-pop-up, which may have read the paste's end.
+cannot choose its first row, Allow once. An Enter that comes earlier starts the wait over,
+so a held key or a second impatient press does not choose either. Text typed into a menu
+that takes none restarts that delay, so a correction the user was typing as the menu opened
+cannot end on a choice either. The trust prompt for a project config opens on running without
+its grants, and shows a classified model with what the project's own providers define the
+name as (`provider/alias` and the model id), since the name is the repository's to choose. A
+permission request with more rows than the window has scrolled its first ones out of sight,
+and its patterns are sorted, so filler could choose which: the dialog then says so and opens
+on the denial. The turn's key reader leaves paste mode after a pop-up, which may have read the
+paste's end.
 
 While the main prompt holds a single word starting with `/`, `PromptReader` lists the
 matching `SlashCommand.table` rows in JLine's `post` area under the buffer, with an exact
@@ -1345,13 +1465,16 @@ and a line that starts with an absolute path goes to the agent.
 
 During a turn, Enter submits a correction and unsent text is shown in the status line.
 Bracketed pastes keep their newlines and are collected without submitting individual lines,
-and the footer shows the pasted text once, when the paste ends. The footer uses JLine
-`Status`, updates on phase and input changes, and reserves a terminal row for the active
+and the footer shows the pasted text when the paste ends or pauses, not with every byte. The
+footer uses JLine `Status`, updates on phase and input changes, and reserves a terminal row
+for the active
 operation, elapsed time and mode, model and directory. Spinner writes and status updates
 share the TUI lock. The footer is reserved before the first content line, so adding it does
 not scroll the banner away. Its activity indicator replaces a separate spinner when the
-terminal supports a status line. Idle state shows a short mode, model and directory label;
-menus and answer fields replace it with the applicable keyboard controls.
+terminal supports a status line: JLine draws one only with the scroll-region and cursor
+capabilities `StatusLine.FooterCapabilities` lists, and does not say when it cannot. Idle
+state shows a short mode, model and directory label; menus and answer fields replace it with
+the applicable keyboard controls.
 
 Every footer update goes through `StatusLine.draw`, which flushes the terminal writer after
 JLine's `Status.update`: JLine leaves the closing synchronized-output sequence
@@ -1370,7 +1493,7 @@ old rows, so a shrink can leave some of them above the redrawn region.
 
 Streaming text is flushed at the end of each incoming update. Nested rendering helpers share
 that flush instead of flushing every gutter and style fragment. Live regions compare their
-rows with the previous view and immediately repaint only changed rows. `LiveRegion.redraw`
+rows with the previous view and repaint from the first row that changed. `LiveRegion.redraw`
 cuts every row to one terminal row, measured from column 0 with its gutter and tab stops,
 with newlines shown as spaces, since a row that wrapped would take two terminal rows and
 shift every later redraw. `Screen.fit` stops scanning once the row is full, so a very long
@@ -1394,9 +1517,9 @@ Focus counts only once the terminal has sent a report, since JLine assumes suppo
 terminals. Under the title `atc · <directory>`, a turn's alert shows the start of its last
 prose block, or the outcome with the error or duration when the turn did not finish
 normally (`Alerts.turnText`); permission and question alerts show the request or the
-question. Terminal alerts are OSC 9, 99 (kitty) or 777 sequences, chosen from `TERM` and
-`TERM_PROGRAM`, wrapped for tmux passthrough and written as style text so they leave the
-line tracking alone. System alerts start `osascript`, a Base64-encoded PowerShell toast
+question. Terminal alerts are OSC 9, 99 (kitty) or 777 sequences, chosen from `TERM`,
+`TERM_PROGRAM` and `KITTY_WINDOW_ID`, wrapped for tmux passthrough and written as style text
+so they leave the line tracking alone. System alerts start `osascript`, a Base64-encoded PowerShell toast
 script or `notify-send` on a daemon thread, passing the text as arguments (after `--` for
 `notify-send`, so a body starting with `-` is not an option) or quoted script data, and ring
 the bell if the command cannot start. Alert text is sanitized, put on one line and capped at
@@ -1449,8 +1572,11 @@ row (one-line edits, one after another) is one row with a count. A pop-up, or an
 written outside the block, freezes what the region shows and the block continues below.
 Output that `parallel` tasks write while a pop-up is open is held, up to its last million
 characters, and written when the pop-up closes. Ctrl-O takes the region down and writes the
-block out in full. The expanded view and a plain terminal write every block in full, with
-the result panel; the expanded view breaks output lines at the row's end
+block out in full. At a prompt the key switches the view for what comes next: `PromptReader`
+binds it, because JLine's own binding accepts the line being typed. Its Shift-Tab binding acts
+at the main prompt only, since answer and secret fields share the key map and would take the
+`/mode` line it submits as their text. The expanded view and a plain terminal write every
+block in full, with the result panel; the expanded view breaks output lines at the row's end
 (`Screen.breakLines`, which keeps the column across chunks), so a long line stays inside the
 block's gutter.
 
@@ -1476,8 +1602,8 @@ continuation lines under the question text, like permission details. For multipl
 selections, chosen answers retain their display order and custom text is appended. User
 input is returned to the host's `ask` call; only its terminal display is sanitized.
 
-The prompt history is owner-only on POSIX systems and rejects final symlinks. Only the main
-prompt adds to it; answers and secrets typed into pop-ups stay out.
+The prompt history is owner-only on POSIX systems and rejects final symlinks. The main
+prompt and `/run` blocks add to it; answers and secrets typed into pop-ups stay out.
 
 ## Testing and conventions
 
@@ -1539,8 +1665,11 @@ The Unix `atc` wrapper installs to `~/.local/bin` and keeps the JARs and the sta
 in `~/.atc/jars`; `ATC_INSTALL_DIR` and `ATC_CACHE_DIR` override those locations. Release
 downloads require SHA-256 digests for both JARs. Metadata uses jq when available and a
 field-order-dependent fallback otherwise. A cache marker records `release-id|tag`; verified
-updates replace it with the downloaded artifacts. `atc setup` appends a marked snippet that
-puts the install directory on `PATH` to each existing rc file of the user's shell (`.zshrc`
+updates replace it with the downloaded artifacts. While the JARs are moved into place the
+marker reads `incomplete`, which a launch refuses, so an interrupted update cannot start a new
+application JAR with an old library JAR; a cache without a marker still launches. `atc setup`
+appends a marked snippet that puts the install directory on `PATH` to each existing rc file
+of the user's shell (`.zshrc`
 and `.zprofile` for zsh, `.bashrc`, `.bash_profile` and `.profile` for bash, `.profile`
 otherwise), creates the first of them when none exists, skips a file that already has the
 snippet or names the directory, and warns about a file it cannot write; for fish, which
@@ -1564,9 +1693,10 @@ failures explicitly because Bash conditional callers can disable `errexit`.
 
 The same check then offers a newer wrapper, at most once a day (the `self-check` stamp is
 touched before the check, so a failed download or a declined offer also waits a day) and
-only when the running script is the installed one at `INSTALL_PATH`, so a checkout's copy
-is never overwritten. It stages GitHub's `atc` with the download and `bash -n` check of
-`atc self update`, compares it with `cmp`, and on `y` moves it into place; bash keeps
+only when the running script is the installed one at `INSTALL_PATH` and neither is a
+symlink, so a checkout's copy, also one `INSTALL_PATH` links to, is never overwritten. It
+stages GitHub's `atc` with the download and `bash -n` check of `atc self update`, compares it
+with `cmp`, and on `y` moves it into place; bash keeps
 reading the running script from its old inode, so the new wrapper takes effect at the next
 start. A download that fails skips the offer instead of ending the launch, and an
 interrupted download or prompt removes the staged file. `atc dev <checkout>` copies an
@@ -1579,19 +1709,22 @@ without a byte order mark in the system code page. `setup` writes the wrapper an
 `atc.cmd` shim (which starts it with `-ExecutionPolicy Bypass`) to `%USERPROFILE%\.atc\bin`
 and appends that directory to the user `Path` in the registry, keeping the value's
 `REG_EXPAND_SZ` type and its unexpanded `%VARIABLE%` entries, then broadcasts
-`WM_SETTINGCHANGE` so new terminals see it. It installs the two JARs and the release's
-`atc.ps1` launcher together in `%USERPROFILE%\.atc\jars`, requires SHA-256 digests for all
-three, and runs that launcher, which holds the JVM options. The marker is removed before the
+`WM_SETTINGCHANGE` so new terminals see it. It installs the two JARs in
+`%USERPROFILE%\.atc\jars`, requires SHA-256 digests for both, and starts Java itself
+(`Start-Atc`) with the JVM options of the Unix wrapper. The marker is removed before the
 verified files are moved into place and written after, and a run without a complete install
 downloads the latest release first. Windows does not replace a JAR that a running ATC holds
 open, so an update checks that the files can be opened exclusively before downloading, and
 the startup offer is skipped while they cannot. The startup check has the Unix conditions.
 There is no `dev` command, startup cache or daily wrapper check; `atc self update` replaces
-the wrapper after parsing the download. The native Windows launchers pass Unicode
-application arguments through private `ATC_INTERNAL_*` environment variables.
+the wrapper after parsing the download. Java runs in the JAR directory, and `Start-Atc`
+passes the application arguments and the launch directory through private `ATC_INTERNAL_*`
+environment variables, which keep the Unicode and quotes a Windows command line can lose.
 
 CI builds distributions and runs application tests on Linux, macOS and Windows. Linux
 checks formatting; Unix jobs run the Bash wrapper tests, and the Windows job runs the
 PowerShell wrapper tests under Windows PowerShell and PowerShell 7. Published release tags
-must match `Versions.atc` (with an optional `v` prefix). The release job builds and uploads
-the two JARs and Windows launchers after the platform jobs succeed.
+must match `Versions.atc` (with an optional `v` prefix). After the platform jobs succeed,
+`build-release` builds the two JARs with read-only access, and `publish-release`, the only
+job with write access, uploads them without running project code. A release is public before
+its JARs are attached; both wrappers then say to try again.

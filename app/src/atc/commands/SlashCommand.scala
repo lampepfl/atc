@@ -23,7 +23,7 @@ enum SlashCommand(val usage: String, val help: String, val aliases: String*):
   case Compact extends SlashCommand("/compact [focus]", "summarize conversation context; keep the REPL")
   case Todos extends SlashCommand("/todos", "show tasks and progress", "/todo")
   case Ps extends SlashCommand("/ps", "list background processes", "/processes")
-  case Kill extends SlashCommand("/kill [id|all]", "stop one or all background processes")
+  case Kill extends SlashCommand("/kill <id|all>", "stop one or all background processes")
   case Cost extends SlashCommand("/cost", "show token usage and context", "/usage", "/context")
   case Output extends SlashCommand("/output [number|last] [line]", "inspect retained tool output and file changes")
   case Task extends SlashCommand("/task", "show the task goal, constraints and progress")

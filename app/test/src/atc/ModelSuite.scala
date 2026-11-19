@@ -284,11 +284,30 @@ class ModelSuite extends munit.FunSuite:
       warnings.head
     )
     assertEquals(models.initial(_ => ()).ref, "p/a", "the only model stands in")
+    assert(!models.initialNamed, "the config's model named none, so this one was not chosen by the user")
     intercept[IllegalArgumentException](Models(
       Cli.Args(cwd = project, model = Some("typo")),
       configuration,
       dir
     ).initial(_ => ()))
+
+  test("a key variable that nothing binds is named at the start"):
+    val dir = TestEnv.tempDir("atc-unset-key")
+    val global = dir.resolve("config.json").nn
+    java.nio.file.Files.writeString(
+      global,
+      """{ "providers": { "p": { "api": "echo", "key": "${ATC_TEST_KEY_THAT_IS_NOT_SET}", "models": { "a": {} } },
+        |                 "q": { "api": "echo", "key": "literal", "models": { "b": {} } } } }""".stripMargin
+    )
+    def warnings(model: String): List[String] =
+      val warned = List.newBuilder[String]
+      val models = Models(Cli.Args(cwd = dir, model = Some(model)), Config.load(dir, None, global), dir)
+      try models.initial(warned += _)
+      finally models.close()
+      warned.result()
+    val unset = warnings("a")
+    assert(unset.exists(_.startsWith("ATC_TEST_KEY_THAT_IS_NOT_SET, which the config names as the key of p/a")), unset)
+    assertEquals(warnings("b"), Nil)
 
   test("the model last chosen is kept in the atc directory the session started with"):
     val dir = TestEnv.tempDir("atc-last")
@@ -303,6 +322,12 @@ class ModelSuite extends munit.FunSuite:
       models.rememberLast("p/b")
       assertEquals(java.nio.file.Files.readString(dir.resolve("last-model")).nn.trim, "p/b")
       assertEquals(models.initial(_ => ()).ref, "p/b")
+      assert(!models.initialNamed)
+      val named = Models(Cli.Args(cwd = dir, model = Some("b")), Config.load(dir, None, global), dir)
+      try
+        assertEquals(named.initial(_ => ()).ref, "p/b")
+        assert(named.initialNamed)
+      finally named.close()
     finally models.close()
 
   test("a project config cannot move the global classified model to another model"):

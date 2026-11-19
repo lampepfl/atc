@@ -2,7 +2,7 @@ package atc
 
 import atc.config.*
 import atc.perms.*
-import atc.platform.PlatformPath
+import atc.platform.{Platform, PlatformPath}
 
 import java.nio.file.{Files, Path}
 
@@ -128,7 +128,8 @@ class LayerSuite extends munit.FunSuite:
     for host <- List(
         "developer.mozilla.org",
         "docs.python.org",
-        "peps.python.org", // *.python.org
+        "peps.python.org",
+        "nightly.scala-lang.org",
         "doc.rust-lang.org",
         "docs.rs",
         "pkg.go.dev",
@@ -141,6 +142,10 @@ class LayerSuite extends munit.FunSuite:
     for host <- List(
         "python.org.evil.com",
         "evil-rust-lang.org",
+        // services that fetch a caller-named URL or publish what they are sent
+        "proxy.golang.org",
+        "scastie.scala-lang.org",
+        "play.rust-lang.org",
         "notgo.dev",
         "example.com",
         "api.openai.com",
@@ -325,6 +330,10 @@ class LayerSuite extends munit.FunSuite:
     assertEquals(w.access("src/A.scala"), Access.Write)
     assertEquals(w.access(".git/config"), Access.Read) // git metadata is readable, not writable
     assertEquals(w.access(".git/hooks/pre-commit"), Access.Read)
+    // A nested repository's config would let a pre-approved `git status` run there execute a program.
+    assertEquals(w.access("sub/.git/config"), Access.Read)
+    assertEquals(w.access("sub/.git"), Access.Read)
+    if Platform.caseInsensitivePaths then assertEquals(w.access("sub/.GIT/config"), Access.Read)
     assert(w.perm("secrets/token").classified)
     assert(w.settings.safeMode && w.settings.respectGitignore)
     assert(w.policy.commandDenied("git push origin main").isDefined)
@@ -358,6 +367,11 @@ class LayerSuite extends munit.FunSuite:
         "git log -1 --format=tformat:x --output=/tmp/x",
         "git show \"--output=/tmp/a b\"",
         "git stash list --output /tmp/x",
+        // `--no-list`, and git's abbreviations of it, turn `git branch --list` back into
+        // the command that deletes, moves and renames branches
+        "git branch --list --no-list -D main",
+        "git branch --list --no-l -m main renamed",
+        "git branch --list --no-li -f main HEAD~5",
         "ls",
         "rm -rf x"
       )
@@ -565,6 +579,20 @@ class LayerSuite extends munit.FunSuite:
     assert(ProjectTrust.pending(entry.cwd, entry.globalPath.getParent.nn).get.grants.webSearch)
     assertEquals(Config.load(entry.cwd, None, entry.globalPath).catalog.find("m").settings.webSearch, None)
 
+  test("a project cannot put a setting that needs trust in force by writing it as another kind of value"):
+    // Trust finds these settings by the kind written, and the JSON reader would convert each:
+    // "true" to true, 5 to "5". Such a config is refused, so none is in force unasked.
+    val global = """{ "files": [ { "path": ".", "access": "write" } ],
+                     "providers": { "p": { "api": "echo", "models": { "m": {} } } } }"""
+    def refused(project: String, setting: String): Unit =
+      val e = intercept[IllegalArgumentException](World(global = global, project = project))
+      assert(e.getMessage.nn.contains(s"$setting must be "), e.getMessage)
+    refused("""{ "webSearch": "true" }""", "webSearch")
+    refused("""{ "providers": { "p": { "models": { "m": { "webSearch": "true" } } } } }""", "p.models.m.webSearch")
+    refused("""{ "classifiedModel": 5, "providers": { "p": { "models": { "5": {} } } } }""", "classifiedModel")
+    refused("""{ "hosts": [2130706433] }""", "hosts[0]")
+    refused("""{ "commands": [7] }""", "commands[0]")
+
   test("a project's classified model is trusted as the project's providers define it"):
     val w = World(
       global = """{ "providers": { "local": { "api": "echo" }, "cloud": { "api": "echo" } } }""",
@@ -574,6 +602,11 @@ class LayerSuite extends munit.FunSuite:
     val atcDir = w.globalPath.getParent.nn
     def edit(providers: String) =
       Files.writeString(Config.projectPath(w.cwd), s"""{ "classifiedModel": "safe", "providers": $providers }""")
+    // The prompt says what the project makes of the name, which is the repository's to choose.
+    assertEquals(
+      ProjectTrust.pending(w.cwd, atcDir).get.grants.describe,
+      List("sends classified data to the model safe, which it defines as local/safe (model id small)")
+    )
     ProjectTrust.trust(w.cwd, atcDir)
     // an edit that leaves the model alone is not put to the user again
     edit("""{ "local": { "models": { "safe": { "name": "small" }, "other": {}, "more": {} } } }""")
@@ -769,6 +802,22 @@ class LayerSuite extends munit.FunSuite:
     // "./build" is the project's build directory, not one under the working directory
     assertEquals(w.access("build/x.jar"), Access.Read)
     assertEquals(w.access("src/main/build/x.jar"), Access.Write)
+
+  test("a project config that belongs to another user is passed over for the next one above"):
+    // In a shared directory anyone can put a `.atc` above where atc runs.
+    val w = World(project = """{ "files": [ { "path": ".", "access": "write" } ] }""", runIn = "shared/work")
+    val planted = w.cwd.resolve("shared").nn
+    Files.createDirectories(planted.resolve(".atc"))
+    Files.writeString(Config.projectPath(planted), """{ "files": [ { "path": ".", "access": "write" } ] }""")
+    // Its own files are the user's: the nearest one counts.
+    assertEquals(Config.projectRoot(w.runDir), Some(planted))
+    assertEquals(Config.foreignProjects(w.runDir), Nil)
+    val mallory: Path => Option[String] = dir => Option.when(dir == planted)("mallory")
+    assertEquals(Config.projectRoot(w.runDir, mallory), Some(w.cwd))
+    assertEquals(Config.foreignProjects(w.runDir, mallory), List(planted -> "mallory"))
+    // Above the one in use nothing is reported, and with every one foreign there is no project.
+    assertEquals(Config.foreignProjects(w.runDir, dir => Option.when(dir == w.cwd)("mallory")), Nil)
+    assertEquals(Config.projectRoot(w.runDir, _ => Some("mallory")), None)
 
   test("a project rule reaches the whole project, however deep atc runs inside it"):
     val w = World(project = """{ "files": [ { "path": ".", "access": "read" } ] }""", runIn = "a/b/c")

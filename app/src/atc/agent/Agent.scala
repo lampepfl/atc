@@ -228,7 +228,7 @@ final class Agent(
 
   /** Run one user turn; returns when the model gives its final answer or the user interrupts. */
   def turn(session: => ReplSession, input: String, cancelled: () => Boolean): TurnOutcome =
-    runTurn(ScalaToolRunner(session, policy, ui, config.maxToolOutputChars), input, cancelled)
+    runTurn(ScalaToolRunner(session, policy, ui, config.maxToolOutputChars, cancelled), input, cancelled)
 
   /** Core entry point, with concrete tool execution supplied by the host adapter. */
   private[atc] def runTurn(runner: ToolRunner, input: String, cancelled: () => Boolean): TurnOutcome =
@@ -267,7 +267,8 @@ final class Agent(
           conversation.repairAfter(AgentMessages.interrupted)
           interrupted()
           TurnOutcome.Interrupted
-        case NonFatal(e) =>
+        case e @ (_: Exception | _: Error) =>
+          // Fatal errors too: the history is saved on exit and must stay paired to be resumed.
           conversation.repairAfter(AgentMessages.turnFailed(e))
           throw e
 

@@ -101,7 +101,7 @@ abstract class FileEntry private[atc] () extends Cap:
   def name: String
   def exists: Boolean
   def isDirectory: Boolean
-  /** Whether this file's content (or this directory's structure) is classified. */
+  /** Whether this file's content (or this directory's listing) is classified. */
   def isClassified: Boolean
   def size: Long
   def read(): String
@@ -113,11 +113,13 @@ abstract class FileEntry private[atc] () extends Cap:
   update def write(content: String): Unit
   update def writeBytes(content: Array[Byte]): Unit
   update def append(content: String): Unit
+  /** Delete this file or empty directory; a symlink is deleted itself, not its target. */
   update def delete(): Unit
   /** Create this directory, including missing parents. */
   update def mkdir(): Unit
   /** Immediate children of a (non-classified) directory; entries you cannot
-   *  access are omitted, and a symlink is listed as its target. */
+   *  access are omitted. A symlink is listed under its own path and judged by
+   *  what it reaches. */
   def children: List[FileEntry^{this}]
   /** All descendants; classified sub-directories and symlinked directories are
    *  listed but not entered. */
@@ -145,7 +147,9 @@ abstract class Network private[atc] () extends caps.ExclusiveCapability
 /** A process started with `spawn` that you can interact with while it runs (a
  *  REPL, a dev server, a watcher). It captures the `ex` used to start it, so it
  *  cannot be used inside `Classified.map`. It lives until it exits, you `kill()`
- *  it, or the session ends; `runningProcesses` finds the live ones again. One
+ *  it, or the session ends; `runningProcesses` finds the live ones again. A
+ *  program it leaves running after it exits is no longer tracked or killed, so
+ *  spawn the server itself, not a launcher that starts it in the background. One
  *  spawned inside a `requestExec` block is also killed when that block ends,
  *  however the user answered, so start a long-lived process outside such a block;
  *  one spawned inside `withEnv` keeps running.
@@ -397,9 +401,11 @@ trait Interface:
 
   /** Move a file by copying it and deleting the source. Requires write access
    *  to both paths; classified files are rejected. Parent directories are created.
-   *  The operation is not atomic. Move directory contents individually. */
+   *  The operation is not atomic. Move directory contents individually. A symlink
+   *  source is read through, and the link itself is deleted. */
   def move(from: String, to: String)(using FileSystem^): Unit
-  /** Copy a file, binary-safe (`writeBytes(to, readBytes(from))`). */
+  /** Copy a file, binary-safe (`writeBytes(to, readBytes(from))`). A new file gets the
+   *  source's permissions, as with `move`; one that exists keeps its own. */
   def copy(from: String, to: String)(using FileSystem^): Unit
 
   /** Edit a file in place, like `sed -E -i 's/pattern/replacement/g'`: replace
@@ -422,7 +428,9 @@ trait Interface:
   def sed(path: String, pattern: String, replacement: String)(using FileSystem^): Int
 
   /** Replace one exact occurrence of `expected`; no regex or replacement escapes.
-   *  Missing or ambiguous text throws before writing. */
+   *  Missing or ambiguous text throws before writing. Like `sed`, `replaceLines` and
+   *  `insertLines`, it rewrites the file as UTF-8 text and refuses one that is not valid
+   *  UTF-8 (edit such a file with `readBytes` and `writeBytes`). */
   def replaceExact(path: String, expected: String, replacement: String)(using FileSystem^): Unit
 
   /** A regex that matches `text` literally (`\Q…\E`), for a `sed` pattern. */
@@ -445,8 +453,9 @@ trait Interface:
   def isDirectory(path: String)(using FileSystem): Boolean
   /** Create a directory (and parents). */
   def mkdir(path: String)(using FileSystem^): Unit
-  /** Delete a file or an empty directory. There is no recursive delete: for a tree,
-   *  `walk(dir).reverse.foreach(delete)` then `delete(dir)`. */
+  /** Delete a file, an empty directory or a symlink (the link, not its target).
+   *  There is no recursive delete: for a tree, `walk(dir).reverse.foreach(delete)`
+   *  then `delete(dir)`. */
   def delete(path: String)(using FileSystem^): Unit
 
   /** The entries of a directory (non-recursive). Paths are relative to the working
@@ -530,7 +539,8 @@ trait Interface:
    *  (`execOutput` does). Pipelines have at most 16 stages.
    *
    *  The default working directory is `.`. Bare programs are found on `PATH`, not
-   *  implicitly in the working directory; use `./program` to select one there.
+   *  implicitly in the working directory (unless the user's `PATH` itself has an empty or
+   *  relative entry); use `./program` to select one there.
    *  Quote arguments containing spaces (on Windows, `\` is a path separator).
    *  A timeout throws with the output so far. Requires both `Exec^` and
    *  `FileSystem^`. */

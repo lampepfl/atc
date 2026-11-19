@@ -79,6 +79,11 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
     assert(!echoed.output.contains("DRILL-SECRET-42"), echoed.output)
     // a failed computation over the secret prints a sanitized note, not the error
     assertOk(run("""println(readClassified("secrets/drill.txt").map(s => throw RuntimeException(s)))"""))
+    // a stack trace printed from inside `map` goes to the process's error stream, which is the
+    // evaluation's capture: it must not carry the value into the tool output
+    val traced =
+      assertOk(run("""readClassified("secrets/drill.txt").map(s => { new Exception(s).printStackTrace(); 1 })"""))
+    assert(!traced.output.contains("DRILL-SECRET-42"), traced.output)
     // refused channels: declassifying write, classified redirection in and out
     assertFails(run("""writeClassified("leak.txt", readClassified("secrets/drill.txt"))"""), "declassify")
     assertFails(run("""exec("echo x < secrets/drill.txt")"""), "classified")
@@ -162,6 +167,9 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
     val loader = Sandbox.newLoader()
     assertEquals(loader.getResource("atc/lib/Interface.class"), null)
     assertEquals(loader.getResource("scala/collection/immutable/List.class"), null)
+    // The parent, the platform loader, finds JDK classes: only the override hides this one.
+    assertEquals(loader.getResource("java/lang/String.class"), null)
+    assert(ClassLoader.getPlatformClassLoader.nn.getResource("java/lang/String.class") != null)
 
   // ── Safety nets ─────────────────────────────────────────────────
 
@@ -226,16 +234,39 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
         |println(s"bits ${bit('s')} ${bit('z')}")""".stripMargin
     assertFails(run(attack), "catch-extractor")
 
-  test("a NonLocalReturnControl thrown directly inside map is kept inside the classified value"):
-    assertNoOracle(
-      """val c = readClassified("secrets/s.txt")
-        |def bit(ch: Char): Boolean =
-        |  val key = new Object
-        |  try
-        |    c.map(s => if s(0) == ch then throw new scala.runtime.NonLocalReturnControl(key, true) else 0)
-        |    false
-        |  catch case e: scala.runtime.NonLocalReturnControl[?] if e.key eq key => true""".stripMargin
+  test("a NonLocalReturnControl cannot be thrown from inside map: agent code may not name scala.runtime"):
+    // `ClassifiedSuite` covers the value itself, which keeps one inside when host code throws it.
+    assertFails(
+      run(
+        """val c = readClassified("secrets/s.txt")
+          |def bit(ch: Char): Boolean =
+          |  val key = new Object
+          |  try
+          |    c.map(s => if s(0) == ch then throw new scala.runtime.NonLocalReturnControl(key, true) else 0)
+          |    false
+          |  catch case e: scala.runtime.NonLocalReturnControl[?] if e.key eq key => true""".stripMargin
+      ),
+      "scala-runtime"
     )
+
+  test("agent code cannot start work that outlives the snippet"):
+    // parallel waits for its tasks; nothing else may run code on another thread.
+    for (code, why) <- List(
+        "import scala.concurrent.ExecutionContext.Implicits.global; scala.concurrent.Future { 1 }" -> "safe code",
+        "java.util.concurrent.CompletableFuture.runAsync(() => ())" -> "safe code",
+        "java.util.concurrent.Executors.newSingleThreadExecutor()" -> "safe code",
+        "new Thread(() => ()).start()" -> "Creating threads is forbidden",
+      )
+    do assertFails(run(code), why)
+
+  test("a classified value's field cannot be reached by reflection, a structural type or a cast"):
+    assertFails(run("""classify("s").getClass.getMethod("value")"""), "getClass")
+    assertFails(
+      run("""import scala.reflect.Selectable.reflectiveSelectable
+            |def peek(s: { def value: Any }) = s.value""".stripMargin),
+      "reflectiveSelectable",
+    )
+    assertFails(run("""classify("s").asInstanceOf[{ def value: Any }]"""), "asInstanceOf")
 
   test("the ThreadDeath stop signal cannot be swallowed by a catch-all"):
     // Interrupts and timeouts stop REPL loops by raising ThreadDeath at back-edges;

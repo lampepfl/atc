@@ -4,7 +4,7 @@ import atc.lib.*
 import atc.perms.{GitIgnore, Policy, ScopeId}
 
 import java.nio.file.Path
-import java.util.concurrent.{ExecutionException, Executors, ThreadFactory}
+import java.util.concurrent.{ExecutionException, Executors, ThreadFactory, TimeUnit}
 import java.util.concurrent.atomic.AtomicInteger
 import scala.util.{Failure, Success, Try}
 import scala.util.control.NonFatal
@@ -48,7 +48,9 @@ final class Host(
     * this call only. A nested call, made from one of those threads, runs its tasks one after
     * another on that thread. A fatal throwable from any task wins over ordinary failures, so
     * that the REPL's stop signal reaches the evaluation thread. Interrupting the caller while
-    * it waits interrupts the workers. */
+    * it waits interrupts the workers, and the call returns once they have ended or after
+    * [[Host.ParallelStopGraceMs]]: while it waits the evaluation's stop flag stays raised, so
+    * their loops end before a later evaluation clears it. */
   def parallel[A, C <: caps.CapSet](tasks: Seq[() => A]): List[A] =
     if tasks.isEmpty then Nil
     else if Thread.currentThread.isInstanceOf[Host.ParallelThread] then
@@ -64,11 +66,16 @@ final class Host(
           case Failure(other) => other
         failures.find(!NonFatal(_)).orElse(failures.headOption).foreach(throw _)
         outcomes.collect { case Success(value) => value }
-      finally pool.shutdownNow()
+      finally
+        pool.shutdownNow()
+        try pool.awaitTermination(Host.ParallelStopGraceMs, TimeUnit.MILLISECONDS)
+        catch case _: InterruptedException => Thread.currentThread.interrupt()
 
 object Host:
   /** How many tasks `parallel` runs at once. */
   val MaxParallel: Int = 8
+  /** How long an interrupted `parallel` waits for its tasks to end. */
+  val ParallelStopGraceMs: Long = 2000L
   /** `cat(path)` shows at most this many lines, then says how to see the rest. */
   val CatMaxLines: Int = 400
   /** `cat` cuts a line beyond this many characters (minified files) with a marker. */

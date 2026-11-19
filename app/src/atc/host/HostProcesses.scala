@@ -3,7 +3,7 @@ package atc.host
 import atc.{LauncherEnvironment, ScalaSource}
 import atc.lib.*
 import atc.perms.ScopeId
-import atc.platform.Platform
+import atc.platform.{Platform, WindowsExecutable}
 
 import java.lang.ProcessBuilder.Redirect
 import java.nio.file.Path
@@ -129,7 +129,7 @@ private[host] trait HostProcesses:
       val argv = WindowsExecutable.resolve(stage.argv, dir)
       val builder = ProcessBuilder(argv.asJava).directory(dir.toFile).nn
       val environment = builder.environment().nn
-      // Windows launchers may carry the original command line (including a prompt)
+      // The Windows wrapper may carry the original command line (including a prompt)
       // in these variables, and the key variables hold ATC's credentials. They belong
       // to ATC, not to commands the agent starts, which could print them. Windows names
       // ignore case, but this map's keys keep the system's spelling (`Path`, not `PATH`).
@@ -140,6 +140,7 @@ private[host] trait HostProcesses:
       // replaces. On Windows an inherited `Path` must go before `PATH` is put beside it.
       if Platform.isWindows then environment.keySet().nn.removeIf(name => env.keys.exists(_.equalsIgnoreCase(name)))
       environment.putAll(env.asJava)
+      HostProcesses.refuseImplicitBareRepositories(environment)
       if stage.mergeErr then builder.redirectErrorStream(true)
       builder
 
@@ -242,7 +243,10 @@ private[host] trait HostProcesses:
   private[atc] def killProcess(ref: String): Either[String, String] = spawned.synchronized:
     reapProcesses()
     ref.trim.toLowerCase(Locale.ROOT) match
-      case "" | "all" =>
+      // Stopping everything takes the word: a bare `/kill`, which the command list also
+      // fills in for `/k`, must not end a server the user meant to keep.
+      case "" => Left("/kill p<number> stops one process (see /ps); /kill all stops every one")
+      case "all" =>
         val count = spawned.size
         killProcesses()
         if count == 0 then Left("no process is running")
@@ -275,3 +279,20 @@ private[host] trait HostProcesses:
         s"'${withArgs(command, args).line}' exited with ${result.exitCode}$tail (use exec(...) to inspect a failure)"
       )
     result.stdout
+
+private[host] object HostProcesses:
+  /** Git takes a directory laid out as a bare repository (`HEAD`, `objects`, `refs`) for one
+    * and runs the programs its `config` names (`textconv`, `diff.external`), and the agent may
+    * write such a directory wherever its rules let it write. `safe.bareRepository=explicit`
+    * (git 2.38+) refuses a bare repository found that way. It is appended after the numbered
+    * configuration parameters the command inherits or the agent sets. Git reads
+    * `GIT_CONFIG_PARAMETERS` after those, and the last value wins, so the setting goes at the
+    * end of that variable too when it is set. A `-c` on git's own command line still comes
+    * later; the command pattern has to permit it. */
+  def refuseImplicitBareRepositories(environment: java.util.Map[String, String]): Unit =
+    val count = Option(environment.get("GIT_CONFIG_COUNT")).flatMap(_.trim.toIntOption).filter(_ >= 0).getOrElse(0)
+    environment.put(s"GIT_CONFIG_KEY_$count", "safe.bareRepository")
+    environment.put(s"GIT_CONFIG_VALUE_$count", "explicit")
+    environment.put("GIT_CONFIG_COUNT", (count + 1).toString)
+    Option(environment.get("GIT_CONFIG_PARAMETERS")).filter(_.trim.nonEmpty).foreach: parameters =>
+      environment.put("GIT_CONFIG_PARAMETERS", parameters + " 'safe.bareRepository=explicit'")

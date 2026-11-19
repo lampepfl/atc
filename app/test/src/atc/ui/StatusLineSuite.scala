@@ -12,6 +12,18 @@ class StatusLineSuite extends munit.FunSuite:
     screen.frame(status.setContext("model", "atc · a\nb\tc"))
     assert(out.toString(UTF_8).contains("\u001b]0;atc · a b c\u0007"), out.toString(UTF_8))
 
+  test("a terminal that cannot draw a footer gets none, so the spinner shows progress"):
+    val vt52 = org.jline.terminal.impl.DumbTerminal(
+      "test",
+      "vt52",
+      java.io.ByteArrayInputStream(Array.emptyByteArray),
+      ByteArrayOutputStream(),
+      UTF_8
+    )
+    val screen = Screen(vt52, plain = false, Glyphs.unicode)
+    assert(!StatusLine(screen, () => false, () => false, () => 0).shown)
+    assert(StatusLine(TestTerminal.screen(), () => false, () => false, () => 0).shown)
+
   test("a program status report encodes its message on one line"):
     val report = StatusLine.programStatus("blocked", "permission", "Run command\n(sbt test)")
     val msg = java.util.Base64.getEncoder.nn.encodeToString("Run command (sbt test)".getBytes(UTF_8))

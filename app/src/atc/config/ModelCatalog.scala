@@ -187,7 +187,10 @@ final class ModelCatalog(
   /** The model used when the config and the command line name none. */
   def default: ModelSpec =
     available.headOption.orElse(models.headOption).getOrElse(
-      throw IllegalArgumentException("No models configured (see \"providers\" in the config)")
+      throw IllegalArgumentException(
+        "No model is available. Set up a provider: start atc in a terminal while there is no " +
+          "~/.atc/config.json, or add one under \"providers\" in that file."
+      )
     )
 
 object ModelCatalog:

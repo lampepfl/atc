@@ -65,6 +65,9 @@ object ProcessFixture:
 
   def line(argv: String*): String = CommandLine.Stage(argv.toList).line
 
+  /** The words of the first program of `command`. */
+  def argv(command: String): List[String] = CommandLine.parsePipeline(command).stages.head.argv
+
   def command(mode: String, args: String*): String = line((base ++ (mode +: args))*)
 
   def pattern(mode: String): String = CommandLine.parsePipeline(command(mode)).stages.head.line

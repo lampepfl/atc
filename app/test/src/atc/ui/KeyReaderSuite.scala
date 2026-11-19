@@ -9,7 +9,7 @@ import scala.jdk.CollectionConverters.*
   * and the escape sequences it reads. */
 class KeyReaderSuite extends munit.FunSuite:
   test("a paste reports its text once, when it ends"):
-    val input = "\u001b[200~first line\rsecond\u001b[201~"
+    val input = "\u001b[200~first line\rsecond\tcolumn\u001b[201~"
     val terminal = TestTerminal(input = ByteArrayInputStream(input.getBytes(UTF_8)))
     val drafts = ConcurrentLinkedQueue[String]()
     val submitted = ConcurrentLinkedQueue[String]()
@@ -18,10 +18,24 @@ class KeyReaderSuite extends munit.FunSuite:
       KeyReader(terminal, plain = false, alerts, () => (), s => { submitted.add(s); () }, s => { drafts.add(s); () })
     keys.start()
     val deadline = System.nanoTime() + 5_000_000_000L
-    while !drafts.contains("first line\nsecond") && System.nanoTime() < deadline do Thread.sleep(10)
+    while !drafts.contains("first line\nsecond\tcolumn") && System.nanoTime() < deadline do Thread.sleep(10)
     keys.stop()
     assert(submitted.isEmpty, "a pasted newline submits nothing")
-    assertEquals(drafts.asScala.toList.filter(_.nonEmpty).distinct, List("first line\nsecond"))
+    // A tab is kept, as in a pasted Makefile line.
+    assertEquals(drafts.asScala.toList.filter(_.nonEmpty).distinct, List("first line\nsecond\tcolumn"))
+
+  test("a backslash before Enter continues the correction instead of sending it"):
+    // What a terminal sends for Shift-Enter when it cannot report the key itself.
+    val input = "also update\\\r\nthe tests\r"
+    val terminal = TestTerminal(input = ByteArrayInputStream(input.getBytes(UTF_8)))
+    val submitted = ConcurrentLinkedQueue[String]()
+    val alerts = Alerts(terminal, plain = false, _ => ())
+    val keys = KeyReader(terminal, plain = false, alerts, () => (), s => { submitted.add(s); () }, _ => ())
+    keys.start()
+    val deadline = System.nanoTime() + 5_000_000_000L
+    while submitted.isEmpty && System.nanoTime() < deadline do Thread.sleep(10)
+    keys.stop()
+    assertEquals(submitted.asScala.toList, List("also update\nthe tests"))
 
   test("a pop-up that reads the end of a paste leaves the key reader out of paste mode"):
     val queue = LinkedBlockingQueue[Int]()

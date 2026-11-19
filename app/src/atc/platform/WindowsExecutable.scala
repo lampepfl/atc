@@ -1,7 +1,6 @@
-package atc.host
+package atc.platform
 
 import atc.ProcessEnvironment
-import atc.platform.Platform
 
 import java.io.IOException
 import java.nio.file.{Files, Path, Paths}

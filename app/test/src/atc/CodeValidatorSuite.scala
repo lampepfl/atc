@@ -149,7 +149,7 @@ class CodeValidatorSuite extends munit.FunSuite:
 
   test("safe mode may delegate harmless aliases to the compiler"):
     assertEquals(
-      CodeValidator.validate("import java.time.{Duration as JDuration}", strictImportAliases = false),
+      CodeValidator.validate("import java.time.{Duration as JDuration}", safeMode = true),
       Nil,
     )
 
@@ -217,9 +217,9 @@ class CodeValidatorSuite extends munit.FunSuite:
     assert(CodeValidator.stripLiteralsAndComments("""val a = "x"; java.io.File; val b = "y"""").contains("java.io"))
   test("stripLiteralsAndComments keeps interpolation expressions"):
     val stripped = CodeValidator.stripLiteralsAndComments("""val s = s"text ${a.b} more $name""""")
-    assert(stripped.contains("${a.b}"), stripped)
-    assert(stripped.contains("$name"), stripped)
-    assert(!stripped.contains("text"), stripped)
+    assert(stripped.contains("{a.b}"), stripped)
+    assert(stripped.contains("name"), stripped)
+    assert(!stripped.contains("text") && !stripped.contains("more"), stripped)
   test("stripLiteralsAndComments handles nested braces inside interpolation"):
     val stripped = CodeValidator.stripLiteralsAndComments("""val s = s"${ xs.map { x => x + 1 } } tail"""")
     assert(stripped.contains("xs.map { x => x + 1 }"), stripped)
@@ -317,6 +317,41 @@ class CodeValidatorSuite extends munit.FunSuite:
   test("interp: forbidden call inside a nested block"):
     assertRejected("""val x = s"${ List(1).map { _ => System.getenv("HOME") } }"""", "sys-getenv")
 
+  // ── Evasion: code where a scan other than the compiler's sees a string ──
+
+  // Defs, not vals: the tests registered above capture `this` before a field would be set.
+  private def Q = "\""
+  private def Hidden = "\ndef f = try 1 catch { case e: Throwable => 2 }\nval c = 1.getClass"
+  private def assertSeesCodeAfter(prefix: String)(using munit.Location): Unit =
+    assertRejected(prefix + Hidden, "catch-fatal")
+    assertRejected(prefix + Hidden, "reflect-getclass")
+
+  test("lexing: `$\"` is an escaped quote, so the string goes on to the next quote"):
+    assertSeesCodeAfter(s"val q = s$Q$$$Q$Q")
+  test("lexing: `$$` is an escaped dollar, so the brace after it opens no expression"):
+    assertSeesCodeAfter(s"val q = s$Q$$$${$Q")
+  test("lexing: a backslash does not escape `$` in an interpolated string"):
+    assertRejected(s"val a = raw$Q\\$${ 1.getClass }$Q", "reflect-getclass")
+    assertRejected(s"val a = raw$Q\\$${ throw new InterruptedException() }$Q", "throwable-interrupted")
+  test("lexing: a string right after a keyword is not interpolated"):
+    assertSeesCodeAfter(s"val b = if true then$Q$${$Q else $Q$Q")
+  test("lexing: a quote inside backticks opens no string"):
+    assertSeesCodeAfter(s"val `d$Q` = 1")
+  test("lexing: an interpolator may end in operator characters"):
+    assertSeesCodeAfter(s"val f = x_+$Q$$$Q$Q")
+  test("lexing: an escaped quote and a quoted quote do not shift what follows"):
+    assertSeesCodeAfter(s"val a = $Q\\$Q$Q; val b = '$Q'; val c = s$Q$Q$Q a $Q b $Q$Q$Q")
+    assertAllowed(s"val a = $Q java.io.File \\$Q System.exit(0) $Q; val b = '$Q'")
+
+  test("safe mode: StringBuilder is rejected, since the compiler admits it untracked"):
+    def inSafeMode(code: String) = CodeValidator.validate(code, safeMode = true).map(_.ruleId)
+    assertEquals(inSafeMode("val sb = new StringBuilder"), List("mutable-builder"))
+    assertEquals(inSafeMode("val sb: scala.StringBuilder = null"), List("mutable-builder"))
+    assertEquals(inSafeMode("import scala.{StringBuilder as SB}"), List("mutable-builder"))
+    assertEquals(inSafeMode("val s = \"a StringBuilder in text\" // StringBuilder"), Nil)
+    // Without safe mode mutable state is available, this one included.
+    assertAllowed("val sb = new StringBuilder")
+
   // ── Evasion: scala.sys.* re-exposes System hooks ─────────────────
 
   test("sys.process import") { assertRejected("import sys.process._", "proc-scala") }
@@ -325,6 +360,24 @@ class CodeValidatorSuite extends munit.FunSuite:
   test("sys.env") { assertRejected("sys.env.get(\"PATH\")", "sys-scala") }
   test("sys.props") { assertRejected("sys.props(\"user.home\")", "sys-scala") }
   test("sys.runtime") { assertRejected("sys.runtime.halt(0)", "sys-scala") }
+  test("scala.util.Properties: the environment and system properties by another name"):
+    assertRejected("scala.util.Properties.envOrNone(\"ANTHROPIC_API_KEY\")", "sys-properties")
+    assertRejected("import scala.util.Properties as P\nP.propOrElse(\"user.home\", \"\")", "sys-properties")
+    assertRejected("import scala.util.*\nProperties.userName", "sys-properties")
+    assertRejected("val p: scala.util.PropertiesTrait = null", "sys-properties")
+    assertAllowed("val properties = Map(\"a\" -> 1); properties(\"a\")")
+  test("scala.runtime: the compiler's support code, by every way to name it"):
+    assertRejected("scala.runtime.LazyVals.getOffset(classOf[Some[?]], \"value\")", "scala-runtime")
+    assertRejected("scala.runtime.coverage.Invoker.invoked(1, \"/tmp\")", "scala-runtime")
+    assertRejected("import scala.runtime.*", "scala-runtime")
+    assertRejected("import scala.{runtime as rt}\nrt.Statics.anyHash(1)", "scala-runtime")
+    assertRejected("import scala.{util, runtime}", "scala-runtime")
+    // Package `scala` is imported, so its members need no prefix.
+    assertRejected("runtime.coverage.Invoker.invoked(1, \"/tmp\")", "scala-runtime")
+    assertRejected("runtime.ScalaRunTime.stringOf(1)", "scala-runtime")
+    assertRejected("val x = LazyVals", "scala-runtime")
+    assertAllowed("val runtime = 3; runtime.toString")
+    assertAllowed("case class Job(runtime: Long); Job(1).runtime.toDouble")
   test("sys.allThreads / addShutdownHook"):
     assertRejected("sys.allThreads()", "sys-scala")
     assertRejected("sys.addShutdownHook(())", "sys-scala")
@@ -366,11 +419,11 @@ class CodeValidatorSuite extends munit.FunSuite:
     assertRejected("type X = Object\ntry f() catch case _: X => ()", "catch-fatal-alias")
     // Safe mode allows import aliases, but renaming a fatal type is a catch in disguise.
     val renamed = "import java.lang.Throwable as Fatal\ntry f() catch case _: Fatal => ()"
-    assert(CodeValidator.validate(renamed, strictImportAliases = false).map(_.ruleId).contains("import-fatal-alias"))
+    assert(CodeValidator.validate(renamed, safeMode = true).map(_.ruleId).contains("import-fatal-alias"))
     assertRejected("import java.lang.{Error => E}\ntry f() catch case _: E => ()", "import-fatal-alias")
     assertRejected("import java.lang.{\n  Object as O\n}\ntry f() catch case _: O => ()", "import-fatal-alias")
     val harmless = "import scala.collection.immutable.{Map as IMap}\nval m = IMap(1 -> 2)"
-    assertEquals(CodeValidator.validate(harmless, strictImportAliases = false), Nil)
+    assertEquals(CodeValidator.validate(harmless, safeMode = true), Nil)
   test("reject a catch handler that is not case arms, and a fatal ascription spanning lines"):
     assertRejected("val h: PartialFunction[Throwable, Int] = { case _ => 1 }\ntry f() catch h", "catch-handler")
     assertRejected("try f() catch { h }", "catch-handler")

@@ -27,16 +27,21 @@ object ProjectTrust:
     keys: List[String],
     webSearch: Boolean,
     fingerprint: String,
+    /** What the project's own providers make of the classified model's name, as
+      * `provider/alias (model id)`: the name is the repository's to choose, and "local-vault"
+      * may be a remote model. Empty when the name is one of the user's own models. */
+    classifiedAs: List[String] = Nil,
   ):
     def isEmpty: Boolean =
       commands.isEmpty && hosts.isEmpty && classifiedModel.isEmpty && keys.isEmpty && !webSearch
 
     /** What the user is asked to trust, one row per kind, with every entry. */
     def describe: List[String] =
+      val defined = if classifiedAs.isEmpty then "" else s", which it defines as ${classifiedAs.mkString(" and ")}"
       List(
         Option.when(commands.nonEmpty)(s"pre-approves the commands ${commands.mkString(", ")}"),
         Option.when(hosts.nonEmpty)(s"allows the hosts ${hosts.mkString(", ")}"),
-        classifiedModel.map(model => s"sends classified data to the model $model"),
+        classifiedModel.map(model => s"sends classified data to the model $model$defined"),
         Option.when(keys.nonEmpty)(s"binds the keys ${keys.mkString(", ")} in .atc/keys.properties"),
         Option.when(webSearch)("turns on the provider's web search, which the allowed hosts do not limit"),
       ).flatten
@@ -156,7 +161,12 @@ object ProjectTrust:
     if webSearch then granted("webSearch") = ujson.True
     // The classified model is trusted as the project's providers define it. The definition enters
     // only when they say something about it, so that fingerprints recorded without it still match.
-    classified.map(definition(json, _)).filter(_.value.nonEmpty).foreach(granted("classifiedDefinition") = _)
+    val defined = classified.map(definition(json, _)).filter(_.value.nonEmpty)
+    defined.foreach(granted("classifiedDefinition") = _)
+    // The entries of the alias, without the providers' on and off switches.
+    val classifiedAs = defined.toList.flatMap(_.value.toList).collect:
+      case (name, entry) if name.contains('/') =>
+        entry.objOpt.flatMap(_.get("name")).flatMap(_.strOpt).fold(name)(id => s"$name (model id $id)")
     val digest = MessageDigest.getInstance("SHA-256").nn.digest(ujson.write(granted).getBytes(UTF_8))
     Grants(
       commands,
@@ -165,6 +175,7 @@ object ProjectTrust:
       keys.map(_._1),
       webSearch,
       HexFormat.of().nn.formatHex(digest),
+      classifiedAs,
     )
 
   private def key(root: Path): String = PlatformPath.portable(PlatformPath.canonical(root))

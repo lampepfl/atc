@@ -1,7 +1,7 @@
 package atc.llm
 
 import atc.{Debug, Main, Threads}
-import atc.host.WindowsExecutable
+import atc.platform.WindowsExecutable
 
 import java.io.{BufferedReader, IOException, InputStream, InputStreamReader, OutputStream}
 import java.nio.charset.StandardCharsets.UTF_8
@@ -62,10 +62,13 @@ private[atc] final class ClaudeCli private (process: ClaudeCli.Process, tools: L
     val message = events.take()
     if message == ujson.Null then
       events.put(ujson.Null)
-      throw IOException(
-        s"Claude Code exited${process.diagnostics().trim.linesIterator.toList.lastOption.fold("")(": " + _)}"
-      )
+      throw exited()
     message
+
+  /** The CLI is gone; the last line it wrote to its standard error says why, as an option
+    * this version does not know. */
+  private def exited(): IOException =
+    IOException(s"Claude Code exited${process.diagnostics().trim.linesIterator.toList.lastOption.fold("")(": " + _)}")
 
   def close(): Unit =
     ended = true
@@ -75,8 +78,11 @@ private[atc] final class ClaudeCli private (process: ClaudeCli.Process, tools: L
     val id = UUID.randomUUID().toString
     val done = CompletableFuture[ujson.Value]()
     synchronized(replies(id) = done)
-    send(ujson.Obj("type" -> "control_request", "request_id" -> id, "request" -> body))
-    try done.get(ClaudeCli.RequestTimeoutSeconds, TimeUnit.SECONDS)
+    try
+      // A CLI that has exited already fails the write with a broken pipe, which says nothing.
+      try send(ujson.Obj("type" -> "control_request", "request_id" -> id, "request" -> body))
+      catch case _: IOException => throw exited()
+      done.get(ClaudeCli.RequestTimeoutSeconds, TimeUnit.SECONDS)
     catch
       case e: ExecutionException => throw e.getCause.nn
       case _: TimeoutException => throw IOException(s"Claude Code did not answer its ${body("subtype").str} request")
@@ -96,7 +102,7 @@ private[atc] final class ClaudeCli private (process: ClaudeCli.Process, tools: L
     finally
       events.put(ujson.Null)
       val waiting = synchronized(replies.values.toList)
-      waiting.foreach(_.completeExceptionally(IOException("Claude Code exited")))
+      waiting.foreach(_.completeExceptionally(exited()))
 
   private def receive(message: ujson.Value): Unit =
     ClaudeCli.string(message, "type") match
@@ -204,10 +210,13 @@ private[atc] object ClaudeCli:
   )
 
   /** CLAUDE.md files, auto memory, claude.ai connectors, the CLI's own compaction (ATC compacts),
-    * updates and telemetry stay off. A tool call may wait for a permission prompt, so the MCP
-    * timeout is a day. */
-  private val Settings = Map(
+    * updates and telemetry stay off. So do file mentions: the CLI reads a file named as `@path`
+    * in a prompt and attaches it, and the prompts ATC sends hold tool output, file contents and
+    * the model's own text, so a line there could name a file outside ATC's permissions. A tool
+    * call may wait for a permission prompt, so the MCP timeout is a day. */
+  private[atc] val Settings = Map(
     "CLAUDE_CODE_DISABLE_CLAUDE_MDS" -> "1",
+    "CLAUDE_CODE_DISABLE_FILE_MENTIONS" -> "1",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY" -> "1",
     "ENABLE_CLAUDEAI_MCP_SERVERS" -> "false",
     "DISABLE_AUTO_COMPACT" -> "1",

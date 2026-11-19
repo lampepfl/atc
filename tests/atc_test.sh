@@ -164,6 +164,7 @@ start_dir="$TEST_TMP/start"
 mkdir -p "$start_dir"
 cat > "$start_dir/java" <<'JAVA'
 #!/bin/sh
+if [ "$1" = -version ]; then echo 'openjdk version "21.0.1" 2023-10-17' >&2; exit 0; fi
 printf 'arg=<%s>\n' "$@"
 printf 'loaded=<%s> kept=<%s> malformed=<%s> literal=<%s>\n' \
   "${ATC_TEST_LOADED-}" "${ATC_TEST_KEPT-}" "${ATC_TEST_MALFORMED-}" "${ATC_TEST_LITERAL-}"
@@ -171,8 +172,14 @@ JAVA
 chmod +x "$start_dir/java"
 printf '%s\r\n' 'ATC_TEST_LOADED="from file"' 'ATC_TEST_KEPT=file' \
   'ATC_TEST_MALFORMED' 'ATC_TEST_LITERAL=$(must_stay_literal)' > "$start_dir/test.env"
-start_output="$(env -i PATH="$start_dir:/usr/bin:/bin" ATC_ENV_FILE="$start_dir/test.env" \
-  ATC_SKIP_BUILD=1 ATC_TEST_KEPT=exported /bin/sh "$REPO_ROOT/start.sh" -p 'quoted "prompt"')"
+# A checkout with a built distribution; start.sh runs it through the checkout's atc wrapper.
+built_checkout="$TEST_TMP/built-checkout"
+mkdir -p "$built_checkout/out/dist.dest"
+cp "$REPO_ROOT/start.sh" "$REPO_ROOT/atc" "$built_checkout/"
+echo app > "$built_checkout/out/dist.dest/atc.jar"
+echo lib > "$built_checkout/out/dist.dest/atc-lib.jar"
+start_output="$(env -i HOME="$TEST_TMP" PATH="$start_dir:/usr/bin:/bin" ATC_ENV_FILE="$start_dir/test.env" \
+  ATC_SKIP_BUILD=1 ATC_STARTUP_CACHE=0 ATC_TEST_KEPT=exported /bin/sh "$built_checkout/start.sh" -p 'quoted "prompt"')"
 assert_contains "start.sh reads CRLF and preserves exported values" \
   'loaded=<from file> kept=<exported> malformed=<> literal=<$(must_stay_literal)>' "$start_output"
 assert_contains "start.sh preserves argument boundaries" 'arg=<quoted "prompt">' "$start_output"
@@ -187,15 +194,15 @@ fi
 printf 'arg=<%s>\n' "$@"
 JAVA
 chmod +x "$start_dir/picked-up/java"
-start_output="$(env -i PATH="$start_dir/picked-up:/usr/bin:/bin" ATC_SKIP_BUILD=1 ATC_STARTUP_CACHE=0 \
-  /bin/sh "$REPO_ROOT/start.sh")"
+start_output="$(env -i HOME="$TEST_TMP" PATH="$start_dir/picked-up:/usr/bin:/bin" ATC_SKIP_BUILD=1 \
+  ATC_STARTUP_CACHE=0 /bin/sh "$built_checkout/start.sh")"
 assert_contains "start.sh finds the version after a 'Picked up' line" 'arg=<--enable-native-access=ALL-UNNAMED>' "$start_output"
 
 # A checkout whose mill stub builds the jars and records what it saw of the environment file.
 fake_checkout="$TEST_TMP/fake-checkout"
 mkdir -p "$fake_checkout/app/src" "$fake_checkout/app/test" "$fake_checkout/app/resources" \
-  "$fake_checkout/lib/src" "$fake_checkout/windows"
-cp "$REPO_ROOT/start.sh" "$fake_checkout/start.sh"
+  "$fake_checkout/lib/src"
+cp "$REPO_ROOT/start.sh" "$REPO_ROOT/atc" "$fake_checkout/"
 printf 'object build\n' > "$fake_checkout/build.mill"
 printf 'object App\n' > "$fake_checkout/app/src/App.scala"
 cat > "$fake_checkout/mill" <<'MILL'
@@ -205,8 +212,8 @@ mkdir -p out/dist.dest && echo app > out/dist.dest/atc.jar && echo lib > out/dis
 MILL
 chmod +x "$fake_checkout/mill"
 fake_start() { # [env file]
-  env -i PATH="$start_dir:/usr/bin:/bin" ATC_ENV_FILE="${1:-$start_dir/test.env}" ATC_STARTUP_CACHE=0 \
-    /bin/sh "$fake_checkout/start.sh" 2>/dev/null
+  env -i HOME="$TEST_TMP" PATH="$start_dir:/usr/bin:/bin" ATC_ENV_FILE="${1:-$start_dir/test.env}" \
+    ATC_STARTUP_CACHE=0 /bin/sh "$fake_checkout/start.sh" 2>/dev/null
 }
 builds() { wc -l < "$fake_checkout/mill.log" | tr -d ' '; }
 start_output="$(fake_start)"
@@ -239,13 +246,14 @@ printf 'arg=<%s>\n' "$@"
 JAVA
 chmod +x "$start_dir/java25/java"
 fake_cache_start() {
-  env -i PATH="$start_dir/java25:/usr/bin:/bin" ATC_ENV_FILE="$start_dir/skip.env" TRAIN_LOG="$TEST_TMP/train.log" \
-    ATC_JAVA_OPTS=-Dfoo=bar /bin/sh "$fake_checkout/start.sh" -Xmx4g 2>/dev/null
+  env -i HOME="$TEST_TMP" PATH="$start_dir/java25:/usr/bin:/bin" ATC_ENV_FILE="$start_dir/skip.env" \
+    TRAIN_LOG="$TEST_TMP/train.log" ATC_JAVA_OPTS=-Dfoo=bar /bin/sh "$fake_checkout/start.sh" -Xmx4g 2>/dev/null
 }
 fake_startup="$fake_checkout/out/dist.dest/startup"
 start_output="$(fake_cache_start)"
 assert_contains "start.sh trains with ATC_JAVA_OPTS and -Xmx" "-Dfoo=bar -Xmx4g" "$(cat "$TEST_TMP/train.log")"
-assert_contains "start.sh keys the cache by them" "-Dfoo=bar -Xmx4g" "$(cat "$fake_startup/key.txt")"
+assert_contains "start.sh keys the cache by ATC_JAVA_OPTS" "-Dfoo=bar" "$(cat "$fake_startup/key.txt")"
+assert_contains "start.sh keys the cache by -Xmx" "-Xmx4g" "$(cat "$fake_startup/key.txt")"
 assert_contains "start.sh runs with the cache" "arg=<-XX:AOTCache=$fake_startup/atc.aot>" "$start_output"
 rm -rf "$fake_startup"
 chmod 555 "$fake_checkout/out/dist.dest"
@@ -260,9 +268,9 @@ chmod 755 "$fake_checkout/out/dist.dest"
 # The flag that uses the cache stays one argument when the checkout's path has a space.
 spaced_checkout="$TEST_TMP/spaced checkout"
 mkdir -p "$spaced_checkout/out/dist.dest"
-cp "$REPO_ROOT/start.sh" "$spaced_checkout/start.sh"
+cp "$REPO_ROOT/start.sh" "$REPO_ROOT/atc" "$spaced_checkout/"
 cp "$fake_checkout/out/dist.dest/atc.jar" "$fake_checkout/out/dist.dest/atc-lib.jar" "$spaced_checkout/out/dist.dest/"
-start_output="$(env -i PATH="$start_dir/java25:/usr/bin:/bin" ATC_ENV_FILE="$start_dir/skip.env" \
+start_output="$(env -i HOME="$TEST_TMP" PATH="$start_dir/java25:/usr/bin:/bin" ATC_ENV_FILE="$start_dir/skip.env" \
   TRAIN_LOG="$TEST_TMP/train.log" /bin/sh "$spaced_checkout/start.sh" 2>/dev/null)"
 assert_contains "start.sh passes a cache path with a space as one argument" \
   "arg=<-XX:AOTCache=$spaced_checkout/out/dist.dest/startup/atc.aot>" "$start_output"
@@ -378,6 +386,17 @@ assert_eq "a created file is not 'already' configured" "" "$(printf '%s\n' "$out
 assert_fails "only the first rc file is created" test -e "$HOME/.zprofile"
 rm -f "$profile"
 
+if [[ "$(id -u)" != 0 ]]; then
+  printf '# my zshrc\n\n%s\n' "$(path_snippet)" > "$profile"
+  printf '# my zprofile\n\n%s\n' "$(path_snippet)" > "$HOME/.zprofile"
+  chmod 444 "$profile"
+  out="$(env SHELL=/bin/zsh bash -c "source '$WRAPPER'; remove_profile_path" 2>&1)"
+  assert_contains "uninstall warns about an rc file it cannot write" "cannot write $profile" "$out"
+  assert_eq "and still cleans the next one" "# my zprofile" "$(cat "$HOME/.zprofile")"
+  chmod 644 "$profile"
+  rm -f "$profile" "$HOME/.zprofile"
+fi
+
 printf '# my zprofile\n\n%s\n' "$(path_snippet)" > "$HOME/.zprofile"
 (SHELL=/bin/bash remove_profile_path >/dev/null)
 assert_eq "uninstall cleans zsh's files after a switch to bash" "# my zprofile" "$(cat "$HOME/.zprofile")"
@@ -470,6 +489,14 @@ assert_contains "run subcommand forwards flags" "--version" "$run_out"
 DEFAULT_FLAGS=$'-Xms256m\n-Xmx2g\n-Xss4m\n-XX:-UsePerfData'
 run_out="$(PATH="$TEST_TMP/mockbin:$PATH" ATC_JAVA_OPTS="-Xmx3g -Dfoo=bar" main)"
 assert_contains "ATC_JAVA_OPTS is applied after the JVM defaults" "$DEFAULT_FLAGS"$'\n-Xmx3g\n-Dfoo=bar' "$run_out"
+# The options are words, not patterns: a file of the directory atc starts in is not one of them.
+glob_dir="$TEST_TMP/glob-dir"
+mkdir -p "$glob_dir"
+: > "$glob_dir/-Xlog:gc:file=planted.log"
+run_out="$(cd "$glob_dir" && PATH="$TEST_TMP/mockbin:$PATH" ATC_JAVA_OPTS="-Xlog:gc*" main)"
+assert_contains "ATC_JAVA_OPTS is not matched against file names" $'\n-Xlog:gc*\n' "$run_out"
+case "$run_out" in *planted.log*) fail_now=1 ;; *) fail_now=0 ;; esac
+assert_eq "a file named like an option is not passed to java" "0" "$fail_now"
 
 # -Xmx/-Xms among the arguments go to java, in order, and are not forwarded to ATC.
 run_out="$(PATH="$TEST_TMP/mockbin:$PATH" main -Xmx4g -C /work -Xms512m)"
@@ -551,6 +578,8 @@ training="$(awk 'BEGIN{RS="---\n"} NR==4' "$JAVA_CALLS")"
 assert_contains "training run uses ATC_JAVA_OPTS and -Xmx after the creating flag" \
   "-XX:AOTCacheOutput=$STARTUP_DIR/atc.aot"$'\n-Dfoo=bar\n-Xmx4g\n-Dfile.encoding' "$training"
 assert_contains "key records ATC_JAVA_OPTS and -Xmx" $'-Dfoo=bar\n-Xmx4g' "$(cat "$STARTUP_DIR/key.txt")"
+# The options may hold a proxy password or a token.
+assert_eq "the key file is readable by its owner only" "-rw-------" "$(ls -l "$STARTUP_DIR/key.txt" | cut -c1-10)"
 assert_contains "cache flag precedes ATC_JAVA_OPTS and the command line" $'-XX:AOTCache='"$STARTUP_DIR/atc.aot"$'\n-Dfoo=bar\n-Xmx4g' "$run_out"
 (PATH="$TEST_TMP/mockbin:$PATH" ATC_JAVA_OPTS="-Dfoo=bar" main -Xmx4g) >/dev/null 2>&1
 assert_eq "the same options reuse the cache" "6" "$(java_calls)"
@@ -1053,6 +1082,7 @@ startup_case() {
   fi
   printf '%s\n' "$marker" > "$STARTUP_CASE_DIR/cache/release.txt"
   if [[ "$scenario" == "missing-marker" ]]; then rm "$STARTUP_CASE_DIR/cache/release.txt"; fi
+  if [[ "$scenario" == "interrupted-update" ]]; then printf 'incomplete\n' > "$STARTUP_CASE_DIR/cache/release.txt"; fi
   printf '%s\n' "$json" > "$STARTUP_CASE_DIR/release.json"
   printf '%s\n' "$input" > "$STARTUP_CASE_DIR/input"
   if [[ "$scenario" == "eof" ]]; then : > "$STARTUP_CASE_DIR/input"; fi
@@ -1073,6 +1103,11 @@ done
 for scenario in development unknown disabled redirected missing-marker; do
   assert_fails "$scenario: no release lookup" test -e "$TEST_TMP/startup-$scenario/checks"
 done
+# An update that stopped between moving the two jars leaves the incomplete marker.
+startup_case interrupted-update
+assert_fails "interrupted-update: startup fails" test "$STARTUP_RC" -eq 0
+assert_contains "interrupted-update: says to update" "did not finish" "$(cat "$STARTUP_CASE_DIR/stderr")"
+assert_eq "interrupted-update: the app does not start" "" "$(sed -n '/app:/p' "$STARTUP_CASE_DIR/stdout")"
 
 # The wrapper's own startup offer: an installed copy (ATC_INSTALL_DIR) of the wrapper is
 # the script under test, GitHub's copy is assets/atc, the jars are current.
@@ -1092,6 +1127,13 @@ self_case() { # $1 = scenario, $2 = input
   esac
   [[ "$scenario" != "throttled" ]] || touch "$dir/cache/self-check"
   local wrapper="$dir/bin/atc" install_dir="$dir/bin" token=""
+  # A developer's install: the installed atc is a link to a checkout's.
+  if [[ "$scenario" == linked-* ]]; then
+    mkdir -p "$dir/checkout"
+    mv "$dir/bin/atc" "$dir/checkout/atc"
+    ln -s "$dir/checkout/atc" "$dir/bin/atc"
+    [[ "$scenario" != "linked-checkout" ]] || wrapper="$dir/checkout/atc"
+  fi
   [[ "$scenario" != "not-installed" ]] || install_dir="$dir/elsewhere"
   [[ "$scenario" != "bad-token" ]] || token="not-a-token"
   printf '%s\n' "$input" > "$dir/input"
@@ -1129,6 +1171,13 @@ for scenario in same broken throttled not-installed bad-token; do
   assert_eq "self $scenario: no temp file left" "" "$(ls "$STARTUP_CASE_DIR/bin"/atc.self-update.* 2>/dev/null || true)"
 done
 assert_fails "self not-installed: no check stamp" test -e "$TEST_TMP/self-not-installed/cache/self-check"
+for scenario in linked-checkout linked-install; do
+  self_case "$scenario" $'y\nrequest'
+  assert_eq "self $scenario: startup succeeds" "0" "$STARTUP_RC"
+  assert_eq "self $scenario: no offer" "" "$(grep -F "$self_prompt" "$STARTUP_CASE_DIR/stderr" || true)"
+  assert_succeeds "self $scenario: checkout's wrapper kept" cmp -s "$WRAPPER" "$STARTUP_CASE_DIR/checkout/atc"
+  assert_succeeds "self $scenario: installed link kept" test -L "$STARTUP_CASE_DIR/bin/atc"
+done
 assert_succeeds "self broken: stamp written, so no retry within a day" test -f "$TEST_TMP/self-broken/cache/self-check"
 
 self_case interrupted request

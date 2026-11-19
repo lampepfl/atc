@@ -24,21 +24,21 @@ object ClassifiedImpl:
     * Agent code cannot name either type; they come from a stop request, not from the
     * data. The interrupt status needs no repair, since the exception is rethrown. */
   def attempt[B](op: => B): Try[B] =
+    depth.set(depth.get + 1)
     try Success(op)
     catch
       case stop @ (_: ThreadDeath | _: InterruptedException) => throw stop
       case other: Throwable => Failure(other)
+    finally depth.set(depth.get - 1)
+
+  /** How many [[attempt]]s are running on this thread. */
+  private val depth: ThreadLocal[Int] = ThreadLocal.withInitial(() => 0).nn
+
+  /** Whether this thread is running code on classified data. What it writes to the process's
+    * output streams then, as `Throwable.printStackTrace` does without any capability, must not
+    * reach the evaluation's capture, which the model reads. */
+  def running: Boolean = depth.get > 0
 
   def unwrap[T](c: Classified[T]): Try[T] = c match
     case impl: ClassifiedImpl[T] @unchecked => impl.value
     case other => throw SecurityException(s"Unknown Classified implementation: ${other.getClass.getName}")
-
-  /** Read the value out, for host code and tests that are allowed to see it.
-    * A failed computation raises a sanitized error instead of the original
-    * exception, which may quote the confidential value (a pure `map` lambda can
-    * throw), so it must never reach the agent. */
-  def get[T](c: Classified[T]): T =
-    unwrap(c).getOrElse:
-      throw IllegalStateException(
-        "The classified value is the result of a failed computation; its error is confidential (println it to let the user see it)."
-      )

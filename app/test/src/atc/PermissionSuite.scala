@@ -322,6 +322,14 @@ class PermissionSuite extends munit.FunSuite:
       env.host.withEnv(Map("LEVEL" -> "info", "OTHER" -> "x")) { env.host.exec(show) }
     assert(e.getMessage.nn.contains(s"'OTHER=x ${stageLine(show)}'"), e.getMessage)
 
+  test("a star in a variable's value cannot reach the command its pattern names"):
+    // The agent picks the value: `LEVEL="x git y" show` once matched `LEVEL=* git *`.
+    val env = TestEnv(commands = List(valuePattern, "LEVEL=* git *"))
+    import env.given
+    val show = fixture("value", "LEVEL")
+    val e = intercept[SecurityException](env.host.withEnv(Map("LEVEL" -> "x git y")) { env.host.exec(show) })
+    assert(e.getMessage.nn.contains("LEVEL=\\\"x git y\\\""), e.getMessage)
+
   test("only a pattern that begins with NAME= permits a variable"):
     // `*` and `*value*` match every assignment line too; they permit commands, not variables.
     val env = TestEnv(commands = List("*", s"*value *"))
@@ -370,6 +378,25 @@ class PermissionSuite extends munit.FunSuite:
     for command <- List(s"A=1 ${fixture("value", "A")}", s"'A=1' ${fixture("value", "A")}") do
       val e = intercept[IllegalArgumentException](env.host.exec(command))
       assert(e.getMessage.nn.contains("withEnv(Map(\"A\" -> ...))"), e.getMessage)
+
+  test("every command has git refuse a directory that only looks like a bare repository"):
+    val env = TestEnv(commands =
+      List(valuePattern, "GIT_CONFIG_COUNT=*", "GIT_CONFIG_KEY_0=*", "GIT_CONFIG_VALUE_0=*", "GIT_CONFIG_PARAMETERS=*")
+    )
+    import env.given
+    def show(name: String)(using Exec) = env.host.exec(fixture("value", name)).stdout.trim
+    assertEquals((show("GIT_CONFIG_COUNT"), show("GIT_CONFIG_KEY_0")), ("1", "safe.bareRepository"))
+    // Added after the agent's own parameters, so a later one cannot turn it off.
+    val own = Map("GIT_CONFIG_COUNT" -> "1", "GIT_CONFIG_KEY_0" -> "core.pager", "GIT_CONFIG_VALUE_0" -> "cat")
+    val seen = env.host.withEnv(own) {
+      (show("GIT_CONFIG_COUNT"), show("GIT_CONFIG_KEY_0"), show("GIT_CONFIG_KEY_1"), show("GIT_CONFIG_VALUE_1"))
+    }
+    assertEquals(seen, ("2", "core.pager", "safe.bareRepository", "explicit"))
+    // Git reads GIT_CONFIG_PARAMETERS after the numbered ones, and the last value wins there.
+    val parameters = env.host.withEnv(Map("GIT_CONFIG_PARAMETERS" -> "'safe.bareRepository'='all'")) {
+      show("GIT_CONFIG_PARAMETERS")
+    }
+    assertEquals(parameters, "'safe.bareRepository'='all' 'safe.bareRepository=explicit'")
 
   test("a variable replaces the inherited one, also after the key variables are stripped"):
     val plain = TestEnv(commands = List(valuePattern, "PATH=*"))
@@ -503,6 +530,44 @@ class PermissionSuite extends munit.FunSuite:
     intercept[IllegalArgumentException](env.host.exec(s"$cat < in.txt", Nil, ExecOptions(stdin = "x"))) // two inputs
     intercept[IllegalArgumentException](env.host.exec(s"$echo a | $cat", List("x"))) // args need one program
 
+  test("a redirection or working directory through more links than the OS follows is judged by where it leads"):
+    // `a -> .` repeated until the kernel gives up on the lookup, then a link into a read-only
+    // directory or out of the project: the names left over must not be taken as plain names.
+    val outside = TestEnv.outsideDir()
+    val env = TestEnv(
+      root =>
+        List(
+          FileRule(PathPattern(".", root), Some(Access.Write), None),
+          FileRule(PathPattern("./kept", root), Some(Access.Read), None),
+        ),
+      commands = permits("echo", "cat", "pwd"),
+    )
+    import env.given
+    env.file("kept/config", "original\n")
+    assume(TestEnv.trySymbolicLink(env.root.resolve("a"), Path.of(".")), "symbolic links are unavailable")
+    Files.createSymbolicLink(env.root.resolve("k"), Path.of("kept"))
+    Files.createSymbolicLink(env.root.resolve("o"), outside)
+    val around = "a/" * 45
+    intercept[SecurityException](env.host.exec(s"${fixture("echo")} changed > ${around}k/config"))
+    intercept[SecurityException](env.host.exec(s"${fixture("echo")} created >> ${around}k/new.txt"))
+    assertEquals(env.contents("kept/config"), "original\n")
+    assert(!env.existsOnDisk("kept/new.txt"))
+    intercept[SecurityException](env.host.exec(s"${fixture("cat")} < ${around}o/o.txt"))
+    intercept[SecurityException](env.host.exec(fixture("pwd"), Nil, s"${around}o"))
+    // Where the links lead somewhere permitted, the command runs there.
+    assertEquals(env.host.exec(s"${fixture("cat")} < ${around}k/config").stdout, "original\n")
+    assertEquals(Path.of(env.host.exec(fixture("pwd"), Nil, s"${around}k").stdout.trim), env.root.resolve("kept"))
+
+  test("input sent right after spawn comes after the input given at the start"):
+    val env = TestEnv(commands = permits("cat"))
+    import env.given
+    val first = "x" * 200000 + "\n" // more than a pipe holds, so its write takes a while
+    val cat = env.host.spawn(fixture("cat"), ExecOptions(stdin = first))
+    cat.send("second\n")
+    cat.closeStdin()
+    val out = cat.waitFor(10000).map(_.stdout).getOrElse("")
+    assertEquals(out, first + "second\n")
+
   test("spawn: talk to a process while it runs, read what it says, and it is reported to the user"):
     val env = TestEnv(commands = permits("cat", "sort"))
     import env.given
@@ -567,6 +632,9 @@ class PermissionSuite extends munit.FunSuite:
     assertEquals(env.host.killProcess("p1"), Left("no running process 'p1' (see /ps)")) // p1 (the sleeper) is gone
     assert(env.host.killProcess(s"p${many.head.id}").exists(_.startsWith("killed p")))
     assert(env.host.processSummary.linesIterator.size == Host.MaxProcesses - 1)
+    // A bare /kill stops nothing: stopping every process takes the word.
+    assert(env.host.killProcess("").left.exists(_.contains("/kill all")))
+    assertEquals(env.host.runningProcesses.size, Host.MaxProcesses - 1)
     env.host.killProcesses() // what the app does when the session ends
     assert(many.forall(p => p.waitFor(5000).isDefined))
     assertEquals(env.host.runningProcesses, Nil)
@@ -614,7 +682,7 @@ class PermissionSuite extends munit.FunSuite:
     // The server reflects the header verbatim. The response must nevertheless
     // stay classified; otherwise this endpoint launders the token into a String.
     assertEquals(echoed.toString, "Classified(***)")
-    assertEquals(ClassifiedImpl.get(echoed), "s3cr3t") // host-only test inspection
+    assertEquals(TestEnv.reveal(echoed), "s3cr3t") // host-only test inspection
 
   test("a failed classified secret header aborts the request without leaking the failure bit"):
     val env = TestEnv(hosts = List(host))
@@ -700,7 +768,7 @@ class PermissionSuite extends munit.FunSuite:
     )
     val secret = Map("Content-Type" -> env.host.classify("text/csv"))
     assertEquals(
-      ClassifiedImpl.get(env.host.httpPost(url("/content-type"), "x", "text/plain", Map.empty, secret)),
+      TestEnv.reveal(env.host.httpPost(url("/content-type"), "x", "text/plain", Map.empty, secret)),
       "[text/csv]"
     )
 

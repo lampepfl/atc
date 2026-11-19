@@ -54,7 +54,8 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     b.addInclude(ResponseIncludable.REASONING_ENCRYPTED_CONTENT)
     configure(b, thinking = true, reasoning(thinking = true))
     tools.foreach(t => b.addTool(functionTool(t)))
-    if webSearch then b.addTool(Tool.ofWebSearch(WebSearchTool.builder().`type`(WebSearchTool.Type.WEB_SEARCH).build()))
+    if searches(tools) then
+      b.addTool(Tool.ofWebSearch(WebSearchTool.builder().`type`(WebSearchTool.Type.WEB_SEARCH).build()))
     val input = List.newBuilder[ResponseInputItem]
     def message(role: EasyInputMessage.Role, text: String): ResponseInputItem =
       ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder().role(role).content(text).build())
@@ -112,7 +113,12 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     val toolCalls = calls.result()
     val lastItem = r.output().asScala.lastOption
     val paused = toolCalls.isEmpty && lastItem.exists(i => !i.isMessage && !i.isFunctionCall && !i.isReasoning)
-    val status = CompletionStop.fromReason(stop, paused)
+    // An incomplete response whose reason is missing or unknown was cut where nobody said: its
+    // calls may be partial, so it must not count as complete.
+    val incomplete = r.status().toScala.exists(_.toString.equalsIgnoreCase("incomplete"))
+    val status = CompletionStop.fromReason(stop, paused) match
+      case CompletionStop.Complete if incomplete => CompletionStop.Incomplete
+      case other => other
     Completion(text.toString, toolCalls, Some(NativeTurn(providerKey, ref, r.output())), usageOf(r), stop, status)
 
   def complete(
@@ -122,7 +128,7 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     sink: StreamSink,
     cancelled: () => Boolean
   ): Completion =
-    withWebSearchFallback(sink): sink =>
+    withWebSearchFallback(tools, sink): sink =>
       val acc = OpenAIResponsesModel.Accumulator()
       val stream = streamingClient.async().responses().createStreaming(params(system, history, tools))
       ModelRequest.awaitStream(() => stream.close()) {

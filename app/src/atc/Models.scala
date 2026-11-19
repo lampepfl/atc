@@ -1,6 +1,7 @@
 package atc
 
-import atc.config.{Config, ConfigLayer, Configuration, ModelCatalog, ModelConfig, ModelListStore, ModelSpec}
+import atc.config.{Config, ConfigLayer, Configuration, KeyBindings, ModelCatalog, ModelConfig, ModelListStore}
+import atc.config.ModelSpec
 import atc.llm.ChatModel
 import atc.perms.Mode
 import atc.platform.PlatformPath
@@ -30,6 +31,10 @@ final class Models(args: Cli.Args, start: Configuration, atcDir: Path):
   /** Whether the sandbox mode reaches the network; provider web search is used only then. */
   @volatile private var networkMode = true
 
+  /** Whether `-m` or the config's `model` named the model [[initial]] returned. Otherwise it
+    * is the one last chosen with `/model`, or the first one of the first usable provider. */
+  var initialNamed: Boolean = false
+
   /** The client for one model, created once per session. */
   def client(spec: ModelSpec): ChatModel =
     clients.getOrElseUpdate(
@@ -54,14 +59,25 @@ final class Models(args: Cli.Args, start: Configuration, atcDir: Path):
     * a warning, and so is an `effort` the model does not take. */
   def initial(warn: String => Unit): ChatModel =
     def last = Models.last(atcDir).flatMap(ref => Try(catalog.find(ref)).toOption)
-    val model = args.model.map(client).orElse(configured("model", start.settings.model, warn))
-      .getOrElse(client(last.getOrElse(catalog.default)))
+    val named = args.model.map(client).orElse(configured("model", start.settings.model, warn))
+    initialNamed = named.isDefined
+    val model = named.getOrElse(client(last.getOrElse(catalog.default)))
     start.settings.effort.map(_.toLowerCase(Locale.ROOT)).foreach: effort =>
       if effort == ModelConfig.DefaultEffort then model.effort = None
       else if model.efforts.contains(effort) then model.effort = Some(effort)
       else
         val takes = if model.efforts.isEmpty then "no effort" else model.efforts.mkString(" | ")
         warn(s"Ignoring effort in ${settingFile("effort")}: ${model.ref} takes $takes, not '$effort'")
+    // A key variable that nothing binds leaves the request without the key, and the provider's
+    // "401" does not say which variable to set.
+    for
+      provider <- start.settings.providers.get(catalog.find(model.ref).provider)
+      variable <- provider.key.flatMap(KeyBindings.envRefName).orElse(provider.keyEnv)
+      if start.keys.get(variable).isEmpty
+    do
+      warn(
+        s"$variable, which the config names as the key of ${model.ref}, is not set in a keys.properties file or the environment"
+      )
     model
 
   /** The client for the model `reference`, the value of a config `setting`

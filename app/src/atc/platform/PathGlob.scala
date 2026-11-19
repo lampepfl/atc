@@ -8,7 +8,8 @@ import java.util.regex.{Pattern, PatternSyntaxException}
 private[atc] object PathGlob:
   def pattern(glob: String): Pattern =
     // A malformed class or brace group surfaces as an error about the glob, not the regex.
-    try Pattern.compile(source(glob), Platform.pathRegexFlags)
+    // DOTALL: a file name may hold a line terminator, which `**` must span like any character.
+    try Pattern.compile(source(glob), Platform.pathRegexFlags | Pattern.DOTALL)
     catch
       case e: PatternSyntaxException =>
         throw IllegalArgumentException(s"bad glob '$glob': ${e.getDescription}")

@@ -3,6 +3,8 @@ package atc.ui
 import org.jline.terminal.Terminal
 import org.jline.utils.{InfoCmp, WCWidth}
 
+import java.io.PrintStream
+
 import Ansi.{ClearLine, Dim, Reset}
 
 /** The terminal output shared by the TUI's views: styles and glyphs, the
@@ -11,7 +13,13 @@ import Ansi.{ClearLine, Dim, Reset}
   *
   * The screen is the TUI's lock. Every view writes inside `frame` (or holds
   * the screen's monitor), and a frame flushes once when the outermost one ends. */
-private[ui] final class Screen(val terminal: Terminal, val plain: Boolean, val g: Glyphs):
+private[ui] final class Screen(
+  val terminal: Terminal,
+  val plain: Boolean,
+  val g: Glyphs,
+  /** Where the model's own answer goes when that is not the terminal ([[writeAnswer]]). */
+  answer: Option[PrintStream] = None,
+):
   private val out = terminal.writer()
 
   /** Colours the terminal supports; 0 (no styling at all) when there is no real terminal. */
@@ -61,7 +69,22 @@ private[ui] final class Screen(val terminal: Terminal, val plain: Boolean, val g
     if s.nonEmpty then
       out.print(s)
       outputDirty = true
-      tail = if s.length >= 2 then s.takeRight(2) else (tail + s).takeRight(2)
+      written(s)
+
+  private def written(s: String): Unit = tail = if s.length >= 2 then s.takeRight(2) else (tail + s).takeRight(2)
+
+  /** Write text of the model's own answer. A scripted run sends it to its standard output,
+    * which then carries the answer alone, while everything else goes to the terminal on
+    * standard error. The two may be one terminal, so they share the line position, and what
+    * was written before goes out first. */
+  def writeAnswer(s: String): Unit = answer match
+    case None => write(s)
+    case Some(stream) =>
+      if s.nonEmpty then
+        out.flush()
+        stream.print(s)
+        stream.flush()
+        written(s)
 
   /** A style or control sequence: printed like `write`, but it takes no columns and leaves `tail` alone. */
   def writeStyle(s: String): Unit =
@@ -87,8 +110,19 @@ private[ui] final class Screen(val terminal: Terminal, val plain: Boolean, val g
   /** Write text that may arrive in chunks and span lines, putting `gutter` at
     * every line start. Empty lines get the gutter too unless it is blank
     * (indentation), so boxes stay closed and prose has no trailing spaces. */
-  def writeGuttered(text: String, gutter: String): Unit =
-    if !text.contains('\n') then
+  def writeGuttered(text: String, gutter: String): Unit = writeGuttered(text, gutter, isAnswer = false)
+
+  /** `isAnswer`: the text, though not the gutters, is the model's answer ([[writeAnswer]]). */
+  def writeGuttered(text: String, gutter: String, isAnswer: Boolean): Unit =
+    if isAnswer && answer.isDefined then
+      val parts = text.split("\n", -1)
+      var lineStart = atLineStart
+      for (seg, i) <- parts.zipWithIndex do
+        val last = i == parts.length - 1
+        if lineStart && (seg.nonEmpty || (!last && !gutter.isBlank)) then write(gutter)
+        writeAnswer(if last then seg else seg + "\n")
+        lineStart = !last
+    else if !text.contains('\n') then
       if atLineStart && text.nonEmpty then write(gutter + text) else write(text)
     else
       val parts = text.split("\n", -1)

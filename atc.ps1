@@ -4,10 +4,10 @@
 #   powershell -ExecutionPolicy Bypass -File .\atc.ps1 setup   # installs atc, downloads the latest release
 #   atc -C C:\my-project                                       # runs ATC (any argument that is not a command)
 #
-# `atc help` lists the wrapper commands. The wrapper keeps the release's jars and its own
-# atc.ps1 launcher, which starts Java, in %USERPROFILE%\.atc\jars and runs that launcher. The
-# Unix `atc` wrapper is the model for it. Keep this file ASCII: Windows PowerShell reads a
-# script without a byte order mark in the system code page.
+# `atc help` lists the wrapper commands. The wrapper keeps the release's jars in
+# %USERPROFILE%\.atc\jars and starts Java with them itself. The Unix `atc` wrapper is the model
+# for it, and start.ps1 runs a checkout's build through it. Keep this file ASCII: Windows
+# PowerShell reads a script without a byte order mark in the system code page.
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell 5.1 may not offer TLS 1.2 by default, and its progress bar slows downloads.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -25,9 +25,8 @@ $CacheDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSP
   $(if ($env:ATC_CACHE_DIR) { $env:ATC_CACHE_DIR } else { Join-Path $AtcHome 'jars' }))
 $InstallDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
   $(if ($env:ATC_INSTALL_DIR) { $env:ATC_INSTALL_DIR } else { Join-Path $AtcHome 'bin' }))
-# The release files the wrapper installs together: the jars and the launcher of the same release.
-$ReleaseFiles = @('atc.jar', 'atc-lib.jar', 'atc.ps1')
-$Launcher = Join-Path $CacheDir 'atc.ps1'
+# The release files the wrapper installs together.
+$ReleaseFiles = @('atc.jar', 'atc-lib.jar')
 # "<release id>|<tag>" of the installed release, written after its files are in place.
 $ReleaseMarker = Join-Path $CacheDir 'release.txt'
 
@@ -90,7 +89,7 @@ function Get-ReleaseAssets($release) {
   $assets = @{}
   foreach ($name in $ReleaseFiles) {
     $asset = @($release.assets | Where-Object { $_.name -ceq $name })[0]
-    if (-not $asset) { throw "Required asset $name was not found in the latest release." }
+    if (-not $asset) { throw "The latest release has no $name yet; it is attached when the release build finishes. Try again in a few minutes." }
     $url = [string]$asset.browser_download_url
     if (-not $url.StartsWith('https://')) { throw "Refusing a non-https download URL for ${name}: $url" }
     if ([string]$asset.digest -match '^sha256:([0-9a-fA-F]{64})$') {
@@ -324,10 +323,118 @@ function Get-SessionPolicy {
 }
 
 function Test-Java {
-  $javaHome = $env:JAVA_HOME
-  if (($javaHome -and (Test-Path -LiteralPath (Join-Path $javaHome 'bin\java.exe') -PathType Leaf)) -or
-      (Get-Command java.exe -CommandType Application -ErrorAction SilentlyContinue)) { return }
-  Write-Warning 'ATC needs Java 17 or newer, and java.exe was not found in JAVA_HOME or on PATH. Install a JDK before running atc.'
+  try { Find-Java | Out-Null } catch {
+    Write-Warning 'ATC needs Java 17 or newer, and java.exe was not found in JAVA_HOME or on PATH. Install a JDK before running atc.'
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Starting ATC
+# ---------------------------------------------------------------------------
+
+# The arguments for ATC and, apart from them, the JVM's -Xmx<size> and -Xms<size>. The value of
+# an ATC option that takes one (-p 'text', -C dir, ...) is forwarded untouched even when it
+# starts with -Xm: those options mirror `FlagsWithValues` in app/src/atc/Cli.scala.
+function Split-HeapOptions([string[]]$Arguments) {
+  $heap = [Collections.Generic.List[string]]::new()
+  $atc = [Collections.Generic.List[string]]::new()
+  $expectValue = $false
+  foreach ($arg in $Arguments) {
+    if ($expectValue) {
+      $expectValue = $false
+      $atc.Add($arg)
+    } elseif ($arg -cin '-c', '--config', '-C', '--cwd', '-m', '--model', '-p', '--prompt', '--mode') {
+      $expectValue = $true
+      $atc.Add($arg)
+    } elseif ($arg -cmatch '^-Xm[sx]') {
+      if ($arg -cnotmatch '^-Xm[sx][0-9]+[kKmMgG]?$') {
+        throw "Invalid JVM heap size '$arg': use a number with an optional k, m or g suffix, e.g. -Xmx4g or -Xms512m"
+      }
+      $heap.Add($arg)
+    } else {
+      $atc.Add($arg)
+    }
+  }
+  @{ Atc = [string[]]$atc.ToArray(); Heap = [string[]]$heap.ToArray() }
+}
+
+# java.exe from JAVA_HOME, else from PATH.
+function Find-Java {
+  if ($env:JAVA_HOME) {
+    $java = Join-Path $env:JAVA_HOME 'bin\java.exe'
+    if (Test-Path -LiteralPath $java -PathType Leaf) { return $java }
+  }
+  $found = @(Get-Command java.exe -CommandType Application -ErrorAction SilentlyContinue)
+  if ($found.Count -eq 0) { throw 'Java 17 or newer is required, but java.exe was not found in JAVA_HOME or PATH.' }
+  $found[0].Source
+}
+
+# The major version that `java -version` reports. It runs as its own process, since Windows
+# PowerShell turns a native command's standard error into errors.
+function Get-JavaMajor([string]$Java) {
+  $probe = New-Object System.Diagnostics.Process
+  $probe.StartInfo.FileName = $Java
+  $probe.StartInfo.Arguments = '-version'
+  $probe.StartInfo.UseShellExecute = $false
+  $probe.StartInfo.CreateNoWindow = $true
+  $probe.StartInfo.RedirectStandardOutput = $true
+  $probe.StartInfo.RedirectStandardError = $true
+  try {
+    if (-not $probe.Start()) { throw "Could not start '$Java' to check its version." }
+    $text = $probe.StandardOutput.ReadToEnd() + $probe.StandardError.ReadToEnd()
+    $probe.WaitForExit()
+  } finally {
+    $probe.Dispose()
+  }
+  if (-not ($text -match '(?im)^\S+\s+version\s+"(?<major>\d+)(?:\.(?<minor>\d+))?')) {
+    throw "Unable to determine the Java version from '$Java'. Java 17 or newer is required."
+  }
+  $major = [int]$Matches.major
+  if ($major -eq 1 -and $Matches.minor) { $major = [int]$Matches.minor }
+  $major
+}
+
+# The JVM options for Java $Major. Later flags win: the defaults, then ATC_JAVA_OPTS, then $Heap.
+# The defaults are DEFAULT_JVM_OPTS and VERSIONED_JVM_OPTS of the Unix `atc` wrapper: change
+# both lists together.
+function Get-JvmOptions([int]$Major, [string[]]$Heap) {
+  $options = @('-Xms256m', '-Xmx2g', '-Xss4m', '-XX:-UsePerfData')
+  # Scala's LazyVals still use sun.misc.Unsafe; Java 23+ warns about it on every run (JEP 471).
+  if ($Major -ge 23) { $options += '--sun-misc-unsafe-memory-access=allow' }
+  # JLine loads a native library; Java 24+ warns about that on every run (JEP 472).
+  if ($Major -ge 24) { $options += '--enable-native-access=ALL-UNNAMED' }
+  if ($env:ATC_JAVA_OPTS) { $options += @($env:ATC_JAVA_OPTS -split '\s+' | Where-Object { $_ }) }
+  [string[]]($options + @($Heap | Where-Object { $_ }))
+}
+
+# Runs ATC from the jars in $Dir and leaves its exit code in $LASTEXITCODE; -Xmx and -Xms among
+# $Arguments go to Java. Java runs in $Dir and opens the jars by name, and the arguments and
+# the launch directory go through private ATC_INTERNAL_* variables (LauncherEnvironment), which
+# keep the Unicode and quotes that a Windows command line can lose.
+function Start-Atc([string]$Dir, [string[]]$Arguments) {
+  $split = Split-HeapOptions $Arguments
+  $java = Find-Java
+  $major = Get-JavaMajor $java
+  if ($major -lt 17) { throw "Java 17 or newer is required; '$java' reports major version $major." }
+  $javaArgs = @(Get-JvmOptions $major $split.Heap) + @('-Dfile.encoding=UTF-8', '-jar', 'atc.jar')
+  $atcArgs = $split.Atc
+  $names = @('ATC_INTERNAL_LAUNCH_CWD', 'ATC_INTERNAL_LIB_CLASSPATH', 'ATC_INTERNAL_ARG_COUNT')
+  if ($atcArgs.Count -gt 0) { $names += @(0..($atcArgs.Count - 1) | ForEach-Object { "ATC_INTERNAL_ARG_$_" }) }
+  $saved = @{}
+  foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+  $env:ATC_INTERNAL_LAUNCH_CWD = (Get-Location).Path
+  $env:ATC_INTERNAL_LIB_CLASSPATH = Join-Path $Dir 'atc-lib.jar'
+  $env:ATC_INTERNAL_ARG_COUNT = $atcArgs.Count
+  for ($index = 0; $index -lt $atcArgs.Count; $index++) {
+    [Environment]::SetEnvironmentVariable("ATC_INTERNAL_ARG_$index", "x$($atcArgs[$index])", 'Process')
+  }
+  Push-Location -LiteralPath $Dir
+  try {
+    & $java @javaArgs
+  } finally {
+    Pop-Location
+    foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -384,14 +491,14 @@ function Invoke-Uninstall {
   Write-Host "Removed atc and the downloaded release. $AtcHome\config.json and keys.properties are kept."
 }
 
-# Starts the installed release's launcher, which takes the -Xmx/-Xms arguments for Java.
+# Runs the installed release, downloading the latest one first when none is installed.
 function Invoke-Run([string[]]$Arguments) {
   if (-not (Test-Ready)) {
     Install-Release (Get-LatestRelease)
   } elseif (Test-StartupCheck $Arguments) {
     Invoke-StartupUpdate
   }
-  & $Launcher @Arguments
+  Start-Atc $CacheDir $Arguments
   exit $LASTEXITCODE
 }
 

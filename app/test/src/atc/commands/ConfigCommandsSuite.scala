@@ -30,6 +30,36 @@ class ConfigCommandsSuite extends munit.FunSuite:
     assertEquals(named("AUTOCOMPACTTHRESHOLD"), Some(AutoCompactThreshold))
     assertEquals(named("maxToolCalls"), None)
 
+  test("a project config that is a link, or lies in a linked .atc, is not written"):
+    // A repository can ship either, pointing the write at a file of the user's.
+    val atcDir = TestEnv.tempDir("atc-home")
+    val victim = TestEnv.tempDir("atc-victim").resolve("settings.json").nn
+    Files.writeString(victim, """{ "model": "kept" }""")
+    def refused(config: java.nio.file.Path): Unit =
+      val root = config.getParent.nn.getParent.nn
+      val e = intercept[IllegalArgumentException]:
+        ConfigCommands.editConfigs(root, atcDir, List(config))(Config.setTopLevel(config, "model", ujson.Str("x")))(())
+      assert(e.getMessage.nn.contains("is a symbolic link"), e.getMessage)
+      assertEquals(Files.readString(victim), """{ "model": "kept" }""")
+    val linkedFile = TestEnv.tempDir("atc-project")
+    Files.createDirectories(linkedFile.resolve(".atc"))
+    assume(TestEnv.trySymbolicLink(Config.projectPath(linkedFile), victim), "symbolic links are unavailable")
+    refused(Config.projectPath(linkedFile))
+    val linkedDir = TestEnv.tempDir("atc-project")
+    Files.writeString(victim.resolveSibling("config.json"), """{ "model": "kept" }""")
+    Files.createSymbolicLink(linkedDir.resolve(".atc"), victim.getParent)
+    refused(Config.projectPath(linkedDir))
+    assertEquals(Files.readString(victim.resolveSibling("config.json")), """{ "model": "kept" }""")
+    // The global config is the user's own: a link they made there is written through.
+    val global = atcDir.resolve("config.json").nn
+    Files.createSymbolicLink(global, victim)
+    ConfigCommands.editConfigs(
+      linkedFile,
+      atcDir,
+      List(global)
+    )(Config.setTopLevel(global, "model", ujson.Str("x")))(())
+    assertEquals(ujson.read(Files.readString(victim))("model").str, "x")
+
   test("a config edit keeps a trusted project trusted, and a failed one restores the files and the trust"):
     val atcDir = TestEnv.tempDir("atc-home")
     def project(trusted: Boolean) =

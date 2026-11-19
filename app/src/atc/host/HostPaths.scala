@@ -18,7 +18,19 @@ private[host] trait HostPaths:
 
   /** Resolve a path against the host working directory and canonicalize it for
     * policy evaluation, including symlinks and dangling write targets. */
-  private[atc] def canonical(path: String): Path =
+  private[atc] def canonical(path: String): Path = PlatformPath.canonical(absolute(path))
+
+  /** The path a `FileEntry` names: canonical, except that a final link stays itself under its
+    * canonical parent, so that `delete` removes the link and not its target. */
+  private[host] def entryPath(path: String): Path =
+    val lexical = absolute(path).toAbsolutePath.nn.normalize.nn
+    val parent = lexical.getParent
+    val name = lexical.getFileName
+    if parent != null && name != null && PlatformPath.isLink(lexical) then
+      PlatformPath.canonical(parent).resolve(name).nn
+    else PlatformPath.canonical(lexical)
+
+  private def absolute(path: String): Path =
     val raw = PlatformPath.parse(path)
     // Canonicalizing a UNC path contacts its server (DNS, SMB) before any permission check,
     // so even a read-only file system inside `Classified.map` could reach the network.
@@ -26,7 +38,7 @@ private[host] trait HostPaths:
       throw IllegalArgumentException(
         s"UNC path ${ScalaSource.stringLiteral(path)} is not supported outside the working directory's share"
       )
-    PlatformPath.canonical(if raw.isAbsolute then raw else cwd.resolve(raw).nn)
+    if raw.isAbsolute then raw else cwd.resolve(raw).nn
 
   /** `operation` carries its own preposition, so that it reads as a phrase in
     * front of the path (`read '/x'`, `running a command in '/x'`). */
@@ -50,7 +62,9 @@ private[host] trait HostPaths:
     val permission = policy.effective(scope, path)
     if !(if write then permission.canWrite else permission.canRead) then
       val access = if write then "Access.Write" else "Access.Read"
-      val shown = ScalaSource.stringLiteral(PlatformPath.portable(path))
+      // A request names a path that is resolved, so a link is granted through its directory.
+      val requested = if PlatformPath.isLink(path) then Option(path.getParent).getOrElse(path) else path
+      val shown = ScalaSource.stringLiteral(PlatformPath.portable(requested))
       throw denied(path, operation, permission, s"Use requestFiles($shown, $access, reason) { ... } to ask the user.")
     permission
 
@@ -125,35 +139,35 @@ private[host] trait HostPaths:
     content match
       case Success(value) =>
         // Once the classified computation has been inspected, neither an I/O
-        // failure nor its message may reach the agent: either would reveal a
-        // success/failure bit, and an exception can quote the content.
-        try Files.writeString(path, value, StandardCharsets.UTF_8)
-        catch case NonFatal(_) => classifiedSinkFailed(s"writing '${PlatformPath.portable(path)}'")
+        // failure, fatal errors included, nor its message may reach the agent:
+        // either would reveal a success/failure bit, and an exception can quote
+        // the content.
+        if ClassifiedImpl.attempt(Files.writeString(path, value, StandardCharsets.UTF_8)).isFailure then
+          classifiedSinkFailed(s"writing '${PlatformPath.portable(path)}'")
       case Failure(_) => classifiedSinkFailed(s"writing '${PlatformPath.portable(path)}'")
 
   /** Visible children. Policy checks use canonical paths; gitignore checks use the entry. */
   private def visibleEntries(scope: ScopeId, dir: Path): List[VisibleEntry] =
-    val entries = Using.resource(Files.list(dir).nn): stream =>
+    Using.resource(Files.list(dir).nn): stream =>
       stream.iterator.nn.asScala.toList.sortBy(_.getFileName.toString).flatMap: entry =>
         try
-          // Canonicalize every entry. Windows junctions and other reparse points are
-          // not reported as symbolic links, but their NOFOLLOW attributes are
-          // `isOther`. Keep every final reparse point out of recursive traversal
-          // and evaluate policy on what it actually reaches.
-          val path = PlatformPath.canonical(entry.toAbsolutePath.nn.normalize.nn)
+          // Windows junctions and other reparse points are not reported as symbolic links,
+          // but their NOFOLLOW attributes are `isOther`. Keep every final reparse point out
+          // of recursive traversal and evaluate policy on what it actually reaches.
+          val own = entry.toAbsolutePath.nn.normalize.nn
+          val reached = PlatformPath.canonical(own)
           val attributes = Files.readAttributes(entry, classOf[BasicFileAttributes], LinkOption.NOFOLLOW_LINKS).nn
           val isLink = attributes.isSymbolicLink || attributes.isOther
           if gitIgnore.ignores(entry) then None
           else
-            val permission = policy.effective(scope, path)
+            val permission = policy.effective(scope, reached)
             Option.when(permission.canRead):
-              // A link's own attributes do not describe what it reaches.
-              VisibleEntry(path, permission, isLink, if isLink then Files.isDirectory(path) else attributes.isDirectory)
+              // A link is listed under its own path, so that deleting it removes the link; its
+              // own attributes do not describe what it reaches.
+              if isLink then VisibleEntry(own, permission, isLink, Files.isDirectory(reached))
+              else VisibleEntry(reached, permission, isLink, attributes.isDirectory)
         catch
           case NonFatal(_) => None
-    // A link beside its own target resolves to the same path: list that path once, as the plain entry.
-    val plain = entries.collect { case entry if !entry.isLink => entry.path }.toSet
-    entries.filter(entry => !entry.isLink || !plain.contains(entry.path)).distinctBy(_.path)
 
   private[host] def visibleChildren(scope: ScopeId, dir: Path): List[Path] = visibleEntries(scope, dir).map(_.path)
 
@@ -178,6 +192,7 @@ private[host] trait HostPaths:
     else if path.startsWith(canonicalCwd) then PlatformPath.portable(canonicalCwd.relativize(path).nn)
     else PlatformPath.portable(path)
 
-/** A listed directory entry: the canonical path it reaches, that path's permission, whether the
-  * entry itself is a symlink or another reparse point, and whether the path is a directory. */
+/** A listed directory entry: its canonical path, or a link's own path under its canonical
+  * parent; the permission of what it reaches; whether the entry itself is a symlink or another
+  * reparse point; and whether what it reaches is a directory. */
 private[host] final case class VisibleEntry(path: Path, permission: Perm, isLink: Boolean, isDirectory: Boolean)

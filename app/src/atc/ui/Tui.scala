@@ -11,7 +11,7 @@ import org.jline.reader.{EndOfFileException, UserInterruptException}
 import org.jline.terminal.{Terminal, TerminalBuilder}
 import org.jline.terminal.impl.DumbTerminal
 
-import java.io.{InputStream, OutputStream}
+import java.io.{InputStream, OutputStream, PrintStream}
 import java.nio.charset.{Charset, StandardCharsets}
 import java.nio.file.Path
 import java.util.Locale
@@ -36,7 +36,13 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   /** Not a real terminal (piped / `-p` in a script): no spinner, no cursor tricks, no menus, nothing folded. */
   private val plain: Boolean = terminal.getType == Terminal.TYPE_DUMB || terminal.getType == Terminal.TYPE_DUMB_COLOR
   private val screen =
-    Screen(terminal, plain, Tui.glyphs(terminal.encoding(), ProcessEnvironment.contains("ATC_ASCII")))
+    Screen(
+      terminal,
+      plain,
+      Tui.glyphs(terminal.encoding(), ProcessEnvironment.contains("ATC_ASCII")),
+      // A scripted run's terminal is its standard error; the answer alone goes to standard output.
+      Option.when(nonInteractive)(PrintStream(System.out, true, StandardCharsets.UTF_8)),
+    )
   import screen.{Indent, blankLine, ensureNewline, frame, g, styled, width, write, writeGuttered}
 
   private val alerts = Alerts(terminal, plain, text => screen.frame(screen.writeStyle(text)))
@@ -272,7 +278,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     prose match
       case Some(md) =>
         alerts.proseDelta(clean, newBlock = false)
-        writeGuttered(md.push(clean), Indent)
+        writeGuttered(md.push(clean), Indent, isAnswer = true)
       case None =>
         val t = clean.dropWhile(_ == '\n')
         if t.nonEmpty then
@@ -281,7 +287,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
           write(styled(g.bullet, Bold) + " ")
           val md = newProse()
           prose = Some(md)
-          writeGuttered(md.push(t), Indent)
+          writeGuttered(md.push(t), Indent, isAnswer = true)
 
   /** Markdown rendering for one prose block; plain pass-through when there are no colours. */
   private def newProse(): MarkdownStream =
@@ -298,7 +304,11 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   private def endText(): Unit =
     screen.stopSpinner()
     thinking.end()
-    prose.foreach(md => writeGuttered(md.finish(), Indent))
+    prose.foreach: md =>
+      writeGuttered(md.finish(), Indent, isAnswer = true)
+      // The answer's own line end, so that its blocks stay on lines of their own where the
+      // answer is written apart from the rest.
+      if !screen.atLineStart then screen.writeAnswer("\n")
     prose = None
 
   /** Out-of-band note during streaming ("web search"): a spinner until the
@@ -374,9 +384,19 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     val wasThinking = thinking.active
     thinking.detach()
     tool.detach()
-    info(if expanded then "expanded view (Ctrl-O to collapse)" else "compact view (Ctrl-O to expand)")
+    info(viewNote)
     if wasThinking then thinking.render() // the whole reasoning (expanded) or a window over it (compact)
     tool.reattach()
+
+  private def viewNote: String =
+    if expanded then "expanded view (Ctrl-O to collapse)" else "compact view (Ctrl-O to expand)"
+
+  /** Ctrl-O while a prompt reads: nothing is live, so the view changes for what comes next,
+    * and the note goes above the line being typed. */
+  prompt.onToggle = () =>
+    expanded = !expanded
+    prompt.printAbove(styled(viewNote, Dim))
+    ()
 
   // ── pop-ups: permission requests and questions from the agent ─────
 
@@ -428,8 +448,8 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   /** A sub-menu: `options` and a last Back row. The chosen index; `None` for Back,
     * Esc or no menus, which return to the menu that opened it. */
-  def chooseOrBack(title: String, options: List[String]): Option[Int] =
-    chooseIndex(title, options :+ Menus.BackLabel).filter(_ < options.size)
+  def chooseOrBack(title: String, options: List[String], initial: Int = 0): Option[Int] =
+    chooseIndex(title, options :+ Menus.BackLabel, initial).filter(_ < options.size)
 
   /** A menu the user comes back to after each choice: `entries`, labels with what
     * choosing them does, are built again every time, and the last row, Done, or
@@ -450,7 +470,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     if plain || options.isEmpty then None
     else
       popupBlock("question", title):
-        dialogs.menuIndex(Ansi.sanitize(title), options.map(Ansi.sanitize), escape = "back", initial)
+        dialogs.menuIndex(title, options, escape = "back", initial)
 
   /** A multi-choice pop-up with the `checked` options ticked at first: the
     * indices ticked when confirmed, `None` when left with Esc or without menus. */
@@ -458,7 +478,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     if plain || options.isEmpty then None
     else
       val ticked = popupBlock("question", title):
-        dialogs.checkboxIndices(Ansi.sanitize(title), options.map(Ansi.sanitize), checked, escape = "back")
+        dialogs.checkboxIndices(title, options, checked, escape = "back")
       ticked.map(_.toSet)
 
   // The operation is set inside the pop-up, under its lock: pop-ups that `parallel` tasks
@@ -487,8 +507,10 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   // ── TODO panel ────────────────────────────────────────────────────
 
   /** Record a change; the panel is drawn once when the current tool call
-    * ends (or before the next pop-up), not on every `markTodo`. */
-  def showTodos(todos: List[Todo]): Unit = pendingTodos = Some(todos)
+    * ends (or before the next pop-up), not on every `markTodo`. Under the
+    * screen lock, which `flushTodos` holds: a change from a `parallel` task
+    * while it draws must not be cleared unseen. */
+  def showTodos(todos: List[Todo]): Unit = screen.synchronized { pendingTodos = Some(todos) }
 
   /** The list the panel last showed, to tell a status change from a new list. */
   private var shownTodos: List[Todo] = Nil
@@ -553,7 +575,7 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
         // A line apart, as queued corrections are joined.
         val typed = List(nextDraft, keys.takeTypeAhead()).filter(_.nonEmpty).mkString("\n")
         nextDraft = ""
-        statusLine.draft = ""
+        frame { statusLine.draft = ""; statusLine.refresh() }
         result = Some(prompt.read(styled(promptText, Cyan, Bold), typed))
         again = false
       catch
@@ -596,7 +618,8 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     terminal.close()
 
 object Tui:
-  /** A scripted `-p` run never needs console discovery or raw mode. Giving it
+  /** A scripted `-p` run never needs console discovery or raw mode, and its terminal is its
+    * standard error: standard output is kept for the answer ([[Screen.writeAnswer]]). Giving it
     * a known dumb UTF-8 terminal also avoids platform-specific null encodings
     * when Windows redirects stdin/stdout (as CI and normal pipelines do).
     * There is no grapheme-cluster probing: it sends a DECRQM query to the terminal
@@ -604,7 +627,7 @@ object Tui:
   private[ui] def openTerminal(
     nonInteractive: Boolean,
     input: InputStream = System.in.nn,
-    output: OutputStream = System.out.nn,
+    output: OutputStream = System.err.nn,
   ): Terminal =
     if nonInteractive then new DumbTerminal("atc", Terminal.TYPE_DUMB, input, output, StandardCharsets.UTF_8)
     else TerminalBuilder.builder().system(true).graphemeCluster(false).build().nn

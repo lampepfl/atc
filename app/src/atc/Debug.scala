@@ -2,6 +2,9 @@ package atc
 
 import atc.ui.Ansi
 
+import java.nio.file.{AccessDeniedException, DirectoryNotEmptyException, FileAlreadyExistsException}
+import java.nio.file.{FileSystemException, NoSuchFileException, NotDirectoryException}
+
 /** `ATC_DEBUG=1`: stack traces and terminal/stream diagnostics on stderr. */
 object Debug:
   /** Include nested transport failures without requiring a full stack trace. */
@@ -13,9 +16,21 @@ object Debug:
   def causes(error: Throwable): Iterator[Throwable] =
     Iterator.iterate[Throwable | Null](error)(_.nn.getCause).takeWhile(_ != null).map(_.nn).take(8).distinct
 
-  /** The message of `error`, or its class name when it has none: for one-line reports. */
+  /** The message of `error`, or its class name when it has none: for one-line reports. A file
+    * system exception's message is often the path alone, so what went wrong there is added. */
   def message(error: Throwable): String =
-    Option(error.getMessage).filter(_.nonEmpty).getOrElse(error.getClass.getSimpleName)
+    val text = Option(error.getMessage).filter(_.nonEmpty)
+    error match
+      case file: FileSystemException if file.getReason == null =>
+        val problem = file match
+          case _: NoSuchFileException => "no such file or directory"
+          case _: FileAlreadyExistsException => "already exists"
+          case _: AccessDeniedException => "access denied"
+          case _: NotDirectoryException => "not a directory"
+          case _: DirectoryNotEmptyException => "directory not empty"
+          case other => other.getClass.getSimpleName.nn
+        text.fold(problem)(path => s"$path: $problem")
+      case _ => text.getOrElse(error.getClass.getSimpleName.nn)
 
   val enabled: Boolean = ProcessEnvironment.contains("ATC_DEBUG")
   /** The process's own stderr: the REPL redirects `System.err` while it evaluates, and

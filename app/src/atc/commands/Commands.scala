@@ -4,7 +4,6 @@ import atc.{App, Debug}
 import atc.agent.Prompts
 import atc.commands.SlashCommand as Cmd
 import atc.perms.Mode
-import atc.ui.Ansi
 
 import scala.util.control.NonFatal
 
@@ -56,11 +55,11 @@ final class Commands(app: App):
     case Cmd.Reset => sessionCommands.reset()
     case Cmd.Compact => sessionCommands.compact(arg)
     case Cmd.Todos => tui.showTodosNow(host.currentTodos)
-    // Both commands display model-generated process names, so strip terminal controls.
-    case Cmd.Ps => tui.println(Ansi.sanitize(host.processSummary))
+    // Model-generated process names: `println` strips terminal controls.
+    case Cmd.Ps => tui.println(host.processSummary)
     case Cmd.Kill =>
       val result = host.killProcess(arg)
-      tui.println(Ansi.sanitize(result.merge))
+      tui.println(result.merge)
       // The agent's handles to those processes are dead now; it should hear why.
       result.foreach(agent.noteProcessesKilled)
     case Cmd.Cost => statusCommands.showCost()

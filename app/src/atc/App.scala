@@ -101,7 +101,13 @@ final class App(args: Cli.Args, val tui: Tui):
     config.instructions,
     () => (host.currentTaskNotes, host.currentTodos),
   )
-  tui.onSubmit = agent.submit
+  // A line typed while the agent works is a correction for it. A slash command is not one:
+  // sent on, `/mode read` would reach the model as text and change nothing.
+  tui.onSubmit = line =>
+    if SlashCommand.isCommandLine(line) then
+      val command = line.trim.takeWhile(!_.isWhitespace)
+      tui.info(s"$command was not run: commands run between turns. Ctrl-C stops this turn.")
+    else agent.submit(line)
   if args.prompt.isEmpty then tui.notifier = Notifier.fromSetting(config.notifications)
   tui.queuedInputs = () => agent.queuedInputCount
   tui.onInterrupt = () =>
@@ -155,6 +161,10 @@ final class App(args: Cli.Args, val tui: Tui):
       args.prompt match
         case Some(p) =>
           tui.askToContinue = false // nobody to ask: the tool budget is a hard stop here
+          // A scripted run has no banner, and without a provider set up the model is one of
+          // those that need no key, such as a signed-in Claude Code: say which one answers.
+          if !models.initialNamed then
+            tui.info(s"Using ${models.describe(agent.model)}: no model was named with -m or in a config.")
           sandbox.warm()
           // Report a failed turn through the process exit code so scripts can detect it.
           runTurn(p).exitCode
@@ -258,8 +268,11 @@ object App:
   ): PermissionPrompter =
     if args.approveAll then _ => Decision.AllowSession
     else if args.prompt.isDefined then
-      _ =>
+      request =>
+        // The message is all a script's log holds of the refusal: it names what was asked for.
+        // (The rows are padded after their labels for the pop-up.)
+        val asked = (request.title :: request.details.map(_.replaceFirst(":\\s+", ": "))).mkString("; ")
         throw SecurityException(
-          "non-interactive run cannot ask for permission; configure a standing grant or use --approve-all in a trusted setup"
+          s"non-interactive run cannot ask for permission ($asked); configure a standing grant or use --approve-all in a trusted setup"
         )
     else request => interactive(request)

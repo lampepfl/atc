@@ -1,6 +1,7 @@
 package atc.sandbox
 
 import atc.Threads
+import atc.host.ClassifiedImpl
 import atc.lib.{Derivations, Interface}
 import atc.perms.Mode
 import atc.platform.Platform
@@ -17,20 +18,39 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import scala.util.control.NonFatal
 
 object ReplSession:
+  /** Drop the trace the REPL prints when the stop flag aborts the snippet (`ThreadDeath`
+    * from the stop check, or the `ExceptionInInitializerError` it surfaces as in a
+    * top-level definition): it is the last thing printed and says nothing to the model.
+    * Only a trace that ends the output goes: the snippet may print such a line itself. */
+  private[atc] def withoutStopTrace(output: String): String =
+    val lines = output.linesIterator.toVector
+    val start = lines.lastIndexWhere: line =>
+      line.startsWith("java.lang.ThreadDeath") || line.startsWith("java.lang.ExceptionInInitializerError")
+    def traceLine(line: String) =
+      val text = line.trim
+      text.isEmpty || text.startsWith("at ") || text.startsWith("Caused by:") || text.startsWith("...")
+    if start < 0 || !lines.drop(start + 1).forall(traceLine) then output
+    else lines.take(start).mkString("\n").stripTrailing()
+
   val MaxOutputBytes: Int = 4 * 1024 * 1024
   val TruncationMarker: String = "\n... [output truncated: exceeded 4 MiB capture limit]"
 
-  /** Bounded capture buffer: retains at most `limit` bytes. */
+  /** Bounded capture buffer: retains at most `limit` bytes. It drops what a thread writes
+    * while it runs code on classified data ([[ClassifiedImpl.running]]): the capture is
+    * model-visible, and `System.out` and `System.err` point here during an evaluation. */
   final class BoundedOutputStream(limit: Int) extends OutputStream:
     private val buffer = ByteArrayOutputStream(math.min(limit, 8192))
     @volatile var truncated: Boolean = false
 
     override def write(b: Int): Unit =
-      if buffer.size() < limit then buffer.write(b) else truncated = true
+      if ClassifiedImpl.running then ()
+      else if buffer.size() < limit then buffer.write(b)
+      else truncated = true
 
     override def write(b: Array[Byte], off: Int, len: Int): Unit =
       val room = limit - buffer.size()
-      if room <= 0 then truncated = true
+      if ClassifiedImpl.running then ()
+      else if room <= 0 then truncated = true
       else
         if len > room then truncated = true
         buffer.write(b, off, math.min(len, room))
@@ -163,12 +183,14 @@ object ReplSession:
       "so nothing can be evaluated until atc is restarted; tell the user."
 
   /** What one evaluation produced, before it is adopted into the session:
-    * the new state, the captured output, what escaped the driver (`thrown`),
+    * the new state, the captured output, the message of what escaped the driver (`thrown`),
     * and whether agent code threw an exception the REPL rendered (`failed`). */
-  private final case class Evaluated(state: State, output: String, thrown: Option[Throwable], failed: Boolean)
+  private final case class Evaluated(state: State, output: String, thrown: Option[String], failed: Boolean)
 
   private val InterruptedMessage = "Execution interrupted by the user (completed effects are not rolled back)"
   private val NoResultMessage = "Execution failed (no result; possible fatal error)"
+  private val TooDeeplyNestedMessage =
+    "The code nests too deeply for the compiler to parse (stack overflow); split the expression into smaller definitions."
 
 /** One persistent REPL with its own sandbox class loader and host. */
 final class ReplSession(config: SandboxConfig, host: Interface & Derivations, preambleOverride: Option[String] = None):
@@ -230,20 +252,32 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
     val t = evalThread
     if t != null then t.interrupt()
 
-  def run(code: String): ExecutionResult =
+  def run(code: String): ExecutionResult = run(code, () => false)
+
+  /** [[run]] for a caller with a stop flag of its own, `cancelled`: raised before this call,
+    * when an `interrupt()` it caused may already have been cleared, it keeps the code from
+    * running. */
+  def run(code: String, cancelled: () => Boolean): ExecutionResult =
     clock.reset() // per run, whichever way it ends (callers read `clock.paused` afterwards)
+    // Cleared before validation, so that a stop arriving while the code is checked or parsed
+    // still prevents it from running; one that arrived earlier shows in `cancelled`.
+    stopRequested = false
+    if cancelled() then stopRequested = true
     if closed then ExecutionResult.failed("The sandbox session is closed; start a new one.")
     else
-      // Safe mode resolves aliases before admitting an API, so ordinary Scala
-      // import aliases are useful and safe there. Without safe mode the lexical
-      // validator is the remaining barrier and aliases must not hide a forbidden API.
-      CodeValidator.validate(code, strictImportAliases = !config.safeMode) match
-        case Nil => parseAndRun(code)
-        case violations => ExecutionResult.failed(CodeValidator.formatErrors(violations))
+      // The validator's scan and the parser run here, on the caller's thread, and both recurse
+      // with the nesting of the code. Code nested thousands deep must fail like any other
+      // code the compiler cannot take, not end the program with a stack overflow.
+      val parsed =
+        try
+          CodeValidator.validate(code, config.safeMode) match
+            case Nil => Right(ParseResult(code.stripTrailing() + "\n")(using state))
+            case violations => Left(ExecutionResult.failed(CodeValidator.formatErrors(violations)))
+        catch case _: StackOverflowError => Left(ExecutionResult.failed(TooDeeplyNestedMessage))
+      parsed.fold(identity, runParsed)
 
-  private def parseAndRun(code: String): ExecutionResult =
-    stopRequested = false
-    ParseResult(code.stripTrailing() + "\n")(using state) match
+  private def runParsed(result: ParseResult): ExecutionResult =
+    result match
       case p: Parsed => dispatch(p)
       case cmd @ (_: TypeOf | _: DocOf | Imports) => dispatch(cmd)
       case _: Command => ExecutionResult.failed("Only :type, :doc, and :imports REPL commands are allowed.")
@@ -252,28 +286,10 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
         ExecutionResult.failed("Syntax error:\n" + formatDiagnostics(errors))
       case other => ExecutionResult.failed(s"Unexpected parse result: $other")
 
+  /** Evaluate on a worker thread, also without a time limit, so that interrupts, fatal
+    * errors and stop signals take one path. */
   private def dispatch(res: ParseResult): ExecutionResult =
-    config.executionTimeoutMs match
-      case None =>
-        // No worker thread here: a fatal error in agent code must be reported like
-        // the worker path's "no result" case, not crash the whole process. This thread
-        // is the one `interrupt()` must reach for blocking calls, and a stop signal
-        // (ThreadDeath) it asked for is an interruption, not a crash.
-        val previousIndex = state.objectIndex
-        evalThread = Thread.currentThread()
-        try adopt(res, evaluate(res))
-        catch
-          case _: ThreadDeath if stopRequested =>
-            skipInvalidWrapper(previousIndex)
-            ExecutionResult.failed(InterruptedMessage)
-          case t: ThreadDeath => throw t
-          case _: Throwable =>
-            skipInvalidWrapper(previousIndex)
-            ExecutionResult.failed(NoResultMessage)
-        finally
-          evalThread = null
-          Thread.interrupted() // an interrupt meant for the evaluation must not hit this thread's later work
-      case Some(limit) => dispatchWithTimeout(res, limit)
+    dispatchWithTimeout(res, config.executionTimeoutMs.getOrElse(Long.MaxValue))
 
   /** `started` is released once the output stream is ours (or we gave up waiting for it). */
   private def evaluate(res: ParseResult, started: CountDownLatch = CountDownLatch(0)): Evaluated =
@@ -282,17 +298,26 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
       // An interrupt may have landed while we waited for the output lock. `run`
       // cleared `stopRequested` at the top, so it is true only if `interrupt()`
       // fired during this run. Then the cancelled code must not execute, and the
-      // stop flag it raised must not be cleared; `adopt` reports the abort.
-      if !stopRequested then
+      // stop flag it raised must stay raised; `adopt` reports the abort. The flag
+      // a previous evaluation may have left is cleared before the check, so that
+      // an interrupt between the two still finds its flag raised.
+      driver.setStopFlag(false)
+      if stopRequested then driver.setStopFlag(true)
+      else
         // A preamble object/given can be initialized lazily on the first agent
         // line, long after `init`. Re-select the owning host inside the global
         // evaluation lock so another session cannot supply its capabilities.
         Sandbox.installHost(host)
-        driver.setStopFlag(false) // a previous evaluation may have been stopped
         driver.resetEvaluationThrew()
         newState = driver.runParseResult(res)(using state)
     }
-    Evaluated(newState, output, thrown, driver.evaluationThrew)
+    // What escapes the driver may be the agent's own exception, thrown by a `toString` the
+    // REPL called to show a value. Its message is agent code and is read here, on the
+    // evaluation thread and within its limits, not by the caller.
+    val problem = thrown.map: e =>
+      try Option(e.getMessage).getOrElse(e.toString)
+      catch case NonFatal(_) => e.getClass.getName.nn
+    Evaluated(newState, output, problem, driver.evaluationThrew)
 
   /** Take over the new state and turn the evaluation into the agent-visible result. */
   private def adopt(res: ParseResult, evaluated: Evaluated): ExecutionResult =
@@ -308,7 +333,11 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
       ExecutionResult.failed(InterruptedMessage)
     else
       thrown match
-        case Some(e) => ExecutionResult(false, output, Some(Option(e.getMessage).getOrElse(e.toString)))
+        case Some(problem) =>
+          // The driver did not return a state, but it had compiled and loaded this line's
+          // wrapper: the next line must not take the same index and find that class.
+          skipInvalidWrapper(previousIndex)
+          ExecutionResult(false, output, Some(problem))
         case None =>
           val compileFailed = res match
             case p: Parsed => p.reporter.hasErrors
@@ -339,25 +368,33 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
       while worker.isAlive && !started.await(50, TimeUnit.MILLISECONDS) do ()
       val start = System.nanoTime()
       var remaining = limitMs
-      while worker.isAlive && remaining > 0 do
+      while worker.isAlive && remaining > 0 && !stopRequested do
         worker.join(math.min(remaining, 200L))
-        remaining = limitMs - (System.nanoTime() - start - clock.paused) / 1_000_000L
+        // Paused time can exceed the elapsed time (a stuck earlier evaluation pauses the same
+        // clock), and without a limit, Long.MaxValue minus a negative span would overflow.
+        remaining = limitMs - (System.nanoTime() - start - clock.paused).max(0L) / 1_000_000L
+      // A stop from the user has interrupted the worker already. It gets the grace a timeout
+      // gives, then the call returns even when the worker is in host code that ignores it.
+      if stopRequested then worker.join(2000)
       if worker.isAlive then
-        interrupt()
-        worker.join(2000)
+        val timedOut = !stopRequested
+        if timedOut then
+          interrupt()
+          worker.join(2000)
         val evaluated = resultRef.get()
         if evaluated != null then state = evaluated.state
         skipInvalidWrapper(previousIndex)
         // What the snippet printed before the limit is still useful to the model: the
         // worker's own output when it stopped, else a snapshot of the capture it is
         // still writing to.
-        val output = withoutStopTrace(if evaluated != null then evaluated.output else capturedSoFar)
+        val output =
+          if !timedOut then "" // the turn ends anyway, as after an interrupt that stopped
+          else ReplSession.withoutStopTrace(if evaluated != null then evaluated.output else capturedSoFar)
         val note = if worker.isAlive then "; the evaluation could not be stopped and is still running" else ""
-        ExecutionResult(
-          false,
-          output,
-          Some(s"Execution timed out after ${limitMs}ms (completed effects are not rolled back)$note")
-        )
+        val problem =
+          if timedOut then s"Execution timed out after ${limitMs}ms (completed effects are not rolled back)"
+          else InterruptedMessage
+        ExecutionResult(false, output, Some(problem + note))
       else
         resultRef.get() match
           case null =>
@@ -396,15 +433,6 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
             printStream.flush()
         (capturedSoFar, thrown)
       finally outputLock.unlock()
-
-  /** Drop the trace the REPL prints when the stop flag aborts the snippet (`ThreadDeath`
-    * from the stop check, or the `ExceptionInInitializerError` it surfaces as in a
-    * top-level definition): it is the last thing printed and says nothing to the model. */
-  private def withoutStopTrace(output: String): String =
-    val lines = output.linesIterator.toVector
-    val start = lines.lastIndexWhere: line =>
-      line.startsWith("java.lang.ThreadDeath") || line.startsWith("java.lang.ExceptionInInitializerError")
-    if start < 0 then output else lines.take(start).mkString("\n").stripTrailing()
 
   /** The output captured so far. Only trailing whitespace is dropped: the UI removes the
     * agent's own prints (already shown live) from this text and needs an exact match. */

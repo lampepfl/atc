@@ -1,5 +1,7 @@
 package atc.host
 
+import atc.platform.Interruptible
+
 import java.util.ArrayDeque
 import java.util.regex.Pattern
 
@@ -28,7 +30,7 @@ private[atc] sealed trait OutputBuffer:
     * (nothing consumed) when it does not match. One critical section: a tail buffer
     * dropping its front between a peek and a consume would shift the offsets. */
   def consumeThrough(pattern: Pattern): Option[String] = synchronized:
-    val matcher = pattern.matcher(peek)
+    val matcher = pattern.matcher(Interruptible(peek))
     if matcher.find() then Some(consume(matcher.end())) else None
 
   /** Set once the process has exited and its output has all landed (`end()`). */

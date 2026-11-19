@@ -42,7 +42,9 @@ private[atc] object SessionStore:
     Files.createDirectories(target.getParent)
     OwnerOnlyFiles.create(target, bytes)
 
+  /** Refuses what [[read]] would refuse, so that a save never replaces one that can be resumed. */
   private def encodeWithinLimit(session: SessionSnapshot): Array[Byte] =
+    requirePairedCalls(session.history)
     val bytes = encode(session).getBytes(UTF_8)
     if bytes.length > MaxBytes then throw IllegalArgumentException("Saved session exceeds the 8 MiB limit")
     bytes
@@ -86,6 +88,24 @@ private[atc] object SessionStore:
       indent = 2
     )
 
+  /** Every batch of tool calls has distinct IDs and is answered by the next message, one
+    * result per call. */
+  private def requirePairedCalls(history: List[Msg]): Unit =
+    var pending = Set.empty[String]
+    history.foreach:
+      case Msg.ToolResults(results) =>
+        if results.map(_.callId).toSet != pending || results.size != pending.size || pending.isEmpty then
+          throw IllegalArgumentException("The session has mismatched tool results")
+        pending = Set.empty
+      case message =>
+        if pending.nonEmpty then throw IllegalArgumentException("The session has unanswered tool calls")
+        message match
+          case Msg.Assistant(_, calls, _) =>
+            pending = calls.map(_.id).toSet
+            if pending.size != calls.size then throw IllegalArgumentException("The session has duplicate tool call IDs")
+          case _ => ()
+    if pending.nonEmpty then throw IllegalArgumentException("The session has unanswered tool calls")
+
   private[atc] def decode(text: String): SessionSnapshot =
     val data = ujson.read(text)
     if data("version").num != 1 then throw IllegalArgumentException("Unsupported saved-session version")
@@ -101,21 +121,7 @@ private[atc] object SessionStore:
           val results = value("results").arr.toList.map(r => ToolResult(r("id").str, r("output").str, r("error").bool))
           Msg.ToolResults(results)
         case other => throw IllegalArgumentException(s"Unknown saved message role: $other")
-    var pending = Set.empty[String]
-    history.foreach:
-      case Msg.ToolResults(results) =>
-        if results.map(_.callId).toSet != pending || results.size != pending.size || pending.isEmpty then
-          throw IllegalArgumentException("Saved session has mismatched tool results")
-        pending = Set.empty
-      case message =>
-        if pending.nonEmpty then throw IllegalArgumentException("Saved session has unanswered tool calls")
-        message match
-          case Msg.Assistant(_, calls, _) =>
-            pending = calls.map(_.id).toSet
-            if pending.size != calls.size then
-              throw IllegalArgumentException("Saved session has duplicate tool call IDs")
-          case _ => ()
-    if pending.nonEmpty then throw IllegalArgumentException("Saved session has unanswered tool calls")
+    requirePairedCalls(history)
     val task = data("task")
     val notes =
       TaskNotes(task("goal").str, strings(task("constraints")), strings(task("completed")), strings(task("remaining")))

@@ -66,6 +66,25 @@ class PromptReaderSuite extends munit.FunSuite:
       assert(!out.toString(UTF_8).contains("rename word_count"), out.toString(UTF_8).replace("\u001b", "ESC"))
     finally terminal.close()
 
+  test("Shift-Tab cycles the mode at the main prompt only, not in an answer or a secret"):
+    // The key map is shared: in the other fields the `/mode` line would be sent as the answer.
+    val (prompt, terminal, _) = promptOn("\u001b[Z\r\u001b[Z\r\u001b[Z")
+    try
+      assertEquals(prompt.readAnswer("instructions> "), None)
+      assertEquals(prompt.readSecret("key> "), None)
+      assertEquals(prompt.read("> ", ""), PromptReader.CycleModeLine)
+    finally terminal.close()
+
+  test("Ctrl-O switches the view and leaves the line being typed alone"):
+    // JLine's own binding for the key accepts the line.
+    val (prompt, terminal, _) = promptOn("fix the bug in\u000f this\r")
+    var toggled = 0
+    prompt.onToggle = () => toggled += 1
+    try
+      assertEquals(prompt.read("> ", ""), "fix the bug in this")
+      assertEquals(toggled, 1)
+    finally terminal.close()
+
   test("cancelling a text answer clears JLine's interrupt before returning to the menu"):
     try
       val answer = PromptReader.answerOf {

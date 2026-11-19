@@ -274,13 +274,33 @@ object Config:
     * (itself included) whose `.atc` holds a `config.json` or a `keys.properties`. A
     * project config governs the folder its `.atc` sits in, so running atc in a
     * subdirectory still picks up (and is bound by) the project's own
-    * configuration and keys. */
-  def projectRoot(from: Path): Option[Path] =
-    def isProject(d: Path) = Files.isRegularFile(projectPath(d)) || Files.isRegularFile(keysPath(d))
-    def up(p: Path | Null): Option[Path] = p match
-      case null => None
-      case d: Path => if isProject(d) then Some(d) else up(d.getParent)
-    up(from.toAbsolutePath.nn.normalize)
+    * configuration and keys. One that belongs to another user is passed over
+    * ([[foreignProjects]]): in a shared directory such as `/tmp` anyone can put a config
+    * above where atc runs, and its file rules and instructions need no trust. */
+  def projectRoot(from: Path): Option[Path] = projectRoot(from, foreignOwner)
+
+  private[atc] def projectRoot(from: Path, foreign: Path => Option[String]): Option[Path] =
+    projectDirs(from).find(foreign(_).isEmpty)
+
+  /** The project directories at or above `from` that [[projectRoot]] passes over, nearest
+    * first, each with the other user it belongs to. */
+  def foreignProjects(from: Path): List[(Path, String)] = foreignProjects(from, foreignOwner)
+
+  private[atc] def foreignProjects(from: Path, foreign: Path => Option[String]): List[(Path, String)] =
+    projectDirs(from).map(dir => dir -> foreign(dir)).takeWhile(_._2.isDefined).collect {
+      case (dir, Some(owner)) => dir -> owner
+    }.toList
+
+  /** The directories at or above `from` whose `.atc` holds a project file, nearest first. */
+  private def projectDirs(from: Path): Iterator[Path] =
+    Iterator.iterate[Path | Null](from.toAbsolutePath.nn.normalize)(_.nn.getParent).takeWhile(_ != null).map(_.nn)
+      .filter(dir => Files.isRegularFile(projectPath(dir)) || Files.isRegularFile(keysPath(dir)))
+
+  /** The other user that the `.atc` of `dir`, or a project file in it, belongs to. The
+    * directory counts too: a link or a hard link in it can name a file of the user's own. */
+  private def foreignOwner(dir: Path): Option[String] =
+    (dir.resolve(".atc").nn :: List(projectPath(dir), keysPath(dir)).filter(Files.isRegularFile(_)))
+      .flatMap(OwnerOnlyFiles.foreignOwner).headOption
 
   /** Load every layer and combine them: `~/.atc/config.json` ← the project's
     * `.atc/config.json` ← `-c <file>`. See [[Configuration.combine]] for what
@@ -304,7 +324,7 @@ object Config:
       if !Files.exists(path) then throw IllegalArgumentException(s"Explicit config does not exist: $path")
       if !Files.isRegularFile(path) then throw IllegalArgumentException(s"Explicit config is not a regular file: $path")
     val root = projectRoot(cwd)
-    val atcDir = global.getParent.nn
+    val atcDir = global.toAbsolutePath.nn.getParent.nn
     val candidates =
       List(Origin.Global -> global) ++ root.map(Origin.Project -> projectPath(_)) ++ explicit.map(Origin.Explicit -> _)
     // A file named twice, through links or not, is read once, in the first role it appears in.
@@ -333,7 +353,7 @@ object Config:
     * readable only by the owner because they may contain API keys. Returns the
     * paths created. */
   def ensureGlobal(path: Path = globalPath, providers: List[ProviderPreset] = ProviderPreset.all): List[Path] =
-    val keys = path.getParent.nn.resolve(KeysFile).nn
+    val keys = path.toAbsolutePath.nn.getParent.nn.resolve(KeysFile).nn
     List(writeGlobalConfig(path, providers), writeIfMissing(keys, keysTemplate, ownerOnly = true)).flatten
 
   /** Write the starting global config with `providers` unless the file exists. */
@@ -375,11 +395,11 @@ object Config:
 
   private def ensureIgnored(path: Path, entry: String): Boolean =
     val current = Option.when(Files.exists(path))(Files.readString(path).nn)
-    // Git uses the last matching rule; an earlier exclusion followed by
-    // `!keys.properties` does not protect the key file.
-    val lastRule = current.toList.flatMap(text => TextFiles.splitLines(TextFiles.stripBom(text)).lines)
-      .map(_.trim).filter(line => line == entry || line == s"!$entry").lastOption
-    if lastRule.contains(entry) then false
+    // Git uses the last matching rule, and any negation after the exclusion may re-include the
+    // key file (`!keys.properties`, `!*.properties`): only an exclusion after every negation holds.
+    val rules = current.toList.flatMap(text => TextFiles.splitLines(TextFiles.stripBom(text)).lines)
+      .map(_.trim).filter(line => line.nonEmpty && !line.startsWith("#"))
+    if rules.lastIndexOf(entry) > rules.lastIndexWhere(_.startsWith("!")) then false
     else
       val text = TextFiles.appendLine(current.getOrElse(""), entry)
       Files.writeString(

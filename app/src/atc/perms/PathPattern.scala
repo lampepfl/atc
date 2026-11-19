@@ -1,6 +1,6 @@
 package atc.perms
 
-import atc.platform.{PathGlob, Platform, PlatformPath}
+import atc.platform.{Interruptible, PathGlob, Platform, PlatformPath}
 
 import java.nio.file.{Path, Paths}
 import java.util.regex.Pattern
@@ -26,20 +26,22 @@ final class PathPattern private (val raw: String, private val kind: PathPattern.
   import PathPattern.*
 
   def matches(p: Path): Boolean = kind match
-    case Kind.Component(glob) => (0 until p.getNameCount).exists(i => glob.matcher(p.getName(i).toString).matches())
+    case Kind.Component(glob) =>
+      (0 until p.getNameCount).exists(i => glob.matcher(Interruptible(p.getName(i).toString)).matches())
     case Kind.Anchored(root, matchers) =>
       within(p, root) && {
         val relative =
           if p.getNameCount == root.getNameCount then ""
           else PlatformPath.portable(p.subpath(root.getNameCount, p.getNameCount))
-        matchers.exists(_.matcher(relative).matches())
+        matchers.exists(_.matcher(Interruptible(relative)).matches())
       }
     case Kind.Exact(path) => within(p, path)
 
   /** [[matches]] for a path whose parent this pattern does not match. A component glob can then
     * match only the path's last name, since every other name is also the parent's. */
   private[perms] def matchesChild(p: Path): Boolean = kind match
-    case Kind.Component(glob) => Option(p.getFileName).exists(name => glob.matcher(name.toString).matches())
+    case Kind.Component(glob) =>
+      Option(p.getFileName).exists(name => glob.matcher(Interruptible(name.toString)).matches())
     case _ => matches(p)
 
   override def toString: String = raw

@@ -10,16 +10,12 @@ object ToolOutput:
   private final case class Hint(applies: String => Boolean, text: String)
   private val hints = List(
     Hint(
-      out => out.contains("Cannot refer to object StringBuilder") && out.contains("from safe code"),
-      "safe mode rejects the `StringBuilder()` companion call, but construction works: use `new StringBuilder()`; a top-level binding needs `val b: StringBuilder = new StringBuilder()`."
-    ),
-    Hint(
       _.contains("needs an explicit type because the inferred type does not conform"),
       "top-level vals that hold capabilities (FileEntry, closures using println/fs) need an explicit type, e.g. `val e: FileEntry^{fs} = access(...)`, or use a `def` / inline expression."
     ),
     Hint(
       out => out.contains("Mutable variable") && out.contains("does not extend") && out.contains("Stateful"),
-      "safe mode rejects top-level `var`s; put the `var` inside a `def`, block or lambda and return the immutable result."
+      "safe mode rejects top-level `var`s; put the `var` inside a `def` or a lambda, or a block that is not the whole snippet (`val total = { var n = 0; ...; n }`), and return the immutable result."
     ),
     Hint(
       out => out.contains("Cannot refer to") && out.contains("from safe code"),

@@ -224,7 +224,7 @@ final class Policy(
   private def permits(patterns: List[String], commandLine: String): Boolean =
     val assigning = GlobMatcher.startsWithAssignment(commandLine)
     patterns.exists(p =>
-      (!assigning || GlobMatcher.startsWithAssignment(p)) && GlobMatcher.matchesCommand(commandLine, p)
+      (!assigning || GlobMatcher.startsWithAssignment(p)) && GlobMatcher.permitsCommand(commandLine, p)
     )
 
   def requestExec(parentId: ScopeId, requested: List[String], reason: String): ScopeId =

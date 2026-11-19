@@ -27,8 +27,8 @@ final class ClaudeCodeModel(spec: ModelSpec, launch: List[String] => ClaudeCli.P
   val providerKey: String = "claude-code"
   protected def knownEfforts: List[String] = AnthropicModel.Efforts
 
-  /** What a CLI process was started with. */
-  private final case class Setup(system: String, tools: List[ToolSpec], effort: Option[String])
+  /** What a CLI process was started with. Web search is fixed by its command line. */
+  private final case class Setup(system: String, tools: List[ToolSpec], effort: Option[String], webSearch: Boolean)
 
   /** A CLI process and the conversation it holds. */
   private final class Session(val cli: ClaudeCli, val setup: Setup):
@@ -66,7 +66,7 @@ final class ClaudeCodeModel(spec: ModelSpec, launch: List[String] => ClaudeCli.P
     sink: StreamSink,
     cancelled: () => Boolean
   ): Completion =
-    val setup = Setup(system, tools, effort)
+    val setup = Setup(system, tools, effort, webSearch)
     val continued = synchronized(session.filter(_.setup == setup).flatMap(s => continuation(s, history).map(s -> _)))
     val (active, input) = continued.getOrElse:
       Debug.log(s"$ref: new Claude Code session for ${history.size} messages")
@@ -226,7 +226,7 @@ final class ClaudeCodeModel(spec: ModelSpec, launch: List[String] => ClaudeCli.P
     * otherwise; `summarized` (a hidden flag) returns the most of it: a summary, or the full
     * text from models that give it, such as Haiku 4.5. */
   private def arguments(tools: List[ToolSpec], thinking: Boolean): List[String] =
-    val builtIn = if webSearch && tools.nonEmpty then List("WebSearch") else Nil
+    val builtIn = if searches(tools) then List("WebSearch") else Nil
     val allowed = builtIn ++ Option.when(tools.nonEmpty)(s"mcp__${ClaudeCli.Server}")
     val mcp = ujson.Obj("mcpServers" -> ujson.Obj(ClaudeCli.Server -> ujson.Obj(
       "type" -> "sdk",

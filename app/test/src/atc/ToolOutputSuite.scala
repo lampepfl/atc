@@ -86,10 +86,6 @@ class ToolOutputSuite extends munit.FunSuite:
     val safeMode = hintFor("Cannot refer to object ArrayBuffer ... from safe code since it is neither ...")
     assert(safeMode.contains("not available in safe mode"), safeMode)
 
-    val builder = hintFor("Cannot refer to object StringBuilder ... from safe code since it is neither ...")
-    assert(builder.contains("new StringBuilder()"), builder)
-    assert(builder.contains("val b: StringBuilder"), builder)
-
     val variable = hintFor("Mutable variable counter is defined in a class that does not extend Stateful")
     assert(variable.contains("top-level `var`"), variable)
     assert(variable.contains("inside a `def`"), variable)

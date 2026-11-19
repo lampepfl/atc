@@ -32,12 +32,12 @@ Here is a request, the Scala code the agent wrote, the program output, and the f
   │ grepRecursive("lib/src", "^\\s+update def", "*.scala")
   │   .foreach(m => println(s"${m.lineNumber}  ${m.line.trim}"))
   ├ output
-  │ 114  update def write(content: String): Unit
-  │ 115  update def writeBytes(content: Array[Byte]): Unit
-  │ 116  update def append(content: String): Unit
+  │ 113  update def write(content: String): Unit
+  │ 114  update def writeBytes(content: Array[Byte]): Unit
+  │ 115  update def append(content: String): Unit
   │ 117  update def delete(): Unit
   │ 119  update def mkdir(): Unit
-  │ 129  update def writeClassified(content: Classified[String]): Unit
+  │ 130  update def writeClassified(content: Classified[String]): Unit
   └ ok 121 ms
 
 ● Six of them: write, writeBytes, append, delete, mkdir and writeClassified. They are
@@ -82,10 +82,10 @@ access within a block the extra permission cannot escape. You decide in a pop-up
   │ }
 
   ⚠ Permission request: Run commands
-    patterns: npm *
-    reason:   install dependencies and run the test suite
-    Allow?
-    › Allow once
+    reason:    install dependencies and run the test suite
+    command 1: npm *
+    note:      * matches any arguments; for an interpreter, any code
+    ❯ Allow once
       Allow for this session
       Deny this request
       Tell the agent what to change
@@ -125,15 +125,18 @@ powershell -ExecutionPolicy Bypass -File .\atc.ps1 setup   # installs atc in %US
 In a new terminal, `atc` then runs ATC in the current directory and offers to upgrade when a
 newer release is out; `atc help` lists the wrapper's commands. If PowerShell refuses to run
 scripts, use `atc.cmd`, or allow local scripts with
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. A wrapper that says the latest release
+has no `atc.ps1` is older than the releases, which no longer carry one: `atc self update`
+replaces it.
 
 </details>
 
 **1. Start it.** Change to the project you want to work on (`cd ~/my-project`) and run
 `atc`. The first start asks you to choose a provider, paste its API key and choose one of
-its models; the key is saved in `~/.atc/keys.properties`, readable only by you. With a
-ChatGPT plan you can sign in through the browser instead of giving a key, and with a
-Claude plan ATC can use your signed-in [Claude Code](https://claude.com/claude-code) CLI.
+its models; the key is saved in `~/.atc/keys.properties`, readable only by you on macOS
+and Linux (on Windows, as private as your user profile). With a ChatGPT plan you can sign
+in through the browser instead of giving a key, and with a Claude plan ATC can use your
+signed-in [Claude Code](https://claude.com/claude-code) CLI.
 Any other OpenAI- or Anthropic-compatible server, such as a local Ollama, is set up by its URL.
 To set up providers by hand instead, choose *Configure providers myself*: ATC writes
 `~/.atc/config.json` and exits. On Windows, `~/.atc` is `%USERPROFILE%\.atc`.
@@ -141,8 +144,8 @@ To set up providers by hand instead, choose *Configure providers myself*: ATC wr
 **2. Open the project.** If no configuration grants access to the current directory and
 the directory has no `.atc/config.json` of its own, ATC offers to create a starter one there
 and applies it immediately. That file is what opens the project to the agent: its own tree,
-the read-only git commands and a set of documentation hosts. Review it to choose which
-**files, commands and hosts** the agent may use without asking; see
+the read-only git commands, a set of documentation hosts and the provider's web search.
+Review it to choose which **files, commands and hosts** the agent may use without asking; see
 [Configuration](#configuration). `/models` lists the models your providers offer, and
 `/model` picks one.
 
@@ -362,7 +365,7 @@ Config files are JSON, in three layers:
 | | layer | file | may |
 |---|---|---|---|
 | 1 | global | `~/.atc/config.json` | grant anything |
-| 2 | project | the nearest `.atc/config.json` at or above the working directory | open **its own project**; narrow anything |
+| 2 | project | the nearest `.atc/config.json` at or above the working directory (a `.atc/keys.properties` alone also marks a project) | open **its own project**; narrow anything |
 | 3 | explicit | `-c <file>` | grant anything |
 
 No policy is compiled into the program: anything not granted by a configuration is denied.
@@ -374,7 +377,8 @@ it lives inside the repository it can open *that repository* but no files beyond
 loosen the limits the global config sets, and cannot change a provider's address or key.
 What it adds beyond its own files (pre-approved commands and hosts, a classified model,
 provider web search, the keys in its `.atc/keys.properties`) applies only after ATC has
-shown it to you and you chose to trust it; ATC asks again when that part changes.
+shown it to you and you chose to trust it; ATC asks again when that part changes. A project
+config that belongs to another user is ignored.
 `/config` changes the settings that cannot loosen the sandbox (input prediction,
 notifications, web search, compaction) for the session or in either file. The exact merge
 rules are in [doc/development.md](doc/development.md#configuration-semantics).
@@ -398,12 +402,13 @@ rules are in [doc/development.md](doc/development.md#configuration-semantics).
   },
   "files": [
     { "path": ".",        "access": "write" },
+    { "path": ".git",     "access": "read" },
     { "path": "secrets",  "classified": true },
     { "path": "~/notes",  "access": "read", "locked": true }
   ],
   "commands": ["git status", "git log"],
   "denyCommands": ["git push*", "git *--output*", "rm -rf *", "sudo", "sh", "bash", "zsh", "powershell"],
-  "hosts": ["*.scala-lang.org", "docs.oracle.com"],
+  "hosts": ["docs.scala-lang.org", "docs.oracle.com"],
   "mode": "full",
   "instructions": "Use 2-space indentation."
 }
@@ -470,9 +475,12 @@ and the configured permissions.
   runs hooks can do anything you can, unconstrained by capabilities, classified data, or the
   mode. **Pre-approve narrow, specific subcommands (`git status`, `./mill app.test`); never
   grant an interpreter, a shell, or a wildcard like `git *` over a tool that can run code.**
-- **Allowed hosts can receive data.** The agent may send any non-classified data available
-  to it to an allowed host. The type system prevents this only for `classified` content.
-  Allow only hosts you trust to receive project data.
+  Even `git status` runs programs named in the configuration of the repository it runs in, so
+  keep every `.git` read-only, as the starter project config does; with git 2.38 or newer, ATC
+  also has git refuse a directory that only looks like a repository.
+- **Allowed hosts can receive data.** The agent may send any data available to it to an
+  allowed host, `classified` content included through `httpPostClassified` and secret
+  headers. Allow only hosts you trust to receive project data.
 - **Your provider sees your context.** Everything that is not `classified` (your prompts,
   the file contents the agent reads, command output) goes to the model provider you
   configured. Use `classifiedModel` only for a deployment that satisfies the isolated,
@@ -506,12 +514,13 @@ Tab fills in, Enter runs). Ctrl-C interrupts the turn, Shift-Tab cycles the mode
 Shift-Enter adds a line. Finished code runs fold to a summary, and `/output <n>` shows one
 in full. Ctrl-O switches to writing code, output and reasoning out in full. While the agent
 is working, type a correction and press Enter: it reaches the agent before its next tool
-call. Sessions are saved after every turn, and the next start in the same directory
-offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
+call. Interactive sessions are saved after every turn, and the next start in the same
+directory offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
 reports whether it is working, waiting or done to terminals that track program status.
 
 A `-p` run asks nothing: a permission the configuration does not grant fails instead of
-waiting. `--approve-all` approves such requests instead; use it only in a trusted setup.
+waiting. `--approve-all` approves such requests instead; use it only in a trusted setup. The
+answer goes to standard output and everything else to standard error.
 
 ## License
 

@@ -2,8 +2,10 @@ package atc.host
 
 import atc.{ScalaSource, TextFiles}
 import atc.lib.*
-import atc.platform.{PathGlob, PlatformPath}
+import atc.platform.{Interruptible, PathGlob, Platform, PlatformPath}
 
+import java.nio.ByteBuffer
+import java.nio.charset.{CharacterCodingException, CodingErrorAction, StandardCharsets}
 import java.nio.file.Paths
 import java.util.regex.{Matcher, Pattern}
 import scala.collection.mutable
@@ -134,10 +136,23 @@ private[host] trait HostFiles:
     if source.isDirectory then
       throw IllegalArgumentException(s"move: '$from' is a directory; move its files and mkdir/delete the directories")
     val target = impl(fs.access(to))
-    if source.path != target.path then
-      requireWrite(scopeOf(fs), source.canonicalPath, "move")
+    // Compared as resolved: a target that is a link to the source names the same file, which
+    // deleting the source afterwards would lose.
+    source.checkedRemovable("move")
+    if source.canonicalPath != target.canonicalPath then
       Using.resource(source.openRead())(in => target.writeFrom(source, in))
       source.delete()
+    else
+      // Where names ignore case, a new spelling of the same name is the same file, and the
+      // move would do nothing: say so rather than report a rename that did not happen.
+      val wanted = Option(PlatformPath.parse(to).getFileName).map(_.toString)
+      val actual = Option(target.canonicalPath.getFileName).map(_.toString)
+      val caseOnly = wanted.exists(w => actual.exists(a => a != w && a.equalsIgnoreCase(w)))
+      // A target that is a link to the source is another name, not another spelling.
+      if caseOnly && Platform.caseInsensitivePaths && !PlatformPath.isLink(target.removable) then
+        throw IllegalArgumentException(
+          s"move: '$from' and '$to' name the same file on this file system; to change only the case of its name, move it to a temporary name first"
+        )
 
   def copy(from: String, to: String)(using fs: FileSystem): Unit =
     val source = impl(fs.access(from))
@@ -151,16 +166,32 @@ private[host] trait HostFiles:
     case e: FileEntryImpl => e
     case other => throw SecurityException(s"Unknown FileEntry implementation: ${other.getClass.getName}")
 
+  /** The text of a file that an edit rewrites as a whole, with its byte-order mark apart, so
+    * that the mark stays in front and is not part of line 1. A file that is not valid UTF-8
+    * is refused: `read` shows its other bytes as U+FFFD, and writing that text back would
+    * replace them on lines the edit never touched. */
+  private def editable(entry: FileEntry, operation: String): (String, String) =
+    val decoder = StandardCharsets.UTF_8.newDecoder().nn
+      .onMalformedInput(CodingErrorAction.REPORT).nn.onUnmappableCharacter(CodingErrorAction.REPORT).nn
+    val text =
+      try decoder.decode(ByteBuffer.wrap(entry.readBytes())).toString
+      catch
+        case _: CharacterCodingException =>
+          throw IllegalArgumentException(
+            s"$operation: '${entry.path}' is not valid UTF-8, and rewriting it as text would change its other bytes; use readBytes and writeBytes"
+          )
+    text.splitAt(TextFiles.bomLength(text))
+
   /** Rewrite every regex match in place and reject an accidental no-op. One
     * pass both counts and rewrites, so a large file is scanned once. */
   def sed(path: String, pattern: String, replacement: String)(using fs: FileSystem): Int =
     if pattern.isEmpty then throw IllegalArgumentException("sed: the pattern must not be empty")
     val regex = Pattern.compile(pattern, Pattern.MULTILINE)
     val entry = fs.access(path)
-    val before = entry.read()
+    val (bom, before) = editable(entry, "sed")
     val javaReplacement = sedReplacement(replacement)
     val rewritten = java.lang.StringBuilder()
-    val matcher = regex.matcher(before)
+    val matcher = regex.matcher(Interruptible(before))
     var count = 0
     while matcher.find() do
       count += 1
@@ -170,7 +201,7 @@ private[host] trait HostFiles:
       throw IllegalArgumentException(
         s"sed: the regex '$pattern' matches nothing in '${entry.path}', so nothing was changed; check it with grep(path, pattern), and quote literal text with quote(text) (the pattern) and quoteReplacement(text) (the replacement)."
       )
-    entry.write(rewritten.toString)
+    entry.write(bom + rewritten.toString)
     count
 
   /** Convert sed-style group and escape syntax to Java replacement syntax. */
@@ -199,16 +230,17 @@ private[host] trait HostFiles:
   def replaceExact(path: String, expected: String, replacement: String)(using fs: FileSystem): Unit =
     if expected.isEmpty then throw IllegalArgumentException("replaceExact: expected text must not be empty")
     val entry = fs.access(path)
-    val before = entry.read()
+    val (bom, before) = editable(entry, "replaceExact")
     val index = before.indexOf(expected)
     if index < 0 then throw IllegalArgumentException("replaceExact: expected text was not found; read the file again")
     if before.lastIndexOf(expected) != index then
       throw IllegalArgumentException("replaceExact: expected text is ambiguous; include more surrounding context")
-    entry.write(before.substring(0, index) + replacement + before.substring(index + expected.length))
+    entry.write(bom + before.substring(0, index) + replacement + before.substring(index + expected.length))
 
   def replaceLines(path: String, from: Int, to: Int, text: String)(using fs: FileSystem): String =
     val entry = fs.access(path)
-    val document = TextFiles.splitLines(entry.read())
+    val (bom, before) = editable(entry, "replaceLines")
+    val document = TextFiles.splitLines(before)
     val lines = document.lines
     val lineCount = lines.length
     if from < 1 || to < from || to > lineCount then
@@ -217,12 +249,13 @@ private[host] trait HostFiles:
       )
     val old = lines.slice(from - 1, to)
     val updated = lines.take(from - 1) ++ TextFiles.splitLines(text).lines ++ lines.drop(to)
-    entry.write(document.copy(lines = updated).join)
+    entry.write(bom + document.copy(lines = updated).join)
     old.mkString(document.lineEnding)
 
   def insertLines(path: String, before: Int, text: String)(using fs: FileSystem): Unit =
     val entry = fs.access(path)
-    val document = TextFiles.splitLines(entry.read())
+    val (bom, existing) = editable(entry, "insertLines")
+    val document = TextFiles.splitLines(existing)
     val lines = document.lines
     val lineCount = lines.length
     if before < 1 || before > lineCount + 1 then
@@ -230,7 +263,7 @@ private[host] trait HostFiles:
         s"insertLines: `before` must be between 1 and ${lineCount + 1} (the file has $lineCount lines), got $before"
       )
     val updated = lines.take(before - 1) ++ TextFiles.splitLines(text).lines ++ lines.drop(before - 1)
-    entry.write(document.copy(lines = updated).join)
+    entry.write(bom + document.copy(lines = updated).join)
 
   def append(path: String, content: String)(using fs: FileSystem): Unit = fs.access(path).append(content)
 
@@ -251,7 +284,8 @@ private[host] trait HostFiles:
     val shown = fromCwd(entry.path)
     entry.forEachLine(
       operation,
-      (line, number) => if regex.findFirstIn(line).isDefined then matches += GrepMatch(shown, number, line)
+      (line, number) =>
+        if regex.findFirstIn(Interruptible(line)).isDefined then matches += GrepMatch(shown, number, line)
     )
     matches.toList
 
@@ -298,7 +332,7 @@ private[host] trait HostFiles:
             false
           else
             if chars > line.length then limited = true
-            val hit = regex.findFirstIn(line).isDefined
+            val hit = regex.findFirstIn(Interruptible(line)).isDefined
             if hit && matches.size >= options.maxMatches then
               limited = true
               false
@@ -316,8 +350,10 @@ private[host] trait HostFiles:
     val pattern = PathGlob.pattern(glob)
     if glob.contains('/') || glob.contains("**") then
       val base = canonical(dir)
-      files.filter(entry => pattern.matcher(PlatformPath.portable(base.relativize(Paths.get(entry.path)).nn)).matches())
-    else files.filter(entry => pattern.matcher(entry.name).matches())
+      files.filter: entry =>
+        val relative = PlatformPath.portable(base.relativize(Paths.get(entry.path)).nn)
+        pattern.matcher(Interruptible(relative)).matches()
+    else files.filter(entry => pattern.matcher(Interruptible(entry.name)).matches())
 
   def readClassified(path: String)(using fs: FileSystem): Classified[String] = fs.access(path).readClassified()
 

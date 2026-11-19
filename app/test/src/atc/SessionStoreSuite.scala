@@ -75,6 +75,9 @@ class SessionStoreSuite extends munit.FunSuite:
     val oversized = snapshot.copy(history = List(Msg.User("x" * (8 * 1024 * 1024))))
     intercept[IllegalArgumentException](SessionStore.checkpoint(path, oversized))
     assertEquals(Files.readString(path), before)
+    // Nor is a save that could not be resumed published.
+    intercept[IllegalArgumentException](SessionStore.checkpoint(path, snapshot.copy(history = history.take(2))))
+    assertEquals(Files.readString(path), before)
     val files = Files.list(root).nn
     try assertEquals(files.count(), 1L)
     finally files.close()

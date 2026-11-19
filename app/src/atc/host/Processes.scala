@@ -1,10 +1,12 @@
 package atc.host
 
+import atc.Threads
 import atc.lib.ProcessResult
+import atc.platform.WindowsExecutable
 
 import java.io.{IOException, InputStream}
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, CountDownLatch, TimeUnit}
 import java.util.regex.Pattern
 import scala.jdk.CollectionConverters.*
 
@@ -59,13 +61,19 @@ object Processes:
     private val stdin = procs.head.getOutputStream.nn
     private var drains: List[Thread] = Nil
     @volatile private var stdinClosed = false
+    /** Released once the input given at the start is written, so later input comes after it. */
+    private val fed = CountDownLatch(1)
 
     def isAlive: Boolean = procs.exists(_.isAlive)
     /** Pipefail-style: the rightmost non-zero code, else 0; `None` while running. */
     def exitCode: Option[Int] =
       if isAlive then None else Some(procs.map(_.exitValue()).reverse.find(_ != 0).getOrElse(0))
 
-    def send(text: String): Unit = synchronized:
+    def send(text: String): Unit =
+      fed.await()
+      write(text)
+
+    private def write(text: String): Unit = synchronized:
       if stdinClosed then throw RuntimeException(s"the stdin of '$line' is closed")
       try
         stdin.write(text.getBytes(StandardCharsets.UTF_8))
@@ -75,7 +83,11 @@ object Processes:
           throw RuntimeException(
             s"could not write to '$line' (exited? ${exitCode.fold("no")(c => s"yes, code $c")}): ${e.getMessage}"
           )
-    def closeStdin(): Unit = synchronized:
+    def closeStdin(): Unit =
+      fed.await()
+      closeInput()
+
+    private def closeInput(): Unit = synchronized:
       if !stdinClosed then
         stdinClosed = true
         try stdin.close()
@@ -206,14 +218,17 @@ object Processes:
       ManagedProcess.live.add(m)
       // stdin: written on its own thread (a large input would deadlock against the drains).
       if stdin.isEmpty then
-        if closeStdinAfter then m.closeStdin()
+        m.fed.countDown()
+        if closeStdinAfter then m.closeInput()
       else
-        daemon: () =>
-          try m.send(stdin)
+        started("atc-process-stdin"): () =>
+          try m.write(stdin)
           catch case _: RuntimeException => ()
-          finally if closeStdinAfter then m.closeStdin()
+          finally
+            m.fed.countDown()
+            if closeStdinAfter then m.closeInput()
       def drainer(stream: InputStream, into: OutputBuffer): Thread =
-        daemon: () =>
+        started("atc-process-output"): () =>
           val text = TextSink: decoded =>
             into.append(decoded)
             gate.foreach(_.feed(decoded))
@@ -230,7 +245,7 @@ object Processes:
             catch case _: IOException => ()
       m.drains = drainer(procs.last.getInputStream.nn, m.stdoutBuf) ::
         procs.zip(m.stderrBufs).map((process, buffer) => drainer(process.getErrorStream.nn, buffer))
-      daemon: () =>
+      started("atc-process-exit"): () =>
         procs.foreach: process =>
           try process.waitFor()
           catch case _: InterruptedException => ()
@@ -240,10 +255,9 @@ object Processes:
         onExit(m.exitCode.getOrElse(-1))
       m
 
-    /** Start `body` on a new daemon thread. */
-    private def daemon(body: Runnable): Thread =
-      val thread = Thread(body)
-      thread.setDaemon(true)
+    /** A started daemon thread named `name` running `body`. */
+    private def started(name: String)(body: Runnable): Thread =
+      val thread = Threads.daemon(name)(body)
       thread.start()
       thread
 

@@ -138,6 +138,21 @@ class AgentCoreLoopSuite extends munit.FunSuite:
     assert(ui.warnings.contains(AgentMessages.interruptedWarning), ui.warnings.toString)
     assertEquals(agent.toolCalls, 1)
 
+  test("a fatal error from a runner still closes the batch, so the history can be saved and resumed"):
+    val ids = List("first", "overflows")
+    val (_, _, agent) = setup(Seq(toolStep(ids*), ScriptedModel.Reply("recovered")))
+    val runner = RecordingRunner(call =>
+      if call.id == "overflows" then throw StackOverflowError()
+      else ToolResult(call.id, "done", isError = false)
+    )
+    // munit's `intercept` lets fatal errors through.
+    val thrown =
+      try { agent.runTurn(runner, "go", () => false); None }
+      catch case e: StackOverflowError => Some(e)
+    assert(thrown.isDefined)
+    assertEquals(toolResults(agent).map(_.results.map(_.callId)), List(ids))
+    assertEquals(agent.runTurn(RecordingRunner(), "again", () => false), TurnOutcome.Finished)
+
   test("a runner exception keeps the completed results and closes the batch before propagating"):
     val ids = List("completed-before-throw", "throws", "not-reached")
     val (_, _, agent) = setup(Seq(toolStep(ids*), ScriptedModel.Reply("recovered")))

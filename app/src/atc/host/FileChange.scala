@@ -1,6 +1,7 @@
 package atc.host
 
 import atc.TextFiles
+import atc.platform.PlatformPath
 
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
@@ -14,9 +15,11 @@ private[atc] object FileChange:
   private val MaxBytes = 64000
   final case class Snapshot(exists: Boolean, text: Option[String])
 
+  /** A final link is not followed: deleting one must not report, or read, what it reaches. */
   def snapshot(path: Path): Snapshot =
     try
-      if !Files.exists(path) then Snapshot(false, Some(""))
+      if PlatformPath.isLink(path) then Snapshot(true, None)
+      else if !Files.exists(path) then Snapshot(false, Some(""))
       else if !Files.isRegularFile(path) || Files.size(path) > MaxBytes then Snapshot(true, None)
       else
         val bytes = Using.resource(Files.newInputStream(path).nn)(_.readNBytes(MaxBytes + 1).nn)

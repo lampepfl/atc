@@ -58,7 +58,7 @@ final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     b.streamOptions(ChatCompletionStreamOptions.builder().includeUsage(true).build())
     configure(b, thinking = true, reasoningEffort(thinking = true))
     tools.foreach(t => b.addTool(functionTool(t)))
-    if webSearch then b.webSearchOptions(ChatCompletionCreateParams.WebSearchOptions.builder().build())
+    if searches(tools) then b.webSearchOptions(ChatCompletionCreateParams.WebSearchOptions.builder().build())
     history.foreach:
       case Msg.User(text) => b.addUserMessage(text)
       case Msg.Continuation(text) => b.addUserMessage(text)
@@ -97,7 +97,7 @@ final class OpenAIChatModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     sink: StreamSink,
     cancelled: () => Boolean
   ): Completion =
-    withWebSearchFallback(sink): sink =>
+    withWebSearchFallback(tools, sink): sink =>
       val feed = OpenAIChatModel.ChunkFeed()
       val split = tags.map((open, close) => OpenAIChatModel.TagSplitter(open, close))
       def show(parts: List[(Boolean, String)]) =

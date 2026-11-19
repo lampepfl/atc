@@ -1,6 +1,6 @@
 package atc
 
-import atc.host.{CommandLine, OutputBuffer, TextSink}
+import atc.host.{OutputBuffer, TextSink}
 
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.{CompletableFuture, TimeUnit}
@@ -29,7 +29,7 @@ class ProcessesSuite extends munit.FunSuite:
 
   test("captured stderr reports truncation at its output limit"):
     val command = ProcessFixture.command("stderr", (8 * 1024 * 1024 + 1).toString)
-    val result = ProcessFixture.run(ProcessBuilder(CommandLine.parseCommandLine(command).asJava), command, 10000L)
+    val result = ProcessFixture.run(ProcessBuilder(ProcessFixture.argv(command).asJava), command, 10000L)
     assertEquals(result.exitCode, 0)
     assertEquals(result.stdout, "")
     assert(result.stderr.contains("truncated"), result.stderr.takeRight(100))
