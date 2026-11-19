@@ -23,15 +23,18 @@ class ChatGPTSuite extends munit.FunSuite:
 
   /** A stream as the ChatGPT backend sends it: the items arrive in `response.output_item.done`
     * events, and the closing `response.completed` carries no output. */
-  private def backendStream(items: String*): String =
+  private def backendStream(items: String*): String = backendStreamEnding("completed", items*)
+
+  /** [[backendStream]] closed by `response.<status>` with that status and no details. */
+  private def backendStreamEnding(status: String, items: String*): String =
     val created =
       """{"type":"response.created","sequence_number":0,"response":{"id":"one","object":"response","created_at":1,"model":"test","status":"in_progress","output":[]}}"""
     val done = items.zipWithIndex.map((item, i) =>
       s"""{"type":"response.output_item.done","sequence_number":${i + 1},"output_index":$i,"item":$item}"""
     )
     val completed =
-      s"""{"type":"response.completed","sequence_number":${items.size +
-          1},"response":{"id":"one","object":"response","created_at":1,"model":"test","status":"completed","output":[]}}"""
+      s"""{"type":"response.$status","sequence_number":${items.size +
+          1},"response":{"id":"one","object":"response","created_at":1,"model":"test","status":"$status","output":[]}}"""
     (created +: done :+ completed).map(e => s"event: ${ujson.read(e)("type").str}\ndata: $e\n\n").mkString
 
   private val streamed = backendStream(
@@ -256,6 +259,18 @@ class ChatGPTSuite extends munit.FunSuite:
         val completion = model.complete("s", List(Msg.User("add")), Nil, StreamSink(_ => ()), () => false)
         assertEquals(completion.toolCalls, List(ToolCall("call-1", "run_scala", """{"code":"1 + 1"}""")))
         assertEquals(completion.stop, CompletionStop.Complete)
+      finally model.close()
+
+  test("a response marked incomplete without a reason does not run its calls"):
+    val call =
+      """{"id":"fc","type":"function_call","status":"completed","call_id":"call-1","name":"run_scala","arguments":"{\"code\":\"1 + 1\"}"}"""
+    withServer(_ => (200, "text/event-stream", backendStreamEnding("incomplete", call))): (url, _) =>
+      val file = tempFile()
+      saved(file, "token", "refresh", expiresIn = 3_600_000)
+      val model = ChatGPTModel(backend(url), ChatGPTAuth(file, url, List(0)))
+      try
+        val completion = model.complete("s", List(Msg.User("add")), Nil, StreamSink(_ => ()), () => false)
+        assertEquals(completion.stop, CompletionStop.Incomplete)
       finally model.close()
 
   test("a one-shot call streams and carries instructions"):

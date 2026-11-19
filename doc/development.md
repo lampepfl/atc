@@ -1028,8 +1028,9 @@ read at request time; `Models` caches one client per reference, so `/model` sets
 client's effort back to `ChatModel.defaultEffort` (its `reasoning`).
 
 Web search is best effort. `ModelCatalog` gives every model without its own `webSearch`
-the top-level one, listed models included. `SpecModel.withWebSearchFallback` resends a
-streaming request without the tool when the provider answers 400 or 422 naming web
+the top-level one, listed models included. Only a request that offers tools carries it
+(`SpecModel.searches`), so compaction makes no searches. `SpecModel.withWebSearchFallback`
+resends a streaming request without the tool when the provider answers 400 or 422 naming web
 search before anything was streamed, and turns the tool off for that client. A gateway
 that drops the tool silently cannot be detected. `ChatModel` has streaming `complete` and
 one-shot `simple` operations. Provider adapters normalize stop reasons into `CompletionStop`;
@@ -1141,8 +1142,10 @@ context outside ATC turned off: `--tools=` (no built-in tools; `WebSearch` alone
 `webSearch` is on), `--setting-sources=` (no settings files, hooks, plugins or skills),
 `--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence`, and
 `--permission-mode=dontAsk --permission-prompts=none` with only ATC's MCP server allowed. The
-environment disables CLAUDE.md files, auto memory, claude.ai connectors, auto-compaction (ATC
-compacts) and updates, and drops `ANTHROPIC_API_KEY`, which would replace the subscription.
+environment disables CLAUDE.md files, `@path` file mentions in prompts (the prompts hold tool
+output and file contents, and a mention would attach a file outside ATC's permissions), auto
+memory, claude.ai connectors, auto-compaction (ATC compacts) and updates, and drops
+`ANTHROPIC_API_KEY`, which would replace the subscription.
 The system prompt goes in the `initialize` control request, since it exceeds Windows'
 command-line limit. The CLI asks the API to omit thinking text by default; the hidden
 `--thinking-display=summarized` flag brings back a summary, or the full text from models that
@@ -1159,9 +1162,9 @@ arrives first waits for its call. A completion carries a `NativeTurn` marker, so
 request can tell whether its history extends what the session has seen: the results of the
 pending calls, or user messages after a finished answer. Any other history (compaction, a
 context cut, an interrupt, a model switch, a restored session), or a changed system prompt,
-tool list or effort, ends the process and starts one that gets the history as a transcript.
-A cancelled request stops its process. One-shot calls run in their own process without
-tools. The model list comes from the `initialize` answer, and each model's context
+tool list, effort or web search setting, ends the process and starts one that gets the
+history as a transcript. A cancelled request stops its process. One-shot calls run in their
+own process without tools. The model list comes from the `initialize` answer, and each model's context
 window from `set_model` followed by `get_context_usage` (`rawMaxTokens`); none of these
 makes a model request. A configured model without `contextWindow` learns its window the
 same way when a session starts, until the CLI has answered once; the session is published

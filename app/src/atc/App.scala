@@ -155,6 +155,10 @@ final class App(args: Cli.Args, val tui: Tui):
       args.prompt match
         case Some(p) =>
           tui.askToContinue = false // nobody to ask: the tool budget is a hard stop here
+          // A scripted run has no banner, and without a provider set up the model is one of
+          // those that need no key, such as a signed-in Claude Code: say which one answers.
+          if !models.initialNamed then
+            tui.info(s"Using ${models.describe(agent.model)}: no model was named with -m or in a config.")
           sandbox.warm()
           // Report a failed turn through the process exit code so scripts can detect it.
           runTurn(p).exitCode

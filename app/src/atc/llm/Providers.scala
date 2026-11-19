@@ -7,6 +7,7 @@ import com.openai.client.{OpenAIClient, OpenAIClientImpl}
 import com.openai.core.{ClientOptions, JsonValue, RequestOptions, Timeout}
 import com.openai.core.http.{HttpClient, HttpRequest}
 
+import java.io.IOException
 import java.time.Duration
 import java.util.{Locale, UUID}
 
@@ -47,8 +48,16 @@ private[atc] object Providers:
     val defaults =
       if spec.headers.keysIterator.exists(_.equalsIgnoreCase("User-Agent")) then Map.empty[String, String]
       else Map("User-Agent" -> UserAgent)
-    defaults ++ spec.headers.map: (name, value) =>
+    val configured = spec.headers.map: (name, value) =>
       name -> (if value == ProviderConfig.SessionRef then conversationId else value)
+    // Refused here, by name only. The HTTP library refuses the same ones, but its message
+    // quotes the value, which is often a key, and the message goes to the screen and into
+    // the conversation.
+    for (name, value) <- configured do
+      val validName = name.nonEmpty && name.forall(c => c > ' ' && c < 0x7f)
+      if !validName || !value.forall(c => c == '\t' || (c >= ' ' && c < 0x7f)) then
+        throw IOException(s"The provider header $name is not valid HTTP")
+    defaults ++ configured
 
   def httpClient(connect: Duration, read: Duration, write: Duration, request: Duration): okhttp3.OkHttpClient =
     okhttp3.OkHttpClient.Builder().retryOnConnectionFailure(false)

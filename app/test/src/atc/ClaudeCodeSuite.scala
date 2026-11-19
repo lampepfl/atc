@@ -334,6 +334,21 @@ class ClaudeCodeSuite extends munit.FunSuite:
     assertEquals(h.launches.size, 2)
     assert(h.launches.asScala.last.args.contains("--effort=high"))
 
+  test("switching web search starts a new session, whose CLI allows search only when it is on"):
+    val h = Harness(
+      cli => { cli.handshake(); cli.user(); cli.answer("one") },
+      cli => { cli.handshake(); cli.user(); cli.answer("two") },
+    )
+    h.model.useWebSearch(true)
+    val first = List(Msg.User("hello"))
+    val reply = completion(h, first)
+    h.model.useWebSearch(false)
+    completion(h, first :+ assistant(reply) :+ Msg.User("again"))
+    assertEquals(h.launches.size, 2)
+    val List(on, off) = h.launches.asScala.toList.map(_.args.find(_.startsWith("--allowedTools=")))
+    assert(on.exists(_.contains("WebSearch")), on)
+    assert(off.exists(!_.contains("WebSearch")), off)
+
   test("a failed CLI turn is an error with the CLI's message, and ends the session"):
     val h = Harness: cli =>
       cli.handshake()
@@ -350,6 +365,19 @@ class ClaudeCodeSuite extends munit.FunSuite:
 
   test("a CLI that exits reports its last stderr line"):
     val h = Harness(cli => { cli.handshake(); cli.user(); cli.process.stop() })
+    val error = intercept[IOException](h.model.complete("system", List(Msg.User("hi")), tools, quiet, () => false))
+    assertEquals(error.getMessage, "Claude Code exited: fake stderr line")
+
+  test("the CLI's environment turns off what would load context outside ATC"):
+    // Among it file mentions: a prompt holds tool output and file contents, and `@path` in it
+    // would make the CLI read that file itself.
+    for name <-
+        List("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "CLAUDE_CODE_DISABLE_FILE_MENTIONS", "CLAUDE_CODE_DISABLE_AUTO_MEMORY")
+    do assertEquals(ClaudeCli.Settings.get(name), Some("1"), name)
+
+  test("a CLI that exits before it answers the first request reports its last stderr line too"):
+    // As a version that does not know one of the options would.
+    val h = Harness(cli => cli.process.stop())
     val error = intercept[IOException](h.model.complete("system", List(Msg.User("hi")), tools, quiet, () => false))
     assertEquals(error.getMessage, "Claude Code exited: fake stderr line")
 

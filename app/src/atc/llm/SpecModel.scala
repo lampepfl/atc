@@ -34,11 +34,17 @@ private[llm] abstract class SpecModel(val spec: ModelSpec) extends ChatModel:
   def webSearch: Boolean = webSearchOn && !webSearchRejected
   override def useWebSearch(on: Boolean): Unit = webSearchOn = on
 
+  /** Whether a request offering `tools` carries web search. One that offers none, such as a
+    * compaction request, must not search. */
+  protected def searches(tools: List[ToolSpec]): Boolean = webSearch && tools.nonEmpty
+
   /** Run one streaming request. Web search is best effort: when the provider
     * rejects the tool before anything was streamed, this model continues
     * without it and the request is sent again. */
-  protected def withWebSearchFallback(sink: StreamSink)(request: StreamSink => Completion): Completion =
-    if !webSearch then request(sink)
+  protected def withWebSearchFallback(tools: List[ToolSpec], sink: StreamSink)(
+    request: StreamSink => Completion
+  ): Completion =
+    if !searches(tools) then request(sink)
     else
       val streamed = AtomicBoolean(false)
       val tracking = StreamSink(

@@ -91,7 +91,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
     configuredThinking(b)
     // `temperature` is not applied: current Anthropic models reject sampling parameters.
     tools.foreach(t => b.addTool(toolUnion(t)))
-    if webSearch then
+    if searches(tools) then
       settings.webSearchVersion.getOrElse("20260209") match
         case "20250305" => b.addTool(ToolUnion.ofWebSearchTool20250305(WebSearchTool20250305.builder().build()))
         case _ => b.addTool(ToolUnion.ofWebSearchTool20260209(WebSearchTool20260209.builder().build()))
@@ -158,7 +158,7 @@ final class AnthropicModel(spec: ModelSpec) extends SpecModel(spec):
     sink: StreamSink,
     cancelled: () => Boolean
   ): Completion =
-    withWebSearchFallback(sink): sink =>
+    withWebSearchFallback(tools, sink): sink =>
       val acc = MessageAccumulator.create()
       val stream = streamingClient.async().messages().createStreaming(params(system, history, tools))
       ModelRequest.awaitStream(() => stream.close()) {

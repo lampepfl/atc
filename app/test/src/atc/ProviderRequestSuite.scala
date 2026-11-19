@@ -404,6 +404,9 @@ class ProviderRequestSuite extends munit.FunSuite:
   private def searching(url: String) =
     endpoint("openai", url).copy(alias = "m", modelId = "m", settings = ModelConfig(webSearch = Some(true)))
 
+  /** Web search goes only with a request that offers tools. */
+  private val someTool = List(ToolSpec("run_scala", "Run Scala.", """{"type":"object","properties":{}}"""))
+
   test("a header HTTP does not allow fails the request it was for"):
     withServer(_ => (200, "text/event-stream", streamedDone)): (url, requests) =>
       val spec = endpoint("openai", url).copy(alias = "m", modelId = "m", headers = Map("x-test" -> "two\nlines"))
@@ -415,6 +418,21 @@ class ProviderRequestSuite extends munit.FunSuite:
         assertEquals(requests(), Nil)
       finally model.close()
 
+  test("a header HTTP does not allow is refused by name, without its value, for every api"):
+    // The value is often a key; the HTTP library's own refusal would quote it.
+    for api <- List("openai", "anthropic") do
+      withServer(_ => (200, "text/event-stream", streamedDone)): (url, requests) =>
+        val spec =
+          endpoint(api, url).copy(alias = "m", modelId = "m", headers = Map("x-api-key" -> "sk-secret-\u00e9"))
+        val model = ChatModel.create(spec)
+        try
+          val e = intercept[Exception](model.complete("s", List(Msg.User("hi")), Nil, StreamSink(_ => ()), () => false))
+          val messages = atc.Debug.causes(e).map(c => String.valueOf(c.getMessage)).toList
+          assert(messages.exists(_.contains("The provider header x-api-key is not valid HTTP")), s"$api: $messages")
+          assert(!messages.exists(_.contains("sk-secret")), s"$api: $messages")
+          assertEquals(requests(), Nil)
+        finally model.close()
+
   test("a provider that rejects web search gets the request again without it, and never again with it"):
     val rejection =
       """{"error":{"message":"Unrecognized request argument supplied: web_search_options","type":"invalid_request_error"}}"""
@@ -425,7 +443,7 @@ class ProviderRequestSuite extends munit.FunSuite:
       val model = ChatModel.create(searching(url))
       try
         assert(model.webSearch)
-        def ask() = model.complete("s", List(Msg.User("hi")), Nil, StreamSink(_ => ()), () => false).text
+        def ask() = model.complete("s", List(Msg.User("hi")), someTool, StreamSink(_ => ()), () => false).text
         assertEquals(ask(), "done")
         assert(!model.webSearch, "web search is off for the rest of the session")
         assertEquals(ask(), "done")
@@ -438,7 +456,16 @@ class ProviderRequestSuite extends munit.FunSuite:
     withServer(_ => (400, "application/json", rejection)): (url, requests) =>
       val model = ChatModel.create(searching(url))
       try
-        intercept[Exception](model.complete("s", List(Msg.User("hi")), Nil, StreamSink(_ => ()), () => false))
+        intercept[Exception](model.complete("s", List(Msg.User("hi")), someTool, StreamSink(_ => ()), () => false))
         assert(model.webSearch)
         assertEquals(requests().size, 1)
+      finally model.close()
+
+  test("a request that offers no tools, such as compaction, carries no web search"):
+    withServer(_ => (200, "text/event-stream", streamedDone)): (url, requests) =>
+      val model = ChatModel.create(searching(url))
+      try
+        assertEquals(model.complete("s", List(Msg.User("hi")), Nil, StreamSink(_ => ()), () => false).text, "done")
+        assertEquals(model.complete("s", List(Msg.User("hi")), someTool, StreamSink(_ => ()), () => false).text, "done")
+        assertEquals(requests().map(_.body.contains("web_search_options")), List(false, true))
       finally model.close()
