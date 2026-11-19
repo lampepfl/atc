@@ -75,8 +75,8 @@ object Prompts:
       if safeMode then
         """- Safe mode is ON: only the API below plus safe Scala/JDK utilities are available.
           |- A `var` must be local to a `def`, block or lambda, never top-level. Accumulate into immutable collections.
-          |- `scala.collection.mutable` and `StringBuilder()` are unavailable; `new StringBuilder()` and local arrays work.
-          |  A top-level `StringBuilder` or array needs an explicit type.""".stripMargin
+          |- `scala.collection.mutable` and `StringBuilder` are unavailable; build strings with `mkString` or concatenation.
+          |  Local arrays work; a top-level array needs an explicit type.""".stripMargin
       else
         """- Safe mode is OFF: top-level mutable state and mutable collections are available.
           |- Capture checking, capability types, the validator and class-loader isolation still apply.

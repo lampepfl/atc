@@ -240,10 +240,7 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
     clock.reset() // per run, whichever way it ends (callers read `clock.paused` afterwards)
     if closed then ExecutionResult.failed("The sandbox session is closed; start a new one.")
     else
-      // Safe mode resolves aliases before admitting an API, so ordinary Scala
-      // import aliases are useful and safe there. Without safe mode the lexical
-      // validator is the remaining barrier and aliases must not hide a forbidden API.
-      CodeValidator.validate(code, strictImportAliases = !config.safeMode) match
+      CodeValidator.validate(code, config.safeMode) match
         case Nil => parseAndRun(code)
         case violations => ExecutionResult.failed(CodeValidator.formatErrors(violations))
 

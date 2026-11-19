@@ -349,6 +349,17 @@ isolated and has no observable effects beyond its result; ATC cannot establish t
 an arbitrary endpoint. Timing, termination and resource-consumption side channels are
 outside the classified-data guarantees.
 
+The purity of a callback rests on the compiler tracking every piece of mutable state the
+callback could write. With the pinned compiler, safe mode admits some untracked: a callback
+can write its argument into such an object made outside it, and plain code reads it back.
+The compiler rejects `scala.collection.mutable` and the `StringBuilder` class and companion,
+but admits `new StringBuilder` through the alias in package `scala`; the validator refuses
+that name in safe mode (`mutable-builder`). Still admitted, and each one a way to read a
+classified value, are a builder from `List.newBuilder` and its kind, an iterator, a
+`LazyList`, a Java stream, a `Matcher`, and a `Throwable` through `addSuppressed` or
+`initCause`. Closing these belongs to safe mode, which must track or reject them; a list
+of names in the validator cannot be complete.
+
 **Use overloads instead of default arguments on capability-taking API methods.** Default
 arguments have allowed method wrappers to lose required captures when passed to
 `Classified.map`. `CapabilitySuite` covers this regression. Changes to callback signatures,
@@ -366,9 +377,17 @@ ATC's design is derived from [TACIT](https://github.com/lampepfl/tacit).
 
 Safe mode and capture checking enforce the static capability boundary. `CodeValidator`
 provides early diagnostics for common restricted APIs and unsupported catches. It is a
-lexical check, with possible false positives and false negatives. Keep it small; accepting
-code here does not establish that the code is safe. Disabling safe mode removes the
-compiler's API restrictions.
+lexical check, with possible false positives and false negatives. It takes the positions of
+string literals, character literals and comments from the compiler's scanner, so it reads
+as code exactly what the compiler reads as code: a scan of its own would differ somewhere
+(the `$"` escape, a `\${...}` after `raw`, a quote inside backticks), and code in the
+difference would pass the catch rules unchecked. Keep it small; accepting code here does not
+establish that the code is safe. Disabling safe mode removes the compiler's API restrictions.
+Two rules stand in for restrictions the pinned compiler's safe
+mode lacks: it admits `scala.util.Properties`, which reads any environment variable or
+system property, and `scala.runtime`, where `LazyVals` reaches `sun.misc.Unsafe` and
+`coverage.Invoker` writes a file into a directory of the caller's choice. The validator
+refuses both (`sys-properties`, `scala-runtime`) until safe mode does.
 
 Every catch arm must be a typed pattern (`case e: IllegalStateException =>`) of a type that
 is not fatal. A bare catch-all, a catch of `Throwable` or `Error`, and an extractor or

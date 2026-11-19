@@ -237,12 +237,14 @@ class ReplSessionSuite extends munit.FunSuite, ReplAssertions:
   test("safe mode: mutable collections are rejected"):
     assertFails(run("scala.collection.mutable.ArrayBuffer[String]()"), "safe code")
     assertFails(run("import scala.collection.mutable.ListBuffer\nListBuffer[Int]()"), "safe code")
-  test("safe mode: the StringBuilder companion is rejected, but `new StringBuilder` works"):
-    assertFails(run("val sb = StringBuilder()"), "safe code")
-    val top = assertOk(run("val sb: StringBuilder = new StringBuilder()\nsb.append(\"x\")\nsb.toString"))
-    assert(top.output.contains("x"), top.output)
-    val local = assertOk(run("def b(): String = { val sb = new StringBuilder(); sb.append(\"y\").toString }\nb()"))
-    assert(local.output.contains("y"), local.output)
+  test("safe mode: StringBuilder is rejected, by any spelling"):
+    // The compiler rejects the class and its companion, but admits `new StringBuilder` through
+    // the alias in package `scala`; a classified value could be written into one from `map`.
+    assertFails(run("val sb = new StringBuilder"), "mutable-builder")
+    assertFails(run("val sb: StringBuilder = new StringBuilder()\nsb.append(\"x\")\nsb.toString"), "mutable-builder")
+    assertFails(run("def b(): String = { val sb = new StringBuilder(); sb.append(\"y\").toString }"), "mutable-builder")
+    assertFails(run("import scala.{StringBuilder as SB}\nnew SB"), "mutable-builder")
+    assertFails(run("val sb = StringBuilder()"), "mutable-builder")
   test("safe mode: Thread.sleep and sys.error are rejected"):
     assertFails(run("Thread.sleep(1)"), "safe code")
     assertFails(run("""sys.error("boom")"""), "safe code")

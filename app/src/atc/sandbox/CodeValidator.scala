@@ -1,6 +1,13 @@
 package atc.sandbox
 
+import dotty.tools.dotc.core.Contexts.{Context, ContextBase}
+import dotty.tools.dotc.parsing.Scanners.Scanner
+import dotty.tools.dotc.parsing.Tokens
+import dotty.tools.dotc.reporting.StoreReporter
+import dotty.tools.dotc.util.SourceFile
+
 import scala.collection.mutable
+import scala.util.control.NonFatal
 import scala.util.matching.Regex
 
 /** A violation found by the code validator. */
@@ -10,12 +17,20 @@ final case class Violation(ruleId: String, description: String, lineNumber: Int,
   * diagnostics; they are not a safety boundary, which safe mode and capture checking
   * provide. The catch rules, with [[CatchArms]], are what keeps agent code from catching
   * fatal errors and the `ThreadDeath` stop signal. Each check is a linear scan without
-  * parsing, with false positives and false negatives. Adapted from TACIT (Apache-2.0). */
+  * parsing, with false positives and false negatives, over the text the compiler's scanner
+  * reads as code. Adapted from TACIT (Apache-2.0). */
 object CodeValidator:
 
   /** A per-line rule. One that `keepComments` is matched against the physical lines of
     * the code with only string literals blanked, since `//> using` is a comment. */
-  private final case class Forbidden(id: String, regex: Regex, description: String, keepComments: Boolean = false)
+  private final case class Forbidden(
+    id: String,
+    regex: Regex,
+    description: String,
+    keepComments: Boolean = false,
+    /** A rule for what safe mode admits but should not; without safe mode the API is allowed. */
+    safeModeOnly: Boolean = false,
+  )
 
   /** Throwable and the fatal error types. */
   private val FatalClasses =
@@ -113,6 +128,22 @@ object CodeValidator:
       raw"\bsys\.(exit|env|props|runtime|allThreads|addShutdownHook)\b".r,
       "scala.sys.* (exit/env/props/runtime/...) is forbidden"
     ),
+    // Safe mode admits both of these. `scala.util.Properties` reads any environment variable
+    // or system property, the provider keys among them. `scala.runtime` is the compiler's
+    // support code: `LazyVals` reaches `sun.misc.Unsafe`, and `coverage.Invoker` writes a
+    // file into a directory of the caller's choice. Package `scala` is imported, so a bare
+    // `runtime.` names it too.
+    Forbidden(
+      "sys-properties",
+      raw"\bProperties(?:Trait)?\b".r,
+      "scala.util.Properties is forbidden: it reads environment variables and system properties"
+    ),
+    Forbidden(
+      "scala-runtime",
+      (raw"scala\.(?:\{[^}]*\b)?runtime\b|\bLazyVals\b|" +
+        raw"(?<![\w.])runtime\.(?:[A-Z]|coverage\b|function\b|java8\b|stdLibPatches\b)").r,
+      "scala.runtime is the compiler's support code and may not be used in agent code"
+    ),
     Forbidden("sys-thread", raw"\bnew\s+Thread\b".r, "Creating threads is forbidden"),
     Forbidden("sys-thread2", raw"\bThread\s*\(".r, "Creating threads is forbidden"),
     // Catching fatal throwables. The sandbox's ThreadDeath stop signal is an Error, so a
@@ -172,6 +203,15 @@ object CodeValidator:
       raw"\bnowarn\b".r,
       "@nowarn is forbidden: it would silence warnings the sandbox treats as errors, such as a non-local return"
     ),
+    // Safe mode rejects the class and its companion, but admits `new StringBuilder` through
+    // the alias in package `scala`, untracked: a pure function, such as the one given to
+    // `Classified.map`, could write its argument into one made outside it.
+    Forbidden(
+      "mutable-builder",
+      raw"\bStringBuilder\b".r,
+      "StringBuilder is mutable state that safe mode does not track; build the string with mkString or concatenation, or a local var over an immutable collection",
+      safeModeOnly = true
+    ),
     // Directives
     Forbidden("directive-using", raw"//>\s*using".r, "//> using directives are forbidden", keepComments = true),
     Forbidden("directive-import", """import\s+\$""".r, "import $ directives are forbidden", keepComments = true),
@@ -191,110 +231,40 @@ object CodeValidator:
   private[sandbox] inline def isIdentChar(c: Char): Boolean = Character.isLetterOrDigit(c) || c == '_'
   private[sandbox] inline def isIdentStart(c: Char): Boolean = Character.isLetter(c) || c == '_'
 
-  private def charLiteralLength(code: String, i: Int, len: Int): Int =
-    if code.charAt(i) != '\'' then 0
-    else if i + 1 < len && code.charAt(i + 1) == '\\' then
-      if i + 2 < len && code.charAt(i + 2) == 'u' then
-        if i + 7 < len && code.charAt(i + 7) == '\'' then 8 else 0
-      else if i + 3 < len && code.charAt(i + 3) == '\'' then 4
-      else 0
-    else if i + 2 < len && code.charAt(i + 2) == '\'' then 3
-    else 0
-
-  /** Blank string literals and comments (keeping `${...}` interpolations, which
-    * are code), preserving newlines and character offsets. */
+  /** Blank string literals, character literals and comments (keeping the code of `${...}`
+    * and `$name` interpolations), preserving newlines and character offsets. */
   def stripLiteralsAndComments(code: String): String = strip(code, blankComments = true)
 
-  /** Blank string literals only; comments are kept (directives live there). */
+  /** Blank string and character literals only; comments are kept (directives live there). */
   def stripStringLiteralsOnly(code: String): String = strip(code, blankComments = false)
 
+  private lazy val scanContext: Context = (new ContextBase).initialCtx
+
+  /** The compiler's own scanner says where the literals and the comments are, so the checks
+    * read as code exactly what the compiler reads as code. A scan written here differs from it
+    * somewhere, and code in the difference passes unchecked: the `$"` and `$$` escapes, a
+    * `\${...}` after `raw`, a string right after a keyword, a quote inside backticks, an
+    * interpolator named `x_+`. Text the scanner rejects stays as it is; it does not compile. */
   private def strip(code: String, blankComments: Boolean): String =
-    val out = StringBuilder(code.length)
-    val len = code.length
-    final class Frame(val isString: Boolean, val triple: Boolean, val interp: Boolean, val fromInterp: Boolean):
-      var brace: Int = 0
-    val stack = mutable.Stack[Frame](Frame(false, false, false, false))
-
-    inline def emit(c: Char): Unit = out.append(c)
-    inline def blank(c: Char): Unit = out.append(if c == '\n' then '\n' else ' ')
-    /** A character of a comment: blanked or kept, according to `blankComments`. */
-    inline def comment(c: Char): Unit = if blankComments then blank(c) else emit(c)
-    /** Whether the `"` at `k` starts `"""`. */
-    def tripleQuoteAt(k: Int): Boolean = k + 2 < len && code.charAt(k + 1) == '"' && code.charAt(k + 2) == '"'
-
-    var i = 0
-    while i < len do
-      val f = stack.top
-      val c = code.charAt(i)
-      if f.isString then
-        if !f.triple && c == '\\' && i + 1 < len then
-          blank(c)
-          blank(code.charAt(i + 1))
-          i += 2
-        else if f.interp && c == '$' && i + 1 < len && code.charAt(i + 1) == '{' then
-          emit('$')
-          emit('{')
-          i += 2
-          stack.push(Frame(false, false, false, true))
-        else if f.interp && c == '$' && i + 1 < len && isIdentStart(code.charAt(i + 1)) then
-          emit('$')
-          i += 1
-          while i < len && isIdentChar(code.charAt(i)) do
-            emit(code.charAt(i))
-            i += 1
-        else if c == '"' && (!f.triple || tripleQuoteAt(i)) then
-          val width = if f.triple then 3 else 1
-          for _ <- 0 until width do blank('"')
-          i += width
-          stack.pop()
-        else
-          blank(c)
-          i += 1
-      else
-        val charLiteral = if c == '\'' then charLiteralLength(code, i, len) else 0
-        if charLiteral > 0 then
-          val end = i + charLiteral
-          while i < end do
-            blank(code.charAt(i))
-            i += 1
-        else if c == '"' then
-          val triple = tripleQuoteAt(i)
-          val interp = i > 0 && isIdentChar(code.charAt(i - 1))
-          val width = if triple then 3 else 1
-          for _ <- 0 until width do blank('"')
-          i += width
-          stack.push(Frame(true, triple, interp, false))
-        else if c == '/' && i + 1 < len && code.charAt(i + 1) == '/' then
-          while i < len && code.charAt(i) != '\n' do
-            comment(code.charAt(i))
-            i += 1
-        else if c == '/' && i + 1 < len && code.charAt(i + 1) == '*' then
-          comment('/')
-          comment('*')
-          i += 2
-          var depth = 1 // Scala block comments nest
-          while i < len && depth > 0 do
-            if code.startsWith("/*", i) || code.startsWith("*/", i) then
-              depth += (if code.charAt(i) == '/' then 1 else -1)
-              comment(code.charAt(i))
-              comment(code.charAt(i + 1))
-              i += 2
-            else
-              comment(code.charAt(i))
-              i += 1
-        else if c == '{' then
-          emit('{')
-          f.brace += 1
-          i += 1
-        else if c == '}' then
-          emit('}')
-          if f.fromInterp && f.brace == 0 then stack.pop()
-          else if f.brace > 0 then f.brace -= 1
-          i += 1
-        else
-          emit(c)
-          i += 1
-    out.toString
+    val out = code.toCharArray
+    def blank(from: Int, until: Int): Unit =
+      for i <- from.max(0) until until.min(out.length) do if out(i) != '\n' then out(i) = ' '
+    try
+      synchronized:
+        val source = SourceFile.virtual("<snippet>", code)
+        given Context = scanContext.fresh.setSource(source).setReporter(StoreReporter())
+        val scanner = Scanner(source)
+        var tokens = 0
+        while scanner.token != Tokens.EOF && tokens <= code.length do
+          val start = scanner.offset
+          val token = scanner.token
+          scanner.nextToken()
+          tokens += 1
+          if token == Tokens.STRINGLIT || token == Tokens.STRINGPART || token == Tokens.CHARLIT then
+            blank(start, scanner.lastOffset)
+        if blankComments then scanner.comments.foreach(comment => blank(comment.span.start, comment.span.end))
+    catch case NonFatal(_) => ()
+    String(out)
 
   private val CatchAllDescription: String =
     "A bare catch-all also catches fatal errors and the sandbox stop signal; catch a specific non-fatal type instead, e.g. case _: Exception"
@@ -386,7 +356,10 @@ object CodeValidator:
       i += 1
     result.toList
 
-  def validate(code: String, strictImportAliases: Boolean = true): List[Violation] =
+  /** The violations in `code`. Safe mode resolves an import alias before admitting an API, so
+    * aliases are allowed there; without it this check is the remaining barrier, and an alias
+    * must not hide a forbidden API. */
+  def validate(code: String, safeMode: Boolean = false): List[Violation] =
     // Backticks may quote ordinary identifiers (`Runtime.`rootIO``,
     // `java.`io``) without changing what they resolve to. Blank them so the
     // dotted-token normalization and forbidden patterns see the real name while
@@ -401,6 +374,7 @@ object CodeValidator:
     val perLine =
       for
         pattern <- forbidden
+        if safeMode || !pattern.safeModeOnly
         lines = if pattern.keepComments then stringStripped else logical
         (line, idx) <- lines
         if pattern.regex.findFirstIn(line).isDefined
@@ -420,7 +394,7 @@ object CodeValidator:
     val aliases = importAliasOffsets(stripped)
     val importAliases =
       aliases.fatal.map(at("import-fatal-alias", FatalImportAliasDescription, _)) ++
-        (if strictImportAliases then aliases.all.map(at("import-alias", ImportAliasDescription, _)) else Nil)
+        (if safeMode then Nil else aliases.all.map(at("import-alias", ImportAliasDescription, _)))
     val abstractTypes = CatchArms.abstractTypeNames(stripped)
     val abstractTypeCatches =
       if abstractTypes.isEmpty then Nil
