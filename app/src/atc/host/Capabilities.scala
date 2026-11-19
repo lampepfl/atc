@@ -7,7 +7,7 @@ import atc.platform.PlatformPath
 import java.io.{InputStream, InputStreamReader}
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, NoSuchFileException, Path}
-import scala.util.{Try, Using}
+import scala.util.Using
 
 /** Runtime capabilities carry a permission scope ID. The host checks scope,
   * configured permissions and sandbox mode on each operation. Agent-facing
@@ -58,9 +58,10 @@ final class FileEntryImpl(fs: FileSystemImpl, at: Path) extends FileEntry:
     p
 
   /** Run `op` (a read of classified content) as a `Classified` result: the
-    * permission check and any failure stay inside the classified value. */
+    * permission check and any failure, fatal errors included, stay inside the
+    * classified value. */
   private def asClassified[T](operation: String)(op: Path => T): Classified[T] =
-    val result = Try:
+    val result = ClassifiedImpl.attempt:
       val p = canonicalPath
       host.requireRead(scope, p, operation)
       op(p)

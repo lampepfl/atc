@@ -139,10 +139,11 @@ private[host] trait HostPaths:
     content match
       case Success(value) =>
         // Once the classified computation has been inspected, neither an I/O
-        // failure nor its message may reach the agent: either would reveal a
-        // success/failure bit, and an exception can quote the content.
-        try Files.writeString(path, value, StandardCharsets.UTF_8)
-        catch case NonFatal(_) => classifiedSinkFailed(s"writing '${PlatformPath.portable(path)}'")
+        // failure, fatal errors included, nor its message may reach the agent:
+        // either would reveal a success/failure bit, and an exception can quote
+        // the content.
+        if ClassifiedImpl.attempt(Files.writeString(path, value, StandardCharsets.UTF_8)).isFailure then
+          classifiedSinkFailed(s"writing '${PlatformPath.portable(path)}'")
       case Failure(_) => classifiedSinkFailed(s"writing '${PlatformPath.portable(path)}'")
 
   /** Visible children. Policy checks use canonical paths; gitignore checks use the entry. */

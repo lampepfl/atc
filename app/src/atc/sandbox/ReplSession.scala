@@ -1,6 +1,7 @@
 package atc.sandbox
 
 import atc.Threads
+import atc.host.ClassifiedImpl
 import atc.lib.{Derivations, Interface}
 import atc.perms.Mode
 import atc.platform.Platform
@@ -20,17 +21,22 @@ object ReplSession:
   val MaxOutputBytes: Int = 4 * 1024 * 1024
   val TruncationMarker: String = "\n... [output truncated: exceeded 4 MiB capture limit]"
 
-  /** Bounded capture buffer: retains at most `limit` bytes. */
+  /** Bounded capture buffer: retains at most `limit` bytes. It drops what a thread writes
+    * while it runs code on classified data ([[ClassifiedImpl.running]]): the capture is
+    * model-visible, and `System.out` and `System.err` point here during an evaluation. */
   final class BoundedOutputStream(limit: Int) extends OutputStream:
     private val buffer = ByteArrayOutputStream(math.min(limit, 8192))
     @volatile var truncated: Boolean = false
 
     override def write(b: Int): Unit =
-      if buffer.size() < limit then buffer.write(b) else truncated = true
+      if ClassifiedImpl.running then ()
+      else if buffer.size() < limit then buffer.write(b)
+      else truncated = true
 
     override def write(b: Array[Byte], off: Int, len: Int): Unit =
       val room = limit - buffer.size()
-      if room <= 0 then truncated = true
+      if ClassifiedImpl.running then ()
+      else if room <= 0 then truncated = true
       else
         if len > room then truncated = true
         buffer.write(b, off, math.min(len, room))

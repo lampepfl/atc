@@ -79,6 +79,11 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
     assert(!echoed.output.contains("DRILL-SECRET-42"), echoed.output)
     // a failed computation over the secret prints a sanitized note, not the error
     assertOk(run("""println(readClassified("secrets/drill.txt").map(s => throw RuntimeException(s)))"""))
+    // a stack trace printed from inside `map` goes to the process's error stream, which is the
+    // evaluation's capture: it must not carry the value into the tool output
+    val traced =
+      assertOk(run("""readClassified("secrets/drill.txt").map(s => { new Exception(s).printStackTrace(); 1 })"""))
+    assert(!traced.output.contains("DRILL-SECRET-42"), traced.output)
     // refused channels: declassifying write, classified redirection in and out
     assertFails(run("""writeClassified("leak.txt", readClassified("secrets/drill.txt"))"""), "declassify")
     assertFails(run("""exec("echo x < secrets/drill.txt")"""), "classified")

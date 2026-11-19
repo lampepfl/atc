@@ -159,7 +159,7 @@ private[host] trait HostNetwork:
       for
         resolvedBody <- body
         resolvedHeaders <- resolveSecretHeaders(secretHeaders)
-        response <- Try(send(prepared, url, resolvedBody, contentType, headers, resolvedHeaders))
+        response <- ClassifiedImpl.attempt(send(prepared, url, resolvedBody, contentType, headers, resolvedHeaders))
       yield response
     ClassifiedImpl(result)
 
@@ -177,7 +177,9 @@ private[host] trait HostNetwork:
     response.body
 
   private def checkedClassified(method: String, url: String, response: Classified[HttpResponse]): Classified[String] =
-    ClassifiedImpl(ClassifiedImpl.unwrap(response).flatMap(value => Try(checked(method, url, value))))
+    ClassifiedImpl(ClassifiedImpl.unwrap(response).flatMap(value =>
+      ClassifiedImpl.attempt(checked(method, url, value))
+    ))
 
   def httpGet(url: String)(using net: Network): String =
     checked("GET", url, request(net, "GET", url, None, JsonContentType, noHeaders))

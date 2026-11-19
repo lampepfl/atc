@@ -340,7 +340,9 @@ a timeout still ends the evaluation. Nothing else a classified callback throws c
 the classified value, so no catch or `finally` in agent code can observe a secret-dependent
 failure. Authorized output methods apply the same rule to user-defined rendering, including
 `toString` and `getMessage`: a failure there becomes user-only text and never reaches the
-model.
+model. An evaluation captures `System.out` and `System.err` for the model, and
+`Throwable.printStackTrace` writes there without any capability, so the capture drops what a
+thread writes while it runs classified code (`ClassifiedImpl.running`).
 
 `classifiedChat(String)` is treated as pure. This assumes the configured endpoint is
 isolated and has no observable effects beyond its result; ATC cannot establish that about
