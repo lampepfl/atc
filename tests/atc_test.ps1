@@ -1,6 +1,6 @@
 # Tests for the Windows `atc.ps1` wrapper: release metadata, checksum verification, the
-# installed release, startup updates, the user PATH entries and dispatch. No network or Java
-# required, and the registry is not touched.
+# installed release, startup updates, the user PATH entries, starting Java and dispatch. No
+# network or Java required, and the registry is not touched.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tests\atc_test.ps1
 $ErrorActionPreference = 'Stop'
@@ -56,7 +56,7 @@ function Get-Sha256Hex([byte[]]$Bytes) {
 
 # Release metadata as GitHub returns it. $Digests overrides a file's digest, $Urls its URL.
 function New-Release([int]$Id, [string]$Tag, [hashtable]$Digests = @{}, [hashtable]$Urls = @{}) {
-  $assets = foreach ($name in $ReleaseFiles + 'atc.cmd') {
+  $assets = foreach ($name in $ReleaseFiles) {
     $bytes = [Text.Encoding]::UTF8.GetBytes("$name of $Tag")
     $url = if ($Urls.ContainsKey($name)) { $Urls[$name] } else { "https://github.com/$OwnerRepo/releases/download/$Tag/$name" }
     $script:served[$url] = $bytes
@@ -72,12 +72,12 @@ try {
   Write-Host 'Release metadata'
   $release = New-Release 7 '0.2.0'
   $assets = Get-ReleaseAssets $release
-  Check 'the jars and the launcher are found' ($assets.Count -eq 3 -and $assets['atc.ps1'].Url -like 'https://*/atc.ps1')
+  Check 'the jars are found' ($assets.Count -eq 2 -and $assets['atc-lib.jar'].Url -like 'https://*/atc-lib.jar')
   Check 'digests are lowercase hex' ($assets['atc.jar'].Hash -cmatch '^[0-9a-f]{64}$')
   Check 'the key is the id and the tag' ((Get-ReleaseKey $release) -ceq '7|0.2.0')
-  $noLauncher = New-Release 7 '0.2.0'
-  $noLauncher.assets = @($noLauncher.assets | Where-Object { $_.name -ne 'atc.ps1' })
-  Check 'a missing file fails' ((Get-Failure { Get-ReleaseAssets $noLauncher }) -like '*has no atc.ps1 yet*')
+  $noLibrary = New-Release 7 '0.2.0'
+  $noLibrary.assets = @($noLibrary.assets | Where-Object { $_.name -ne 'atc-lib.jar' })
+  Check 'a missing file fails' ((Get-Failure { Get-ReleaseAssets $noLibrary }) -like '*has no atc-lib.jar yet*')
   $noDigest = New-Release 7 '0.2.0' @{ 'atc-lib.jar' = '' }
   Check 'a file without a digest fails' ((Get-Failure { Get-ReleaseAssets $noDigest }) -like '*digest*atc-lib.jar*')
   $md5 = New-Release 7 '0.2.0' @{ 'atc.jar' = 'md5:0123456789abcdef0123456789abcdef' }
@@ -91,14 +91,14 @@ try {
   Install-Release $release
   Check 'the files and the marker are installed' ((Test-Ready) -and (Read-Marker) -ceq '7|0.2.0')
   Check 'the jar is the release''s' ((Get-CachedText 'atc.jar') -ceq 'atc.jar of 0.2.0')
-  Check 'three files are downloaded' ($script:downloads.Count -eq 3)
+  Check 'both files are downloaded' ($script:downloads.Count -eq 2)
   Check 'no download directory is left' (@(Get-ChildItem -LiteralPath $CacheDir -Directory).Count -eq 0)
   $script:downloads.Clear()
   Install-Release $release
   Check 'an up-to-date release is not downloaded again' ($script:downloads.Count -eq 0)
   [IO.File]::WriteAllText((Join-Path $CacheDir 'atc-lib.jar'), 'corrupt')
   Install-Release $release
-  Check 'a corrupted file is downloaded again' ($script:downloads.Count -eq 3 -and (Get-CachedText 'atc-lib.jar') -ceq 'atc-lib.jar of 0.2.0')
+  Check 'a corrupted file is downloaded again' ($script:downloads.Count -eq 2 -and (Get-CachedText 'atc-lib.jar') -ceq 'atc-lib.jar of 0.2.0')
 
   $bad = New-Release 8 '0.2.1' @{ 'atc-lib.jar' = 'sha256:' + ('0' * 64) }
   Check 'a checksum mismatch fails' ((Get-Failure { Install-Release $bad }) -like '*Checksum mismatch for atc-lib.jar*')
@@ -182,30 +182,83 @@ try {
   function Remove-UserPathEntry { $script:pathRemoved = $true }
   Invoke-Uninstall
   Check 'uninstall removes the release but not other files' (-not (Test-Path -LiteralPath $ReleaseMarker) -and
-    -not (Test-Path -LiteralPath $Launcher) -and (Test-Path -LiteralPath (Join-Path $CacheDir 'notes.txt')))
+    -not (Test-Path -LiteralPath (Join-Path $CacheDir 'atc.jar')) -and (Test-Path -LiteralPath (Join-Path $CacheDir 'notes.txt')))
   Check 'uninstall removes the wrapper and its directory' (-not (Test-Path -LiteralPath $InstallDir))
   Check 'uninstall removes the PATH entry and keeps the config' ($script:pathRemoved -and (Test-Path -LiteralPath (Join-Path $AtcHome 'config.json')))
 
+  Write-Host 'Java options'
+  $split = Split-HeapOptions @('-C', 'dir', '-Xmx4g', '-p', '-Xmx1g', '-Xms512m', 'x')
+  Check 'heap flags go to Java, and an option''s value stays with ATC' (
+    ($split.Atc -join '|') -ceq '-C|dir|-p|-Xmx1g|x' -and ($split.Heap -join '|') -ceq '-Xmx4g|-Xms512m')
+  Check 'a malformed heap size fails' ((Get-Failure { Split-HeapOptions @('-Xmx4x') }) -like '*Invalid JVM heap size*')
+  $env:ATC_JAVA_OPTS = ' -XX:+UseSerialGC  -Xmx3g '
+  $options = (Get-JvmOptions 21 @('-Xmx4g')) -join ' '
+  Check 'ATC_JAVA_OPTS comes after the defaults and before the heap flags' (
+    $options -ceq '-Xms256m -Xmx2g -Xss4m -XX:-UsePerfData -XX:+UseSerialGC -Xmx3g -Xmx4g') $options
+  $env:ATC_JAVA_OPTS = $null
+  Check 'Java 17 gets the defaults alone' (@(Get-JvmOptions 17 @()).Count -eq 4)
+  Check 'Java 24 gets both version-gated options' (
+    ((Get-JvmOptions 24 @()) -join ' ') -clike '*-XX:-UsePerfData --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED')
+
+  if ($OnWindows) {
+    Write-Host 'Starting Java'
+    # A batch file standing in for Java: it reports version 21, then records its arguments,
+    # whether atc.jar is in its directory and the private variables, and exits with 7.
+    $fakeJava = Join-Path $testTmp 'java.cmd'
+    $record = Join-Path $testTmp 'java.txt'
+    $batch = @'
+@echo off
+if "%~1"=="-version" (
+  echo openjdk version "21.0.2" 2024-01-16 1>&2
+  exit /b 0
+)
+(
+  echo args=%*
+  if exist atc.jar (echo jar=found) else (echo jar=missing)
+  set ATC_INTERNAL_
+) > "RECORD"
+exit /b 7
+'@
+    [IO.File]::WriteAllText($fakeJava, ((($batch -split "\r?\n") -join "`r`n").Replace('RECORD', $record)))
+    function Find-Java { $fakeJava }
+    Reset-Cache
+    New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
+    [IO.File]::WriteAllText((Join-Path $CacheDir 'atc.jar'), 'atc.jar')
+    $runDir = Join-Path $testTmp 'dir with space'
+    New-Item -ItemType Directory -Path $runDir | Out-Null
+    $env:ATC_INTERNAL_ARG_COUNT = 'outer'
+    Push-Location -LiteralPath $runDir
+    try {
+      $here = (Get-Location).Path
+      Start-Atc $CacheDir @('-C', 'dir with space', '-p', 'say "hi" & bye', '-Xmx4g', '', '--')
+      $code = $LASTEXITCODE
+      Check 'the caller''s directory is kept' ((Get-Location).Path -ceq $here)
+    } finally {
+      Pop-Location
+    }
+    $lines = [IO.File]::ReadAllLines($record)
+    $recorded = @{}
+    foreach ($line in $lines) { if ($line -match '^(ATC_INTERNAL_\w+)=(.*)$') { $recorded[$Matches[1]] = $Matches[2] } }
+    $received = @(0..5 | ForEach-Object { $recorded["ATC_INTERNAL_ARG_$_"] }) -join '|'
+    Check 'Java''s exit code is left in LASTEXITCODE' ($code -eq 7) "(exit code $code)"
+    Check 'Java gets the JVM options, the heap flag last, and atc.jar' (
+      $lines[0] -clike 'args=-Xms256m -Xmx2g -Xss4m -XX:-UsePerfData -Xmx4g -Dfile.encoding=UTF-8 -jar atc.jar*') $lines[0]
+    Check 'Java runs in the jar directory' ($lines[1] -ceq 'jar=found')
+    Check 'ATC''s arguments go through the private variables unchanged, without the heap flag' (
+      $recorded['ATC_INTERNAL_ARG_COUNT'] -ceq '6' -and $received -ceq 'x-C|xdir with space|x-p|xsay "hi" & bye|x|x--') $received
+    Check 'with the launch directory and the library jar' (
+      $recorded['ATC_INTERNAL_LAUNCH_CWD'] -clike '*\dir with space' -and
+      $recorded['ATC_INTERNAL_LIB_CLASSPATH'] -clike '*\atc-lib.jar') ($lines -join '|')
+    Check 'the private variables are restored' ($env:ATC_INTERNAL_ARG_COUNT -ceq 'outer' -and -not $env:ATC_INTERNAL_ARG_0)
+    $env:ATC_INTERNAL_ARG_COUNT = $null
+  }
+
   Write-Host 'Dispatch'
-  # A launcher standing in for the release's: it records its arguments and exits with 7.
-  Reset-Cache
-  New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
-  foreach ($name in 'atc.jar', 'atc-lib.jar') { [IO.File]::WriteAllText((Join-Path $CacheDir $name), $name) }
-  $argsFile = Join-Path $testTmp 'args.txt'
-  [IO.File]::WriteAllText($Launcher, "[IO.File]::WriteAllLines('$argsFile', [string[]]`$args)`nexit 7`n")
-  [IO.File]::WriteAllText($ReleaseMarker, "7|0.2.0`n")
-  $env:ATC_CHECK_UPDATES = '0'
-  # In this process, as PowerShell runs atc.ps1 from PATH. Windows PowerShell drops empty
-  # arguments and embedded quotes on a native command line, so only this call carries them.
-  & $wrapper -C 'dir with space' -p 'say "hi" & bye' -Xmx4g '' '--'
-  $code = $LASTEXITCODE
-  $received = [IO.File]::ReadAllLines($argsFile)
-  Check 'atc runs the launcher and returns its exit code' ($code -eq 7) "(exit code $code)"
-  Check 'the arguments reach the launcher unchanged' (($received -join '|') -ceq '-C|dir with space|-p|say "hi" & bye|-Xmx4g||--') ($received -join '|')
-  # In a new process, as atc.cmd runs it.
-  $powershell = (Get-Process -Id $PID).Path
-  & $powershell -NoProfile -ExecutionPolicy Bypass -File $wrapper run --version
-  Check 'atc run drops the command, and -File returns the exit code' ($LASTEXITCODE -eq 7 -and ([IO.File]::ReadAllLines($argsFile) -join '|') -ceq '--version')
+  function Invoke-Run([string[]]$Arguments) { $script:ran = $Arguments -join '|' }
+  Invoke-Main ([string[]]@('-C', 'dir with space', '-Xmx4g'))
+  Check 'arguments that are no command run ATC with all of them' ($script:ran -ceq '-C|dir with space|-Xmx4g')
+  Invoke-Main ([string[]]@('run', '--version'))
+  Check 'atc run drops the command' ($script:ran -ceq '--version')
   $help = & $wrapper help 6>&1 | Out-String
   Check 'atc help lists the commands' ($help -like '*atc self uninstall*')
 } finally {
@@ -214,6 +267,6 @@ try {
 
 Write-Host ''
 Write-Host "Passed: $script:passed, failed: $script:failed"
-# Always exit: the dispatch tests leave $LASTEXITCODE at the fake launcher's 7, and a caller
-# such as a CI step that runs this script in its own session reports $LASTEXITCODE.
+# Always exit: the Java test leaves $LASTEXITCODE at the fake Java's 7, and a caller such as a
+# CI step that runs this script in its own session reports $LASTEXITCODE.
 if ($script:failed -gt 0) { exit 1 } else { exit 0 }

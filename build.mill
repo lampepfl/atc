@@ -82,30 +82,11 @@ object app extends AtcScalaModule:
     // Avoid Windows' command-line length limit for the forked test JVM.
     def testUseArgsFile = scala.util.Properties.isWin
 
-def windowsPowerShellSource = Task.Source("windows/atc.ps1")
-
-/** Build a self-contained distribution under `out/dist.dest/`. */
+/** Build the release jars under `out/dist.dest/`; the `atc` and `atc.ps1` wrappers run them. */
 def dist = Task {
   val libJar = lib.assembly().path
   val appJar = app.assembly().path
   os.copy(libJar, Task.dest / "atc-lib.jar", replaceExisting = true)
   os.copy(appJar, Task.dest / "atc.jar", replaceExisting = true)
-  os.copy(windowsPowerShellSource().path, Task.dest / "atc.ps1", replaceExisting = true)
-  val windowsScript =
-    """@echo off
-      |setlocal DisableDelayedExpansion
-      |set "ATC_POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-      |if not exist "%ATC_POWERSHELL%" (
-      |  echo atc: Windows PowerShell was not found at "%ATC_POWERSHELL%". 1>&2
-      |  exit /b 1
-      |)
-      |if not exist "%~dp0atc.ps1" (
-      |  echo atc: atc.ps1 is missing beside "%~f0". Download atc.ps1, atc.cmd, atc.jar, and atc-lib.jar into the same directory. 1>&2
-      |  exit /b 1
-      |)
-      |"%ATC_POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0atc.ps1" %*
-      |exit /b %errorlevel%
-      |""".stripMargin.replace("\n", "\r\n")
-  os.write.over(Task.dest / "atc.cmd", windowsScript)
   PathRef(Task.dest)
 }

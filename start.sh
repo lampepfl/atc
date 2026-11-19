@@ -57,7 +57,7 @@ if [ "${ATC_SKIP_BUILD:-0}" != "1" ]; then
   if [ ! -f "$JAR" ] || [ ! -f "$LIBJAR" ] || [ ! -f "$STAMP" ]; then
     needs_build=1
   # What the distribution is built from; the tests are not part of it.
-  elif [ -n "$(find "$ROOT/build.mill" "$ROOT/app/src" "$ROOT/app/resources" "$ROOT/lib/src" "$ROOT/windows" \
+  elif [ -n "$(find "$ROOT/build.mill" "$ROOT/app/src" "$ROOT/app/resources" "$ROOT/lib/src" \
       -type f -newer "$STAMP" | head -1)" ]; then
     needs_build=1
   fi

@@ -125,7 +125,9 @@ powershell -ExecutionPolicy Bypass -File .\atc.ps1 setup   # installs atc in %US
 In a new terminal, `atc` then runs ATC in the current directory and offers to upgrade when a
 newer release is out; `atc help` lists the wrapper's commands. If PowerShell refuses to run
 scripts, use `atc.cmd`, or allow local scripts with
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. A wrapper that says the latest release
+has no `atc.ps1` is older than the releases, which no longer carry one: `atc self update`
+replaces it.
 
 </details>
 

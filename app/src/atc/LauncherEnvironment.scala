@@ -2,7 +2,7 @@ package atc
 
 import java.nio.file.{Path, Paths}
 
-/** Private environment protocol shared by the native launchers and the JVM.
+/** Private environment protocol shared by the Windows wrapper and the JVM.
   * Keeping it here prevents Windows transport details from leaking into CLI,
   * sandbox, and child-process logic. */
 private[atc] object LauncherEnvironment:
@@ -34,8 +34,8 @@ private[atc] object LauncherEnvironment:
             throw IllegalArgumentException(s"Windows launcher provided an invalid argument $index of $count")
           encoded.drop(EncodedArgSentinel.length)
 
-  /** The user's launch directory. Windows launchers may temporarily enter the
-    * installation directory so Java can open jars through a legacy argv path. */
+  /** The user's launch directory. The Windows wrapper starts Java in the jar
+    * directory so that it opens the jars by name, not through a legacy argv path. */
   def workingDirectory(environment: String => Option[String] = ProcessEnvironment.get): Path =
     environment(WorkingDirectory)
       .map(value => Paths.get(value).nn.toAbsolutePath.nn.normalize.nn)

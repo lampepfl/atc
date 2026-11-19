@@ -129,7 +129,7 @@ private[host] trait HostProcesses:
       val argv = WindowsExecutable.resolve(stage.argv, dir)
       val builder = ProcessBuilder(argv.asJava).directory(dir.toFile).nn
       val environment = builder.environment().nn
-      // Windows launchers may carry the original command line (including a prompt)
+      // The Windows wrapper may carry the original command line (including a prompt)
       // in these variables, and the key variables hold ATC's credentials. They belong
       // to ATC, not to commands the agent starts, which could print them. Windows names
       // ignore case, but this map's keys keep the system's spelling (`Path`, not `PATH`).

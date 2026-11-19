@@ -64,9 +64,9 @@ jobs:
       run: ./mill.bat app.test
 
   # Publishing a GitHub release (tag vX.Y.Z) builds the distribution and
-  # attaches both jars and the Windows launchers; the Unix `atc` wrapper downloads
-  # the two jars and checks them against the digests GitHub records. The build runs
-  # without write access; only the upload job, which runs no project code, has it.
+  # attaches both jars; the `atc` and `atc.ps1` wrappers download them and check
+  # them against the digests GitHub records. The build runs without write access;
+  # only the upload job, which runs no project code, has it.
   build-release:
     if: github.event_name == 'release'
     needs: build
@@ -108,8 +108,6 @@ jobs:
         path: |
           out/dist.dest/atc.jar
           out/dist.dest/atc-lib.jar
-          out/dist.dest/atc.cmd
-          out/dist.dest/atc.ps1
         if-no-files-found: error
 
   publish-release:
@@ -131,5 +129,5 @@ jobs:
         GH_REPO: ${{ github.repository }}
         TAG: ${{ github.event.release.tag_name }}
       run: |
-        gh release upload "$TAG" assets/atc.jar assets/atc-lib.jar assets/atc.cmd assets/atc.ps1 --clobber
+        gh release upload "$TAG" assets/atc.jar assets/atc-lib.jar --clobber
         gh release view "$TAG" --json assets --jq '.assets[] | "\(.name)\t\(.size) bytes"'

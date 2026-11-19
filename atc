@@ -19,7 +19,7 @@ INSTALL_DIR="${ATC_INSTALL_DIR:-${HOME}/.local/bin}"
 INSTALL_PATH="${INSTALL_DIR}/atc"
 # JVM defaults for 'atc run' (measured; doc/development.md "JVM settings"). ATC_JAVA_OPTS
 # and -Xmx/-Xms on the command line come later and win. The same list is repeated in
-# start.ps1 and windows/atc.ps1: change all three.
+# Get-JvmOptions in atc.ps1: change both.
 DEFAULT_JVM_OPTS="-Xms256m -Xmx2g -Xss4m -XX:-UsePerfData"
 # Startup cache (AOT cache on Java 25+, CDS archive on 19-24): halves the cold start, but a
 # stale one makes the JVM print errors, so key.txt records the JDK, the release and the JVM
@@ -899,7 +899,7 @@ cmd_dev() {
 # java, and ATC itself does not know them. Leaves the rest, in order, in RUN_ARGS and the
 # flags in JVM_OPTS. The value of an ATC option that takes one (-p 'text', -C dir, ...) is
 # forwarded untouched even when it starts with -Xm: the list of those options mirrors
-# `FlagsWithValues` in app/src/atc/Cli.scala (start.ps1 and windows/atc.ps1 carry the same
+# `FlagsWithValues` in app/src/atc/Cli.scala (Split-HeapOptions in atc.ps1 carries the same
 # list). Bash 3.2: an empty array must be expanded as ${A[@]+"${A[@]}"} under `set -u`.
 extract_jvm_options() {
   JVM_OPTS=()

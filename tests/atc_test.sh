@@ -201,7 +201,7 @@ assert_contains "start.sh finds the version after a 'Picked up' line" 'arg=<--en
 # A checkout whose mill stub builds the jars and records what it saw of the environment file.
 fake_checkout="$TEST_TMP/fake-checkout"
 mkdir -p "$fake_checkout/app/src" "$fake_checkout/app/test" "$fake_checkout/app/resources" \
-  "$fake_checkout/lib/src" "$fake_checkout/windows"
+  "$fake_checkout/lib/src"
 cp "$REPO_ROOT/start.sh" "$REPO_ROOT/atc" "$fake_checkout/"
 printf 'object build\n' > "$fake_checkout/build.mill"
 printf 'object App\n' > "$fake_checkout/app/src/App.scala"

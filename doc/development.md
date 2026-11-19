@@ -29,16 +29,16 @@ parallel queue can duplicate compiler-intensive suites. If the Mill server canno
 use `./mill --no-server ...`. The permission suite starts a local HTTP server and needs
 permission to bind a loopback socket.
 
-`dist` writes `atc.jar`, `atc-lib.jar`, `atc.ps1` and `atc.cmd` to `out/dist.dest/`, the
-files a release carries. The Unix `atc` wrapper downloads the two JARs; Windows uses the
-PowerShell launcher with the same JARs, and the batch launcher is a compatibility entry
-point. The version comes from `atc/version.txt` in the application JAR.
+`dist` writes `atc.jar` and `atc-lib.jar` to `out/dist.dest/`, the files a release carries.
+The Unix `atc` wrapper and the Windows `atc.ps1` wrapper download them and start Java
+themselves. The version comes from `atc/version.txt` in the application JAR.
 
-`./start.sh` and `.\start.ps1` rebuild a stale distribution, then load `.env` and launch ATC;
-`start.sh` launches through `atc run` with `ATC_CACHE_DIR` set to the distribution.
+`./start.sh` and `.\start.ps1` rebuild a stale distribution, then load `.env` and launch ATC
+through the wrapper: `start.sh` runs `atc run` with `ATC_CACHE_DIR` set to the distribution,
+and `start.ps1` loads `atc.ps1`'s functions and calls `Start-Atc` on it.
 Before the build they read only `ATC_SKIP_BUILD` from the environment file, so a Mill server
 the build starts does not keep API keys in its environment. The distribution is stale when a
-file in `build.mill`, `app/src`, `app/resources`, `lib/src` or `windows` is newer than
+file in `build.mill`, `app/src`, `app/resources` or `lib/src` is newer than
 `out/dist.dest/build.stamp`, which the scripts write after each successful build; the stamp
 is the reference because Mill does not rewrite a jar whose inputs have the same content.
 Environment files hold literal `KEY=value` entries without shell expansion, and a non-empty
@@ -51,7 +51,7 @@ checkout; ATC keeps the launch directory unless `-C` overrides it.
 | `ATC_ENV_FILE` | Alternative environment file |
 | `ATC_SKIP_BUILD=1` | Skip the start script's rebuild check |
 | `ATC_JAVA_OPTS` | Additional JVM flags for every launcher, applied after the defaults and before the command line's `-Xmx`/`-Xms` |
-| `-Xmx<size>`, `-Xms<size>` (launcher arguments) | JVM heap flags that `atc` (and so `start.sh`), `start.ps1` and `windows/atc.ps1` remove from the arguments (never the value of an option such as `-p`) and pass to `java` last, so they win |
+| `-Xmx<size>`, `-Xms<size>` (launcher arguments) | JVM heap flags that `atc` and `atc.ps1` (and so `start.sh` and `start.ps1`) remove from the arguments (never the value of an option such as `-p`) and pass to `java` last, so they win |
 | `ATC_STARTUP_CACHE=0` | Run without the JVM startup cache (`atc`, `start.sh`) |
 | `ATC_DEBUG` | Enable stack traces and stream/terminal diagnostics when set; logged text has terminal controls removed |
 | `ATC_ASCII` | Select ASCII terminal glyphs when set |
@@ -59,11 +59,12 @@ checkout; ATC keeps the launch directory unless `-C` overrides it.
 ### JVM settings
 
 Every launcher starts the JVM with `-Xms256m -Xmx2g -Xss4m -XX:-UsePerfData`
-(`DEFAULT_JVM_OPTS` in `atc`, which `start.sh` runs; the same list in `windows/atc.ps1` and
-`start.ps1`). `VERSIONED_JVM_OPTS` adds `--sun-misc-unsafe-memory-access=allow` on Java 23+,
-because Scala's `LazyVals` use `sun.misc.Unsafe` and JEP 471 otherwise prints four warning
-lines on every run, and `--enable-native-access=ALL-UNNAMED` on Java 24+, because JLine
-loads a native terminal library (JEP 472). With the dist jar and the echo model on JDK 25, a
+(`DEFAULT_JVM_OPTS` in `atc`, which `start.sh` runs; the same list in `Get-JvmOptions` of
+`atc.ps1`, which `start.ps1` runs). `VERSIONED_JVM_OPTS` adds
+`--sun-misc-unsafe-memory-access=allow` on Java 23+, because Scala's `LazyVals` use
+`sun.misc.Unsafe` and JEP 471 otherwise prints four warning lines on every run, and
+`--enable-native-access=ALL-UNNAMED` on Java 24+, because JLine loads a native terminal
+library (JEP 472). With the dist jar and the echo model on JDK 25, a
 100-turn session of reads, writes and commands keeps 130 to 230 MB live and runs down to
 `-Xmx192m`, so 2 GB is headroom. The cap also bounds a runaway sandbox computation: one line
 building a large vector reaches 5 GB under the JVM's quarter-of-RAM default, and under 2 GB
@@ -660,7 +661,7 @@ the `${VAR}`s of `key` and `headers`, `keyEnv`, and the secrets the SDK reads fr
 environment for a provider without a `url`, whatever spelling of its `api` it uses), since a
 command that prints its environment would hand them to the model. They lose the SDK
 variables even when a key is configured, because a key whose variable is unset lets the SDK
-read them. They also lose the `ATC_INTERNAL_*` variables in which the Windows launchers pass
+read them. They also lose the `ATC_INTERNAL_*` variables in which the Windows wrapper passes
 the original command line.
 
 `withEnv` hands its block an `ExecImpl` with the parent's scope and the merged variables, and
@@ -1707,21 +1708,22 @@ without a byte order mark in the system code page. `setup` writes the wrapper an
 `atc.cmd` shim (which starts it with `-ExecutionPolicy Bypass`) to `%USERPROFILE%\.atc\bin`
 and appends that directory to the user `Path` in the registry, keeping the value's
 `REG_EXPAND_SZ` type and its unexpanded `%VARIABLE%` entries, then broadcasts
-`WM_SETTINGCHANGE` so new terminals see it. It installs the two JARs and the release's
-`atc.ps1` launcher together in `%USERPROFILE%\.atc\jars`, requires SHA-256 digests for all
-three, and runs that launcher, which holds the JVM options. The marker is removed before the
+`WM_SETTINGCHANGE` so new terminals see it. It installs the two JARs in
+`%USERPROFILE%\.atc\jars`, requires SHA-256 digests for both, and starts Java itself
+(`Start-Atc`) with the JVM options of the Unix wrapper. The marker is removed before the
 verified files are moved into place and written after, and a run without a complete install
 downloads the latest release first. Windows does not replace a JAR that a running ATC holds
 open, so an update checks that the files can be opened exclusively before downloading, and
 the startup offer is skipped while they cannot. The startup check has the Unix conditions.
 There is no `dev` command, startup cache or daily wrapper check; `atc self update` replaces
-the wrapper after parsing the download. The native Windows launchers pass Unicode
-application arguments through private `ATC_INTERNAL_*` environment variables.
+the wrapper after parsing the download. Java runs in the JAR directory, and `Start-Atc`
+passes the application arguments and the launch directory through private `ATC_INTERNAL_*`
+environment variables, which keep the Unicode and quotes a Windows command line can lose.
 
 CI builds distributions and runs application tests on Linux, macOS and Windows. Linux
 checks formatting; Unix jobs run the Bash wrapper tests, and the Windows job runs the
 PowerShell wrapper tests under Windows PowerShell and PowerShell 7. Published release tags
 must match `Versions.atc` (with an optional `v` prefix). After the platform jobs succeed,
-`build-release` builds the two JARs and Windows launchers with read-only access, and
-`publish-release`, the only job with write access, uploads them without running project
-code. A release is public before its JARs are attached; both wrappers then say to try again.
+`build-release` builds the two JARs with read-only access, and `publish-release`, the only
+job with write access, uploads them without running project code. A release is public before
+its JARs are attached; both wrappers then say to try again.
