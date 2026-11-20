@@ -24,6 +24,9 @@ private[atc] final class ClaudeCli private (process: ClaudeCli.Process, tools: L
   private val results = mutable.Map[String, ToolResult]()
   /** Control requests sent to the CLI that await their response, by request id. */
   private val replies = mutable.Map[String, CompletableFuture[ujson.Value]]()
+  /** The CLI's output has ended, so no reply can come; set under this lock with the last
+    * look at [[replies]], so a request registers before it and is failed, or sees it. */
+  private var gone = false
   @volatile private var ended = false
 
   private def begin(): Unit = Threads.daemon("atc-claude-code")(() => readAll()).start()
@@ -77,7 +80,9 @@ private[atc] final class ClaudeCli private (process: ClaudeCli.Process, tools: L
   private def request(body: ujson.Obj): ujson.Value =
     val id = UUID.randomUUID().toString
     val done = CompletableFuture[ujson.Value]()
-    synchronized(replies(id) = done)
+    synchronized:
+      if gone then throw exited()
+      replies(id) = done
     try
       // A CLI that has exited already fails the write with a broken pipe, which says nothing.
       try send(ujson.Obj("type" -> "control_request", "request_id" -> id, "request" -> body))
@@ -101,7 +106,9 @@ private[atc] final class ClaudeCli private (process: ClaudeCli.Process, tools: L
     catch case NonFatal(e) => if !ended then Debug.log(s"claude-code: reading failed: ${Debug.message(e)}")
     finally
       events.put(ujson.Null)
-      val waiting = synchronized(replies.values.toList)
+      val waiting = synchronized:
+        gone = true
+        replies.values.toList
       waiting.foreach(_.completeExceptionally(exited()))
 
   private def receive(message: ujson.Value): Unit =
