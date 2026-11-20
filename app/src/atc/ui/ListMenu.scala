@@ -155,9 +155,9 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
       case _ => None
 
   /** As [[run]], with how the menu ended: chosen, left, or, with a running `countdown`,
-    * [[MenuState.Outcome.TimedOut]] when its time ran out before the user pressed a key.
-    * While it runs, the keys end with `auto-<escape> in <time left>`; the first key the menu
-    * acts on stops it, and the menu then waits for the user. */
+    * [[MenuState.Outcome.TimedOut]] when its time ran out before the user did anything.
+    * While it runs, the keys end with `auto-<escape> in <time left>`; any input but the
+    * terminal losing focus stops it (see [[read]]), and the menu then waits for the user. */
   def open(
     title: String,
     labels: List[String],
@@ -213,9 +213,12 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
   /** Read keys until the menu ends. A resize while it waits is redrawn at the new size.
     * Nothing pasted is a key, and Enter counts only [[ListMenu.EnterDelayNanos]] after
     * the menu opened: a newline typed or pasted just before must not choose the first
-    * row, which in a permission request allows it. Neither is a sign that someone is there,
-    * nor is a focus report, so none of them stops the `countdown`; `showKeys` shows its
-    * time left as it changes. */
+    * row, which in a permission request allows it. Every input shows that someone is
+    * there, so any of them stops the `countdown`, a key the menu ignores, a paste and the
+    * terminal gaining focus included; only the terminal losing focus does not. Reports are
+    * on before a permission menu opens (the turn's `KeyReader` turns them on), so a
+    * terminal that reports focus as reports are turned on cannot stop it. `showKeys` shows
+    * the time left as it changes. */
   private def read(
     state: MenuState,
     page: () => Int,
@@ -244,7 +247,9 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
             draw(true)
         case c if c < 0 => outcome = MenuState.Outcome.Cancelled
         case c =>
-          MenuKey.decode(c, () => next(30L)) match
+          val key = MenuKey.decode(c, () => next(30L))
+          if key != MenuKey.FocusOut then countdown.foreach(_.stop())
+          key match
             case MenuKey.PasteStart => pasting = true
             case MenuKey.PasteEnd => pasting = false
             case _ if pasting => ()
@@ -257,7 +262,6 @@ private[ui] final class ListMenu(screen: Screen, status: StatusLine, alerts: Ale
             case MenuKey.FocusIn => alerts.focusChanged(true)
             case MenuKey.FocusOut => alerts.focusChanged(false)
             case key =>
-              countdown.foreach(_.stop())
               outcome = state(key, page())
               if outcome == MenuState.Outcome.Continue then draw(false)
       // Checked whatever arrived, so a stream of input the menu ignores cannot hold it off.

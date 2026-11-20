@@ -6,8 +6,8 @@ import scala.concurrent.duration.FiniteDuration
 
 /** How long a pop-up waits for someone to answer before it gives up on its own (config
   * `permissionTimeoutSeconds`). It runs from when it is made until the time is up or
-  * [[stop]] stops it, as the first key the user presses in a menu does: someone is there,
-  * so the pop-up waits for them from then on. One countdown serves the whole pop-up, so a
+  * [[stop]] stops it, as any input in a menu but the terminal losing focus does: someone
+  * is there, so the pop-up waits for them from then on. One countdown serves the whole pop-up, so a
   * menu opened again after a stop waits too. `clock` reads nanoseconds, as
   * `System.nanoTime` does. */
 private[ui] final class Countdown(val limit: FiniteDuration, clock: () => Long = () => System.nanoTime()):

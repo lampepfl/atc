@@ -448,8 +448,8 @@ details and Windows notes are in
 **Unanswered permission requests.** A permission request that nobody answers within
 `permissionTimeoutSeconds` (60 by default, any time from 5 seconds to a day) is denied on its
 own, so an agent left alone is not blocked on a pop-up and can try another way. The pop-up
-counts down in its footer (`auto-deny in 59 s`) until you press a key, which stops the
-countdown; a terminal without menus states the limit in its prompt and keeps to it. The
+counts down in its footer (`auto-deny in 59 s`) until you press any key, paste or switch
+to the terminal, which stops the countdown; a terminal without menus states the limit in its prompt and keeps to it. The
 agent is told that nobody answered, not that you refused: it does not repeat the request,
 avoids new ones that turn (each would wait the full time again), continues with what the
 permissions it has allow, and says at the end which permission it still needs. `0` waits for

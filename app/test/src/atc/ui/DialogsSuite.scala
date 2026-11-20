@@ -86,19 +86,37 @@ class DialogsSuite extends munit.FunSuite:
       assert(text.contains(Ansi.PasteOff + Ansi.ShowCursor), "the menu put the terminal back")
     finally back.countDown()
 
-  test("a key stops the countdown, and the request then waits for the user however long they take"):
-    def decide(key: String): Decision =
+  test("any input but the terminal losing focus stops the countdown, and the request then waits"):
+    /** The decision when `input` comes, then a minute passes on the countdown's clock. A
+      * stopped countdown waits for the Esc sent after that minute, which denies; one that
+      * still runs times out, with no more input until the pop-up has ended, so a slow
+      * machine cannot let an Esc in first. */
+    def decide(input: String, stops: Boolean): Decision =
       val clock = AtomicLong(0L)
       val countdown = Countdown(10.seconds, () => clock.get)
-      // The key, or nothing; then a minute passes on the countdown's clock before Esc.
-      val input = scripted(
-        () => { Thread.sleep(150); key },
-        () => { clock.set(1.minute.toNanos); Thread.sleep(400); "\u001b" },
+      val ended = CountDownLatch(1)
+      val script = scripted(
+        () => { Thread.sleep(150); input },
+        () =>
+          clock.set(1.minute.toNanos)
+          if stops then { Thread.sleep(400); "\u001b" }
+          else { ended.await(); "" },
       )
-      val (d, _) = dialogsReading(input, width = 80, plain = false)
-      d.permission(ExecRequest(List("npm test"), "run the tests"), Some(countdown))
-    assertEquals(decide("\u001b[B"), Decision.Deny, "Down, then Esc denies, a minute later")
-    assertEquals(decide(""), Decision.TimedOut)
+      try
+        val (d, _) = dialogsReading(script, width = 80, plain = false)
+        d.permission(ExecRequest(List("npm test"), "run the tests"), Some(countdown))
+      finally ended.countDown()
+    // A key the menu acts on.
+    assertEquals(decide("\u001b[B", stops = true), Decision.Deny, "Down")
+    // Keys the menu ignores, so that they choose nothing: text in a menu without a filter,
+    // and an Enter right after it opened. Someone is there all the same.
+    assertEquals(decide("y", stops = true), Decision.Deny, "text")
+    assertEquals(decide("\r", stops = true), Decision.Deny, "an early Enter")
+    assertEquals(decide("\u001b[200~npm test\u001b[201~", stops = true), Decision.Deny, "a paste")
+    assertEquals(decide("\u001b[I", stops = true), Decision.Deny, "the terminal gaining focus")
+    // Nobody there: no input, or the terminal losing focus.
+    assertEquals(decide("", stops = false), Decision.TimedOut, "no input")
+    assertEquals(decide("\u001b[O", stops = false), Decision.TimedOut, "the terminal losing focus")
 
   test("a plain terminal names the time limit, and an unanswered reply is denied as unanswered"):
     val clock = AtomicLong(0L)

@@ -45,7 +45,8 @@ private[ui] final class Dialogs(screen: Screen, alerts: Alerts, status: StatusLi
     * agent. A cancelled menu denies, so Esc is shown as deny; empty or cancelled instructions
     * return to the menu. A plain terminal reads a typed reply ([[Menus.permissionReply]]).
     * With a `countdown`, nobody answering in time denies the request as
-    * [[Decision.TimedOut]]: the menu shows the time left until the user presses a key, and
+    * [[Decision.TimedOut]]: the menu shows the time left until the user types, pastes or
+    * focuses the terminal, and
     * a plain terminal, which shows no key until Enter, says the limit and keeps to it. */
   def permission(req: PermissionRequest, countdown: Option[Countdown] = None): Decision =
     // The request embeds model-chosen paths and command lines: sanitize.

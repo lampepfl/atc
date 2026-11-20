@@ -218,7 +218,7 @@ final case class Config(
   /** Wall-clock limit for one snippet, excluding time spent waiting for the user
     * or for a command (`exec` has its own `ExecOptions.timeoutMs`). `null` sets no limit. */
   executionTimeoutMs: Option[Long] = Some(300000L),
-  /** Seconds a permission pop-up waits for an answer (in a menu, for the user's first key)
+  /** Seconds a permission pop-up waits for an answer (in a menu, for the user's first input)
     * before it denies the request on its own (`Decision.TimedOut`), from 5 to 86400, so an
     * agent left alone is not blocked and can try another way; zero waits for ever. A limit
     * like `executionTimeoutMs`: a narrowing layer may set or shorten it, never lengthen or

@@ -959,10 +959,13 @@ keeps an agent left alone working: denied, it carries on with another approach. 
 counts from when the pop-up shows, not while it
 waits for another pop-up to close (`Tui.askPermission` starts its `Countdown` inside
 `popupBlock`), and the snippet's `executionTimeoutMs` clock is paused meanwhile, as for every
-pop-up. The menu's footer ends with `auto-deny in <time left>`; the first key the menu acts
-on, a move included, stops the countdown for the rest of that pop-up, instructions typed
-after **Tell the agent what to change** among them, since someone is evidently there. Focus
-reports, pasted text and an Enter ignored right after the menu opened do not stop it. A
+pop-up. The menu's footer ends with `auto-deny in <time left>`; any input stops the
+countdown for the rest of that pop-up, instructions typed after **Tell the agent what to
+change** among them, since someone is evidently there: a key, including one the menu ignores
+(text in a menu without a filter, an Enter right after it opened), a paste, or the terminal
+gaining focus. Only the terminal losing focus leaves it running. A terminal that is focused
+when the pop-up opens does not stop it, since a user may walk away from a focused terminal:
+focus reports are already on during the turn, so the menu turning them on sends none. A
 plain terminal sees no key until Enter, so its prompt states the limit and the time runs
 until a reply is entered (see [The terminal](#the-terminal)). `--approve-all` and `-p` runs
 never show a pop-up, so the setting changes nothing there.
@@ -1495,8 +1498,8 @@ on the denial. The turn's key reader leaves paste mode after a pop-up, which may
 paste's end.
 
 A permission pop-up with a `Countdown` (`permissionTimeoutSeconds`) opens its menu with
-`ListMenu.open`, which returns `MenuState.Outcome.TimedOut` when the time runs out before a
-key. The read loop polls every 100 ms anyway and checks the countdown after every poll,
+`ListMenu.open`, which returns `MenuState.Outcome.TimedOut` when the time runs out before
+any input. The read loop polls every 100 ms anyway and checks the countdown after every poll,
 whatever arrived, and redraws the keys (`ListMenu.hint`, through `StatusLine.changeHint`)
 when the whole seconds left change. The countdown belongs to the pop-up, not the menu, so a
 menu opened again after empty instructions stays stopped. A timed-out menu ends like one
