@@ -177,6 +177,19 @@ class PolicySuite extends munit.FunSuite:
     assertEquals(policy.openScopeCount, 0)
     assertEquals(policy.decisionsSince(0).map(_._1), List(feedback, feedback))
 
+  test("a request nobody answered in time is denied as such, and grants nothing"):
+    val policy = Policy(Nil, Nil, Nil, ScriptedPrompter(List(Decision.TimedOut)))
+    val e = intercept[SecurityException](policy.requestExec(ScopeId.Base, List("npm test"), "run the tests"))
+    assertEquals(
+      e.getMessage,
+      "Access denied: nobody answered the permission request for commands npm test in time, " +
+        "so it was denied automatically",
+    )
+    assert(!e.getMessage.nn.contains("by the user"), e.getMessage)
+    assert(!policy.commandAllowed(ScopeId.Base, "npm test"))
+    assertEquals((policy.openScopeCount, policy.sessionGrants), (0, Nil))
+    assertEquals(policy.decisionsSince(0), List(Decision.TimedOut -> "commands npm test"))
+
   test("locked rules cannot be widened, classified stays classified"):
     val prompter = ScriptedPrompter(List(Decision.AllowSession, Decision.AllowSession))
     val p = Policy(

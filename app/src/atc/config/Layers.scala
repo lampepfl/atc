@@ -169,7 +169,7 @@ object Configuration:
   private val PolicyKeys =
     Set("files", "denyCommands", "denyHosts") ++
       Set("mode", "safeMode", "respectGitignore") ++
-      Set("executionTimeoutMs", "maxToolCalls", "maxToolOutputChars")
+      Set("executionTimeoutMs", "permissionTimeoutSeconds", "maxToolCalls", "maxToolOutputChars")
 
   /** Combine the layers.
     *
@@ -195,9 +195,9 @@ object Configuration:
     * intersection), so only the granting layers care about their order.
     */
   def combine(layers: List[ConfigLayer], keys: KeyBindings = KeyBindings.empty): Configuration =
-    // Validate each layer before merging so an invalid mode is attributed to the
-    // file that contains it rather than to whichever layer narrows it later.
-    layers.foreach(ConfigValidation.validateLayerMode)
+    // Validate each layer before merging so an invalid mode or permission timeout is
+    // attributed to the file that contains it rather than to whichever layer narrows it later.
+    layers.foreach(ConfigValidation.validateLayer)
     val (granting, narrowing) = layers.partition(_.origin.grants)
     def merged(ls: List[ConfigLayer]) = ls.map(_.json).foldLeft(ujson.Obj())(mergeJson)
     val everything = merged(layers)
@@ -252,6 +252,13 @@ object Configuration:
           case (a, None) => a
           case (None, b) => b
       }(base.executionTimeoutMs),
+      // Likewise zero, which sets no limit: a permission timeout can be added or shortened.
+      permissionTimeoutSeconds = onlyIfSet("permissionTimeoutSeconds") {
+        (base.permissionTimeoutSeconds, n.permissionTimeoutSeconds) match
+          case (0, b) => b
+          case (a, 0) => a
+          case (a, b) => a.min(b)
+      }(base.permissionTimeoutSeconds),
       maxToolCalls = onlyIfSet("maxToolCalls")(base.maxToolCalls.min(n.maxToolCalls))(base.maxToolCalls),
       maxToolOutputChars =
         onlyIfSet("maxToolOutputChars")(base.maxToolOutputChars.min(n.maxToolOutputChars))(base.maxToolOutputChars),

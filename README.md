@@ -354,8 +354,9 @@ requestNetwork(Set("api.github.com"), "check PRs") { httpGet("https://api.github
 The pop-up offers **Allow once**, **Allow for this session**, **Deny this request**, and
 **Tell the agent what to change**. The last one sends your instructions back instead of a
 grant: "request only the first four commands; skip the deployment" makes the agent revise
-its request. The granted capability cannot leave the block, and the host closes the scope
-when the block exits. `locked` rules cannot be widened at all, and a `denyCommands` or
+its request. A request nobody answers within a minute is denied on its own, so an agent left
+alone keeps working (`permissionTimeoutSeconds`). The granted capability cannot leave the
+block, and the host closes the scope when the block exits. `locked` rules cannot be widened at all, and a `denyCommands` or
 `denyHosts` match is refused without a pop-up.
 
 ## Configuration
@@ -380,7 +381,8 @@ provider web search, the keys in its `.atc/keys.properties`) applies only after 
 shown it to you and you chose to trust it; ATC asks again when that part changes. A project
 config that belongs to another user is ignored.
 `/config` changes the settings that cannot loosen the sandbox (input prediction,
-notifications, web search, compaction) for the session or in either file. The exact merge
+notifications, web search, compaction, the permission timeout) for the session or in either
+file. The exact merge
 rules are in [doc/development.md](doc/development.md#configuration-semantics).
 
 ```json
@@ -442,6 +444,18 @@ variable the agent sets for a command is permitted separately, as `NAME=value co
 `LD_PRELOAD` or `GIT_CONFIG_*` only as you would the code they can make a command run. Pattern
 details and Windows notes are in
 [doc/development.md](doc/development.md#file-rules-and-command-patterns).
+
+**Unanswered permission requests.** A permission request that nobody answers within
+`permissionTimeoutSeconds` (60 by default, any time from 5 seconds to a day) is denied on its
+own, so an agent left alone is not blocked on a pop-up and can try another way. The pop-up
+counts down in its footer (`auto-deny in 59 s`) until you press any key, paste or switch
+to the terminal, which stops the countdown; a terminal without menus states the limit in its prompt and keeps to it. The
+agent is told that nobody answered, not that you refused: it does not repeat the request,
+avoids new ones that turn (each would wait the full time again), continues with what the
+permissions it has allow, and says at the end which permission it still needs. `0` waits for
+ever, but only the global config or `-c` can set it: like the other limits, a project config
+or `/config` for the session may shorten the time but not lengthen it or turn it off. `-p`
+and `--approve-all` runs never show the pop-up, so the setting changes nothing there.
 
 ## Security model
 

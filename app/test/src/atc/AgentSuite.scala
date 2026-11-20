@@ -100,6 +100,21 @@ class AgentSuite extends munit.FunSuite:
     agent.turn(session, s"run: read($fileCode)", () => false)
     assert(!lastSucceeded)
 
+  test("a request nobody answered reaches the model as unanswered, not as the user's no"):
+    val outside = TestEnv.outsideDir("away")
+    env.decisions = List(Decision.TimedOut)
+    agent.turn(
+      session,
+      s"""run: requestFiles(${env.scalaString(outside)}, Access.Read, "need it") { println("granted") }""",
+      () => false
+    )
+    assert(!lastSucceeded)
+    assert(!lastToolText.contains("granted"), lastToolText)
+    assert(lastToolText.contains("Access denied: nobody answered the permission request"), lastToolText)
+    assert(lastToolText.contains("[permissions: nobody answered the request for read on"), lastToolText)
+    assert(lastToolText.contains("Continue the task with an approach that works within the permissions"), lastToolText)
+    assert(!lastToolText.contains("by the user") && !lastToolText.contains("the user denied"), lastToolText)
+
   test("exec through policy"):
     agent.turn(
       session,

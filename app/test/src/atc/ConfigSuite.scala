@@ -54,6 +54,7 @@ class ConfigSuite extends munit.FunSuite:
     assertEquals(c.model, None)
     assertEquals(c.safeMode, true)
     assertEquals(c.executionTimeoutMs, Some(300000L))
+    assertEquals(c.permissionTimeoutSeconds, 60) // then a permission pop-up denies on its own
     assertEquals(c.maxToolCalls, 200)
     assertEquals(c.maxToolOutputChars, 40000)
     assert(c.files.isEmpty && c.commands.isEmpty && c.hosts.isEmpty)
@@ -218,6 +219,29 @@ class ConfigSuite extends munit.FunSuite:
   test("invalid runtime limits are rejected while loading config"):
     val message = loadError("""{ "maxToolOutputChars": 0 }""")
     assert(message.contains("maxToolOutputChars"), message)
+
+  test("a permission timeout is 0 or from 5 seconds to a day, and a bad one is reported with its file"):
+    for seconds <- List(0, 5, 60, 86400) do
+      assertEquals(
+        load(configFile(s"""{ "permissionTimeoutSeconds": $seconds }""")).settings.permissionTimeoutSeconds,
+        seconds
+      )
+    for seconds <- List(-1, 1, 4, 86401) do
+      val cfg = configFile(s"""{ "permissionTimeoutSeconds": $seconds }""")
+      val message = intercept[IllegalArgumentException](load(cfg)).getMessage.nn
+      assertEquals(
+        message,
+        s"Invalid config $cfg: permissionTimeoutSeconds must be 0 (no limit) or from 5 to 86400 (was $seconds)",
+      )
+    assert(loadError("""{ "permissionTimeoutSeconds": null }""").endsWith("permissionTimeoutSeconds must not be null"))
+    assert(loadError("""{ "permissionTimeoutSeconds": 2.5 }""").contains("must be a whole number in range"))
+    // The starting global config names it, at the default, and the default applies without any config.
+    assertEquals(upickle.default.read[Config](ujson.read(Config.globalTemplate)).permissionTimeoutSeconds, 60)
+    assert(Config.globalTemplate.contains("\"permissionTimeoutSeconds\": 60"))
+    val nowhere = tempDir()
+    assertEquals(load(nowhere, None).settings.permissionTimeoutSeconds, 60)
+    val bundled = Config.load(nowhere, None, nowhere.resolve("no-such-global.json").nn, bundledGlobal = true)
+    assertEquals((bundled.bundledGlobal, bundled.settings.permissionTimeoutSeconds), (true, 60))
 
   test("a null for a setting that is not optional, or a fraction for a whole number, is rejected with its file"):
     def rejected(json: String): String =

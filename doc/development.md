@@ -554,6 +554,19 @@ JSON-quoted instructions after the bounded execution output. A revision is disti
 `Deny`: the model should change its plan and may submit a narrower permission request.
 Neither decision adds a permanent deny rule; configured deny rules remain unchanged.
 
+`Decision.TimedOut` is the pop-up's own answer when `permissionTimeoutSeconds` (60 by
+default) passes before anyone answers it, so an agent left alone is not blocked. It is a
+denial (the request throws `Access denied: nobody answered the permission request for … in
+time, so it was denied automatically`), recorded apart from `Deny` because the user did not
+decide. The tool result's decision note says that the user is probably away; that the model
+should not repeat the request, and should avoid other permission requests and `ask`
+questions in that turn, since a request would wait the full time again and a question until
+the user returns; and that it should continue the task within the permissions it already
+has and, if the task truly needs this one, do everything else it can and say at the end
+which permission it needs and why. The note arrives with every call that timed out, even when
+the snippet caught the exception, so the system prompt does not describe timeouts. Like
+`Deny`, it does not set `needsReplan`: the rest of the batch runs.
+
 File patterns match a path or an ancestor. Component globs match at any depth; relative
 patterns with separators use the layer's base; absolute patterns and `~` use an absolute
 path. `PathGlob` handles slash-based globs on all platforms. Canonicalization resolves
@@ -610,7 +623,7 @@ menu-capable terminal the prompt accepts exact `y`/`yes` and `s`/`session` appro
 `n`/`no` denials, and any other non-empty answer is `Decision.Revise`, so "yes, except the
 deployment command" is feedback, not approval; EOF and an empty answer deny. A `-p` run never
 prompts: a request fails unless `--approve-all` approves it for the session
-(`App.permissionPrompter`).
+(`App.permissionPrompter`), so `permissionTimeoutSeconds` changes neither.
 
 ## Host operations
 
@@ -732,7 +745,7 @@ wherever they match.
 | Commands, hosts | Concatenate across layers |
 | File rules | Retain each rule and its layer base |
 | Deny commands, deny hosts | Accumulate across layers |
-| Mode and numeric limits | Granting layers set values; project layers may only tighten them |
+| Mode and numeric limits, the permission timeout | Granting layers set values; project layers may only tighten them |
 | Safe mode, gitignore visibility | Project layers may enable, but cannot disable, an enabled restriction |
 
 A project layer's `commands`, `hosts` and `classifiedModel`, a `webSearch: true` at its top
@@ -761,7 +774,15 @@ global config is the user's own and is written through a link they made. Other e
 as a new `model`, do not change the fingerprint.
 
 Only explicitly defined project settings narrow a value. `executionTimeoutMs` defaults to
-300000; a JSON `null` clears it and means no limit. Reading a layer
+300000; a JSON `null` clears it and means no limit. `permissionTimeoutSeconds` defaults to 60
+as a case-class default, so it applies whenever no granting layer sets the key, as in a global
+config written before the setting existed or with no config at all; the starting config
+spells out the same 60. Its 0 means no limit, which only a granting layer can set: a
+narrowing layer's value applies when it is shorter, or when the granting layers set 0, and
+its own 0 removes nothing. A later granting layer (`-c`) may lengthen or remove the global
+config's. `ConfigValidation.validateLayer` checks it in every layer, 0 or 5 to 86400
+(`ConfigValidation.PermissionTimeouts`), so a value out of range is reported with its file
+even where a stricter one wins. Reading a layer
 (`ConfigValidation.requireExact`) refuses a key that is not a setting, which the JSON reader
 would skip, so that a misspelt `denyCommands` cannot load and deny nothing. It refuses a
 `null` for a setting that is not optional, which the JSON reader would take as `null`, `0`
@@ -777,17 +798,22 @@ the uniqueness of model references before execution; `model` and `classifiedMode
 resolved at the start (see [Models and providers](#models-and-providers)).
 
 `/config` (`ConfigCommands`) changes only `predictInput`, `notifications`, `webSearch`,
-`autoCompactThreshold` and `compactKeepRatio`. They are outside `PolicyKeys`, so none can
-loosen the sandbox, and a project config may set them; one that turns `webSearch` on needs
-trust. A change goes into a `session` layer that `Models` keeps in memory and appends after
-the files on each reload, so a `/providers` edit does not drop it. That layer merges as a
-narrowing layer: a policy key in it could only tighten, and its other settings win in layer
-order. Saving to the project config in force or to the global config also writes that file
+`autoCompactThreshold`, `compactKeepRatio` and `permissionTimeoutSeconds`. The first five are
+outside `PolicyKeys`, so none can loosen the sandbox, and a project config may set them; one
+that turns `webSearch` on needs trust. `permissionTimeoutSeconds` is a policy key but leaves
+the sandbox alone: it only lets the pop-ups deny on their own. A change goes into a `session`
+layer that `Models` keeps in memory and appends after the files on each reload, so a
+`/providers` edit does not drop it. That layer merges as a narrowing layer: a policy key in
+it could only tighten, and its other settings win in layer order. So the session may shorten
+the permission timeout, but not lengthen it or turn it off unless the granting layers set 0;
+`/config` warns when the value in force stays shorter than the one chosen.
+Saving to the project config in force or to the global config also writes that file
 with `Config.setTopLevel`, and the note on a saved value names a later file that sets the
 same key and wins at the next start. `App.useSettings` applies the combined settings to the
-agent, the notifier and the predictor, and `Models.reload` switches web search on the cached
-clients (`ChatModel.useWebSearch`); clients are not recreated, since a Claude Code client
-holds a CLI session. The sandbox keeps the policy it started with.
+agent, the notifier, the predictor and the permission timeout of the next pop-up, and
+`Models.reload` switches web search on the cached clients (`ChatModel.useWebSearch`);
+clients are not recreated, since a Claude Code client holds a CLI session. The sandbox keeps
+the policy it started with.
 
 Every config edit ATC makes (`/config`, `/providers`, and the `/model`, `/effort` and
 `/classifiedmodel` saves) goes through `ConfigCommands.editConfigs`: it writes the files,
@@ -925,6 +951,24 @@ in kitty, iTerm2, WezTerm, Ghostty and foot, a desktop notification on a local m
 bell otherwise), `system`, `terminal`, `bell` or `off`. An alert comes only after a wait in
 which the user neither typed nor had the terminal focused: ten seconds for a question or
 permission request, thirty for a finished turn.
+
+**Permission timeout.** `permissionTimeoutSeconds` is how long a permission pop-up waits
+for the user before it denies the request as `Decision.TimedOut`: 5 to 86400 seconds, 60 by
+default, or 0, which waits for ever and only the global config or `-c` can set. The default
+keeps an agent left alone working: denied, it carries on with another approach. The time
+counts from when the pop-up shows, not while it
+waits for another pop-up to close (`Tui.askPermission` starts its `Countdown` inside
+`popupBlock`), and the snippet's `executionTimeoutMs` clock is paused meanwhile, as for every
+pop-up. The menu's footer ends with `auto-deny in <time left>`; any input stops the
+countdown for the rest of that pop-up, instructions typed after **Tell the agent what to
+change** among them, since someone is evidently there: a key, including one the menu ignores
+(text in a menu without a filter, an Enter right after it opened), a paste, or the terminal
+gaining focus. Only the terminal losing focus leaves it running. A terminal that is focused
+when the pop-up opens does not stop it, since a user may walk away from a focused terminal:
+focus reports are already on during the turn, so the menu turning them on sends none. A
+plain terminal sees no key until Enter, so its prompt states the limit and the time runs
+until a reply is entered (see [The terminal](#the-terminal)). `--approve-all` and `-p` runs
+never show a pop-up, so the setting changes nothing there.
 
 ### File rules and command patterns
 
@@ -1452,6 +1496,20 @@ permission request with more rows than the window has scrolled its first ones ou
 and its patterns are sorted, so filler could choose which: the dialog then says so and opens
 on the denial. The turn's key reader leaves paste mode after a pop-up, which may have read the
 paste's end.
+
+A permission pop-up with a `Countdown` (`permissionTimeoutSeconds`) opens its menu with
+`ListMenu.open`, which returns `MenuState.Outcome.TimedOut` when the time runs out before
+any input. The read loop polls every 100 ms anyway and checks the countdown after every poll,
+whatever arrived, and redraws the keys (`ListMenu.hint`, through `StatusLine.changeHint`)
+when the whole seconds left change. The countdown belongs to the pop-up, not the menu, so a
+menu opened again after empty instructions stays stopped. A timed-out menu ends like one
+left with Esc: the live region is cleared, raw mode, bracketed paste and the cursor are
+restored, and `Dialogs.permission` writes `→ denied: no answer within <limit>`. On a plain
+terminal the reply is read by JLine's line reader as usual, under `Countdown.interrupting`:
+a watchdog thread interrupts the reading thread when the time is up, which JLine turns into
+the `UserInterruptException` that Ctrl-C causes, and an interrupt that arrives just after
+the read returned is cleared. Text typed but not entered by then stays in the terminal's
+line buffer and reaches the next read, as type-ahead does.
 
 While the main prompt holds a single word starting with `/`, `PromptReader` lists the
 matching `SlashCommand.table` rows in JLine's `post` area under the buffer, with an exact

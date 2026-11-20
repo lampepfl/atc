@@ -109,3 +109,9 @@ class MainSuite extends munit.FunSuite:
     val normal = App.permissionPrompter(Cli.Args(), interactive)
     assertEquals(normal.ask(request), Decision.AllowOnce)
     assertEquals(asked, 1)
+
+  test("a permission pop-up waits a minute by default, the time configured, or for ever with 0"):
+    import scala.concurrent.duration.Duration
+    assertEquals(App.permissionTimeout(atc.config.Config()), Some(Duration(60, "s")))
+    assertEquals(App.permissionTimeout(atc.config.Config(permissionTimeoutSeconds = 90)), Some(Duration(90, "s")))
+    assertEquals(App.permissionTimeout(atc.config.Config(permissionTimeoutSeconds = 0)), None)

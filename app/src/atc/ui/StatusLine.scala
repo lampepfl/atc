@@ -80,6 +80,12 @@ private[ui] final class StatusLine(
 
   def withHint[A](keys: String)(body: => A): A = showing(hint, hint = _, keys)(body)
 
+  /** Show `keys` in place of what the [[withHint]] in progress shows, as when a countdown
+    * in them ticks; that `withHint` still restores what was there before it. */
+  def changeHint(keys: String): Unit = screen.synchronized:
+    hint = keys
+    refresh()
+
   /** Run `body` with the footer field that `set` changes showing `value`, then what it held before. */
   private def showing[A](current: String, set: String => Unit, value: String)(body: => A): A =
     def show(text: String): Unit = screen.synchronized:

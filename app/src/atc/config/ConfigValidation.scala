@@ -26,6 +26,7 @@ object ConfigValidation:
       s"compactKeepRatio must be between 0 and 1 (was ${config.compactKeepRatio})"
     )
     config.executionTimeoutMs.foreach(requirePositive("executionTimeoutMs", _))
+    validatePermissionTimeout(config.permissionTimeoutSeconds, "")
     validateChoice("notifications", config.notifications, NotificationChoices)
     config.effort.foreach(validateChoice("effort", _, ModelConfig.ReasoningEfforts :+ ModelConfig.DefaultEffort))
     validateMode(config.mode, "")
@@ -41,11 +42,26 @@ object ConfigValidation:
     )
     config
 
-  /** Reject an invalid `mode` and identify the layer that defines it.
-    * [[Configuration.combine]] validates every layer first, so combining modes
-    * can assume valid input. */
-  private[config] def validateLayerMode(layer: ConfigLayer): Unit =
-    validateMode(layer.config.mode, " " + layer.path.map(_.toString).getOrElse(s"(${layer.origin.label} layer)"))
+  /** Reject an invalid `mode` or `permissionTimeoutSeconds` and identify the layer that
+    * defines it. [[Configuration.combine]] validates every layer first, so combining them
+    * can assume valid input, and a value that a stricter one narrows away is still reported. */
+  private[config] def validateLayer(layer: ConfigLayer): Unit =
+    val where = " " + layer.path.map(_.toString).getOrElse(s"(${layer.origin.label} layer)")
+    validateMode(layer.config.mode, where)
+    validatePermissionTimeout(layer.config.permissionTimeoutSeconds, where)
+
+  /** The seconds `permissionTimeoutSeconds` may be besides zero, which sets no limit: less
+    * would deny a request before the user has read it, and more is no limit in practice. */
+  val PermissionTimeouts: Range.Inclusive = 5 to 86400
+
+  /** Reject a `permissionTimeoutSeconds` outside [[PermissionTimeouts]] other than zero;
+    * `where` follows "Invalid config" in the message. */
+  private def validatePermissionTimeout(seconds: Int, where: String): Unit =
+    if seconds != 0 && !PermissionTimeouts.contains(seconds) then
+      throw IllegalArgumentException(
+        s"Invalid config$where: permissionTimeoutSeconds must be 0 (no limit) or from ${PermissionTimeouts.start} " +
+          s"to ${PermissionTimeouts.end} (was $seconds)"
+      )
 
   /** Reject an unknown `mode`; `where` follows "Invalid config" in the message. */
   private def validateMode(mode: Option[String], where: String): Unit =

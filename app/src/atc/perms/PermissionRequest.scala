@@ -9,6 +9,9 @@ enum Decision:
   case AllowOnce, AllowSession, Deny
   /** Do not grant the request; return the user's instructions to the agent. */
   case Revise(instructions: String)
+  /** Denied because nobody answered within `permissionTimeoutSeconds`: the user did not
+    * decide, and is probably away. */
+  case TimedOut
 
 /** One pop-up put to the user. Subclasses supply the `label -> value` rows;
   * [[details]] aligns them, after the reason, for the UI. */

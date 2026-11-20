@@ -62,6 +62,18 @@ class ListMenuSuite extends munit.FunSuite:
     assertEquals(long.current, Some(models.size - 1))
     assertEquals(long(Enter, 10), Chosen(List(models.size - 1)))
 
+  test("the keys end with the time left while a countdown runs, and not once it stopped"):
+    val clock = java.util.concurrent.atomic.AtomicLong(0L)
+    val countdown = Countdown(scala.concurrent.duration.Duration(90, "s"), () => clock.get)
+    val menu = MenuState(Vector("Allow", "Deny"), multi = false, 0, Set.empty)
+    val keys = "Arrows move · Enter choose · Esc deny"
+    assertEquals(ListMenu.hint(menu, "deny", "·"), keys)
+    assertEquals(ListMenu.hint(menu, "deny", "·", Some(countdown)), s"$keys · auto-deny in 1 min 30 s")
+    clock.set(80_500_000_000L)
+    assertEquals(ListMenu.hint(menu, "deny", "·", Some(countdown)), s"$keys · auto-deny in 10 s")
+    countdown.stop()
+    assertEquals(ListMenu.hint(menu, "deny", "·", Some(countdown)), keys)
+
   test("the window opens around the initial row and follows the cursor"):
     val menu = MenuState(models, multi = false, 20, Set.empty)
     assertEquals(menu.window(10), (15, 25))

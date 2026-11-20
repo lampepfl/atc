@@ -302,7 +302,8 @@ final class Policy(
 
   // ── scopes ────────────────────────────────────────────────────────
 
-  /** Put `request` to the user. Denial throws (`what` names what was refused);
+  /** Put `request` to the user. Denial, by the user or because nobody answered in time,
+    * throws (`what` names what was refused);
     * "allow for the session" also runs `remember`, which records the grant on
     * the base scope. Returns normally when the caller may open its scope. */
   private def decide(request: PermissionRequest, what: String)(remember: => Unit): Unit =
@@ -311,6 +312,10 @@ final class Policy(
       decisionLog += (decision -> what)
     decision match
       case Decision.Deny => throw SecurityException(s"Access denied by the user: $what")
+      case Decision.TimedOut =>
+        throw SecurityException(
+          s"Access denied: nobody answered the permission request for $what in time, so it was denied automatically"
+        )
       case Decision.Revise(_) =>
         throw SecurityException(s"Permission request not approved: $what. The user supplied instructions to revise it.")
       case Decision.AllowOnce => ()
