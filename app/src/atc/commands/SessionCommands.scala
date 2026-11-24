@@ -110,7 +110,7 @@ final class SessionCommands(app: App):
         // code block would otherwise stay open without its closing verdict line.
         val s = sandbox.ensure()
         tui.toolStart(code, "/run")
-        val (result, decisions) = ScalaToolRunner.evaluate(s, policy, tui, code, () => tui.isInterrupted)
+        val (result, decisions) = ScalaToolRunner.evaluate(s, policy, tui, code, Map.empty, () => tui.isInterrupted)
         agent.noteUserRan(code, result, decisions)
       catch
         case e: Exception =>

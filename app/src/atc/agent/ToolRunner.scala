@@ -31,23 +31,40 @@ private[atc] final class ScalaToolRunner(
       )
 
   private def runScala(call: ToolCall): ToolResult =
-    val code = SdkJson.parseObject(call.arguments).value.get("code").flatMap(_.strOpt).getOrElse("")
+    val arguments = SdkJson.parseObject(call.arguments)
+    val code = arguments.value.get("code").flatMap(_.strOpt).getOrElse("")
     if code.trim.isEmpty then ToolResult(call.id, AgentMessages.missingCodeArgument, isError = true)
     else
-      ui.toolStart(code)
-      val current = repl // may start the sandbox first: not part of the snippet's time
-      val (result, decisions) = ScalaToolRunner.evaluate(current, policy, ui, code, cancelled)
-      val rendered = ToolOutput.renderForModel(result, maxOutputChars, decisions, code)
-      val needsReplan = decisions.exists {
-        case (Decision.Revise(_), _) => true
-        case _ => false
-      }
-      ToolResult(call.id, rendered, isError = !result.success, needsReplan = needsReplan)
+      ScalaToolRunner.texts(arguments) match
+        case Left(problem) => ToolResult(call.id, AgentMessages.badTextsArgument(problem), isError = true)
+        case Right(texts) =>
+          ui.toolStart(code, texts)
+          val current = repl // may start the sandbox first: not part of the snippet's time
+          val (result, decisions) = ScalaToolRunner.evaluate(current, policy, ui, code, texts.toMap, cancelled)
+          val rendered = ToolOutput.renderForModel(result, maxOutputChars, decisions, code)
+          val needsReplan = decisions.exists {
+            case (Decision.Revise(_), _) => true
+            case _ => false
+          }
+          ToolResult(call.id, rendered, isError = !result.success, needsReplan = needsReplan)
 
 private[atc] object ScalaToolRunner:
   /** The native Scala tool; other operations are library calls. */
   val tools: List[ToolSpec] =
     List(ToolSpec(Prompts.ToolName, Prompts.toolDescription, Prompts.toolParameters))
+
+  /** The `texts` of a call's `arguments`, names to strings in the order sent; none when the
+    * argument is absent. Left: what the argument was instead of an object of strings. */
+  def texts(arguments: ujson.Obj): Either[String, List[(String, String)]] =
+    arguments.value.get("texts") match
+      case None | Some(ujson.Null) => Right(Nil)
+      case Some(ujson.Obj(fields)) =>
+        fields.toList.collectFirst { case (name, value) if value.strOpt.isEmpty => name } match
+          case Some(name) => Left(s"the value of \"$name\" is not a string")
+          case None => Right(fields.toList.map((name, value) => name -> value.str))
+      case Some(_: ujson.Str) => Left("it is a string; send the object itself, not its JSON text")
+      case Some(_: ujson.Arr) => Left("it is an array")
+      case Some(_) => Left("it is a number or a boolean")
 
   /** Run `code` inside an open tool block (`ui.toolStart` already called): report the result
     * with the evaluation time, minus the time spent waiting for the user at prompts, and
@@ -58,12 +75,13 @@ private[atc] object ScalaToolRunner:
     policy: Policy,
     ui: AgentUI,
     code: String,
+    texts: Map[String, String],
     cancelled: () => Boolean,
   ): (ExecutionResult, List[(Decision, String)]) =
     val decisionsBefore = policy.decisionCount
     ui.status(AgentMessages.runningScalaStatus)
     val start = System.nanoTime()
-    val result = session.run(code, cancelled)
+    val result = session.run(code, texts, cancelled)
     val millis = (System.nanoTime() - start - session.clock.paused) / 1_000_000L
     ui.toolEnd(result, millis)
     (result, policy.decisionsSince(decisionsBefore))

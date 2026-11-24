@@ -37,15 +37,17 @@ class PromptsSuite extends munit.FunSuite:
       classifiedModelConfigured = false,
       safeMode = true,
       respectGitignore = true,
+      compactReference = true,
       extra = None,
     )
 
     assert(prompt.contains(s"working directory: ${ujson.write(platform.workingDirectory)}"), prompt)
     assert(prompt.contains(s"OS: ${ujson.write(platform.operatingSystem)}"), prompt)
     assert(prompt.contains("- user: at the terminal"), prompt)
-    // The prompt is itself an `s`-interpolated triple-quoted literal, so the quirk it
-    // describes must survive its own escape processing.
-    assert(prompt.contains("In a plain `\"\"\"` literal `\\\"` stays a backslash"), prompt)
+    // The prompt is itself an `s`-interpolated triple-quoted literal, so the characters
+    // the editing rule names must survive its own escape processing.
+    assert(prompt.contains("so `\"\"\"`, `\\` and `$` need no Scala"), prompt)
+    assert(prompt.contains("`replaceExact(path, texts(\"old\"), texts(\"new\"))`"), prompt)
 
   test("a scripted run tells the model that nobody answers ask or permission prompts"):
     val env = TestEnv(prefix = "atc-prompt")
@@ -55,6 +57,7 @@ class PromptsSuite extends munit.FunSuite:
       classifiedModelConfigured = false,
       safeMode = true,
       respectGitignore = true,
+      compactReference = true,
       extra = None,
     )
     assert(prompt.contains("- user: absent") && prompt.contains("`ask` returns None"), prompt)
@@ -71,9 +74,20 @@ class PromptsSuite extends munit.FunSuite:
       classifiedModelConfigured = false,
       safeMode = true,
       respectGitignore = true,
+      compactReference = false,
       extra = None,
     )
-    assert(prompt.contains(s"```scala\n$source\n```"), "the API source must reach the prompt verbatim")
+    assert(prompt.contains(s"```scala\n${source.stripTrailing}\n```"), "the API source must reach the prompt verbatim")
+    assert(prompt.contains("read its doc comment\nbefore the first use"), prompt)
+
+  test("the prompt holds the compact reference by default, and the whole source when the config says full"):
+    val compact = agentPrompt()
+    assert(compact.contains(s"```scala\n${ApiReference.compact.stripTrailing}\n```"), "the compact reference is there")
+    assert(compact.contains("whole documentation with `help(\"name\")`"), compact)
+    assert(!compact.contains(ApiReference.full.stripTrailing), "not the whole source")
+    val full = agentPrompt(Config(apiReference = "full"))
+    assert(full.contains(s"```scala\n${ApiReference.full.stripTrailing}\n```"), "the whole source is there")
+    assert(!full.contains("print its\nwhole documentation"), full)
 
   test("the system prompt says whether a classified model exists, never which one"):
     val without = agentPrompt()

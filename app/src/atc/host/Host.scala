@@ -34,6 +34,22 @@ final class Host(
       killProcessesInScope(id)
       policy.closeScope(id)
 
+  /** The `texts` of the tool call being evaluated; empty between calls and for `/run`. */
+  @volatile private var callTexts = Map.empty[String, String]
+
+  def texts: Map[String, String] =
+    val sent = callTexts
+    sent.withDefault: name =>
+      val names =
+        if sent.isEmpty then "this call sent no texts" else s"it sent ${sent.keys.toList.sorted.mkString(", ")}"
+      throw java.util.NoSuchElementException(s"No text named \"$name\" in this call's texts; $names.")
+
+  /** Run `body`, the evaluation of one call, with its `texts`. */
+  private[atc] def withTexts[T](sent: Map[String, String])(body: => T): T =
+    callTexts = sent
+    try body
+    finally callTexts = Map.empty
+
   // Read-only and full access use the same runtime objects; their Scala types
   // expose different operations to agent code.
   def fileSystem(using IOCap): FileSystem = FileSystemImpl(ScopeId.Base, this)

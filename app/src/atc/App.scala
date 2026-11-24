@@ -128,8 +128,11 @@ final class App(args: Cli.Args, val tui: Tui):
   /** Apply the settings `/config` may change to the running session. The
     * models take up `webSearch` when [[Models.reload]] loads it. */
   def useSettings(settings: Config): Unit =
-    agent.config = agent.config
-      .copy(autoCompactThreshold = settings.autoCompactThreshold, compactKeepRatio = settings.compactKeepRatio)
+    agent.config = agent.config.copy(
+      autoCompactThreshold = settings.autoCompactThreshold,
+      compactKeepRatio = settings.compactKeepRatio,
+      apiReference = settings.apiReference,
+    )
     if args.prompt.isEmpty then tui.notifier = Notifier.fromSetting(settings.notifications)
     predictor.enabled = settings.predictInput && canPredict
     if !predictor.enabled then predictor.invalidate()

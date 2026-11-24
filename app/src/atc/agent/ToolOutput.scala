@@ -11,7 +11,7 @@ object ToolOutput:
   private val hints = List(
     Hint(
       _.contains("needs an explicit type because the inferred type does not conform"),
-      "top-level vals that hold capabilities (FileEntry, closures using println/fs) need an explicit type, e.g. `val e: FileEntry^{fs} = access(...)`, or use a `def` / inline expression."
+      "top-level vals that hold capabilities (FileEntry, Process, closures using println/fs) need an explicit type, e.g. `val p: Process^{ex} = spawn(...)` or `val e: FileEntry^{fs} = access(...)`, or use a `def` / inline expression."
     ),
     Hint(
       out => out.contains("Mutable variable") && out.contains("does not extend") && out.contains("Stateful"),
@@ -76,8 +76,8 @@ object ToolOutput:
   private def codeHint(code: String): Option[String] =
     Option.when(hasEscapedQuoteInRawLiteral(code))(
       "inside a plain triple-quoted literal `\\\"` is two characters, a backslash and a quote, so the text " +
-        "you wrote contains backslashes; to put `\"\"\"` in text, prefix the literal with `s` (`s\"\"\"...\"\"\"` " +
-        "processes escapes; write `$` as `$$` in it) or use an ordinary `\"...\"` string."
+        "you wrote contains backslashes; send such text in the call's `texts` argument instead and read it " +
+        "with `texts(\"name\")`, which keeps it exactly as sent."
     )
 
   /** Whether `code` has a triple-quoted literal without an interpolator prefix whose body

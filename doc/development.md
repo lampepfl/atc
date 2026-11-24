@@ -128,11 +128,20 @@ App → Agent → ChatModel.complete → CompletionPolicy
 `run_scala`, invokes the REPL, records execution time and renders results through
 `ToolOutput`. `AgentMessages` holds the notices exchanged with the model and the UI.
 
+Besides `code`, a call may send `texts`, an object of named strings that the code reads with
+`texts("name")`. File contents, code in other languages and the strings of an edit then reach
+the code exactly as sent: only JSON escaping applies, which every tool-calling model handles,
+instead of Scala's rules for `"""`, `\` and `$`, and no string constant limits their size.
+`Host` holds them for the evaluation (`withTexts`), so they follow any call that reaches the
+host, and a later call or `/run` sees none. Another shape is refused before the REPL starts,
+with an example of the expected one.
+
 `ToolOutput.renderForModel` appends at most one hint keyed on a failed run's output (a
 safe-mode rejection, a missing capability, a command that could not start) and, after the
 length cut, one keyed on the snippet itself (`codeHint`): a `\"` inside a plain
 triple-quoted literal stays a backslash and a quote, so a Python docstring written as
-`\"\"\"` reaches the file with backslashes. The system prompt's editing rule says the same.
+`\"\"\"` reaches the file with backslashes. The hint and the system prompt's editing rule
+send such text through `texts`.
 Its Environment block says whether a user is present (`AgentEnvironment.userPresent`, false
 for a `-p` run, where `ask` returns `None`), so the model does not wait for an answer nobody
 gives. The REPL echo of a `ProcessResult` shows the exit code and the length of each stream
@@ -285,6 +294,16 @@ The build bundles `lib/src/atc/lib/Interface.scala` into the system prompt and `
 Its comments are API documentation for the model: keep contracts and examples there;
 keep implementation rationale in this guide or beside host code. Add operations to the
 interface and host together, then verify their required capabilities.
+
+`ApiReference` derives what the model reads from that source. The setting `apiReference`
+chooses the form: `compact` (the default) keeps every signature and cuts each doc comment to
+its first sentence, marking a cut with `…`, and drops code examples, method bodies,
+annotations and imports; `full` sends the source whole. A doc comment with a `@keepWhole`
+line stays whole in the compact form, for the few APIs where a guess causes a security slip or
+broken code (`Classified`, `exec`, `parallel`); neither form shows the marker. `help(name)`
+prints the whole documentation of a method with its overloads, of a type with its members, or
+of `Type.member`, and suggests names for an unknown one. On the current source the compact
+form is about two thirds of the full one.
 
 | Mode | Machine capabilities supplied by the preamble |
 |---|---|
@@ -777,8 +796,8 @@ the uniqueness of model references before execution; `model` and `classifiedMode
 resolved at the start (see [Models and providers](#models-and-providers)).
 
 `/config` (`ConfigCommands`) changes only `predictInput`, `notifications`, `webSearch`,
-`autoCompactThreshold` and `compactKeepRatio`. They are outside `PolicyKeys`, so none can
-loosen the sandbox, and a project config may set them; one that turns `webSearch` on needs
+`autoCompactThreshold`, `compactKeepRatio` and `apiReference`. They are outside `PolicyKeys`, so
+none can loosen the sandbox, and a project config may set them; one that turns `webSearch` on needs
 trust. A change goes into a `session` layer that `Models` keeps in memory and appends after
 the files on each reload, so a `/providers` edit does not drop it. That layer merges as a
 narrowing layer: a policy key in it could only tighten, and its other settings win in layer
@@ -1174,6 +1193,9 @@ command-line limit. The CLI asks the API to omit thinking text by default; the h
 give it (Haiku 4.5), which the `showThinkingSummaries` setting does not do for newer models.
 ATC's tools are an in-process MCP server (`"type": "sdk"`): the CLI sends JSON-RPC as
 `mcp_message` control requests and every one, notifications included, needs a response.
+When the CLI exits, as a version that does not know an option does, its pending and later
+control requests fail with the last line of its standard error instead of waiting for the
+60-second timeout.
 
 The CLI runs its own agent loop, and `ClaudeCodeModel` keeps ATC's loop in charge. A
 response that calls tools ends at its `message_stop` and is returned as a completion; the
@@ -1198,7 +1220,7 @@ protocol against a scripted CLI.
 ## Conversation context and agent loop
 
 The system prompt contains environment data, workflow instructions, capability rules, the
-API source and configured permissions. Session grants are reported in tool results so they
+API reference (see [The capability design](#the-capability-design)) and configured permissions. Session grants are reported in tool results so they
 do not change the prompt prefix. Repository-derived scalar values are JSON-quoted; larger
 instruction and permission blocks are marked as data.
 
@@ -1578,22 +1600,26 @@ at the main prompt only, since answer and secret fields share the key map and wo
 `/mode` line it submits as their text. The expanded view and a plain terminal write every
 block in full, with the result panel; the expanded view breaks output lines at the row's end
 (`Screen.breakLines`, which keeps the column across chunks), so a long line stays inside the
-block's gutter.
+block's gutter. Result lines wrap inside the gutter too, except that a compiler heading's rule
+of dashes is cut to the row.
 
 The TODO panel is drawn once per tool call. A new list is drawn whole; when only statuses
 changed, the header gives the progress (`· 3 of 7 done`) and only the items that changed are
 drawn, so marking one item per call does not repeat the whole list each time. `/todos`
 always draws the whole list.
 
-`ToolHistory` retains up to 20 results within an eight-million-character budget. Each
-result retains at most two million output characters plus bounded code and file previews;
-live command output is capped separately at one million characters. A live view keeps its
-text in a `TailBuffer`, which grows to half again its cap before cutting back, so small
-appends do not move the whole text. `/output` lists the retained results, and
-`/output <n|last> [line]` shows one in 200-line windows without evaluating code again, with
-file-change previews coloured as diffs (`ToolHistory.Entry.changesFrom` says where they
-start). Classified terminal-only output is never added to the history, and `/new` clears it.
-These records are for inspection and are not part of saved conversations.
+`ToolHistory` retains up to 200 results, the default `maxToolCalls` of one turn, within an
+eight-million-character budget, which is what bounds its memory. Each result retains at most
+two million output characters plus bounded code, texts and file previews; live command
+output is capped separately at one million characters. A live view keeps its text in a
+`TailBuffer`, which grows to half again its cap before cutting back, so small appends do not
+move the whole text. `/output` lists the retained results in columns, and `/output <n|last> [line]` writes one
+as the expanded view writes a block, without evaluating code again: the code, its texts, the
+output or error, the command output and each file's preview (coloured as a diff) under their
+headings, then the verdict. Those lines are numbered as one run and shown 200 at a time; a page
+that stops early ends with the command for the next. Classified terminal-only output is never
+added to the history, and `/new` and `/resume` clear it. These records are for inspection and
+are not part of saved conversations.
 
 `PromptReader.readAnswer` consumes JLine's preserved input-cancellation interrupt so the
 next menu can read normally. A plain yes/no confirmation (`Tui.confirm`) takes only `y` or

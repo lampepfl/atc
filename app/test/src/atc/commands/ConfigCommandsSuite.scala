@@ -15,6 +15,8 @@ class ConfigCommandsSuite extends munit.FunSuite:
     assertEquals(Notifications.parse("Bell"), Right(ujson.Str("bell")))
     assertEquals(AutoCompactThreshold.parse("0.5"), Right(ujson.Num(0.5)))
     assertEquals(CompactKeepRatio.parse("0"), Right(ujson.Num(0)))
+    assertEquals(ApiReference.parse("FULL"), Right(ujson.Str("full")))
+    assert(ApiReference.parse("short").left.exists(_.contains("compact | full")))
     assertEquals(PredictInput.parse("maybe"), Left("predictInput is true or false, not 'maybe'"))
     assertEquals(Notifications.parse("loud").left.map(_.contains("auto | system | terminal | bell | off")), Left(true))
     for bad <- List("1.5", "-0.1", "NaN", "Infinity", "half") do

@@ -85,7 +85,11 @@ final class RecordingUI extends AgentUI:
   def assistantEnd(): Unit =
     ends += 1
     onEnd()
-  def toolStart(code: String): Unit = toolStarts += code
+  /** The texts each tool call sent, in the order of `toolStarts`. */
+  val toolTexts = ListBuffer[List[(String, String)]]()
+  def toolStart(code: String, texts: List[(String, String)]): Unit =
+    toolStarts += code
+    toolTexts += texts
   def toolEnd(result: ExecutionResult, millis: Long): Unit = toolEnds += result.success
   def status(text: String): Unit = statuses += text
   def warn(text: String): Unit = warnings += text

@@ -24,6 +24,11 @@ object AgentMessages:
     "Not executed: the user supplied new instructions. Revise the plan before requesting more tools."
   val missingCodeArgument: String = "Missing 'code' argument."
 
+  /** The `texts` argument was not an object of strings; `problem` says what it was instead. */
+  def badTextsArgument(problem: String): String =
+    s"The 'texts' argument must be a JSON object mapping names to strings, but $problem; nothing ran. " +
+      """For example: {"code": "write(\"app.py\", texts(\"app.py\"))", "texts": {"app.py": "print(\"hi\")\n"}}"""
+
   val thinkingStatus: String = "waiting for model"
   val runningScalaStatus: String = "running Scala"
   val compactingStatus: String = "Compacting context…"

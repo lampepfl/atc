@@ -229,6 +229,10 @@ final case class Config(
   webSearch: Option[Boolean] = None,
   /** Extra text appended to the system prompt (project conventions etc.). */
   instructions: Option[String] = None,
+  /** How much of the API documentation the system prompt holds: `compact` cuts most doc
+    * comments to their first sentence and leaves the rest to `help("name")`, which suits
+    * models with a small context window; `full` sends `Interface.scala` whole. */
+  apiReference: String = "compact",
   /** After each turn, ask the agent model to guess the next request and offer
     * it as ghost text at the prompt (Tab / → accepts). One extra, small model
     * call per turn; `false` turns it off. */

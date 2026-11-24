@@ -33,6 +33,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
   private var liveTruncated = false
   private val fileChanges = mutable.ListBuffer[FileChange]()
   private var currentCode = ""
+  private var currentTexts = List.empty[(String, String)]
   private var title = ""
   /** The code as the block shows it, one (highlighted) line each. */
   private var codeLines = List.empty[String]
@@ -49,10 +50,11 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
 
   def isOpen: Boolean = open
 
-  /** Open a code block titled `title`. */
-  def start(code: String, title: String): Unit =
+  /** Open a code block titled `title` for `code` and the `texts` its call sent. */
+  def start(code: String, title: String, texts: List[(String, String)]): Unit =
     this.title = title
     currentCode = code
+    currentTexts = texts
     // The code is model-written: sanitize before highlighting/printing.
     val clean = Ansi.sanitize(code)
     codeLines = if screen.colors > 0 then Highlight.scala(clean) else clean.linesIterator.toList
@@ -74,7 +76,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       redraw()
     else writeHead()
 
-  private def titleRow: String = styled(g.bullet, Magenta) + " " + styled(title, Magenta, Bold)
+  private def titleRow(title: String): String = styled(g.bullet, Magenta) + " " + styled(title, Magenta, Bold)
 
   /** The code's rows at `wrappedWidth`, kept: the compact view redraws on every output chunk. */
   private var wrapped = List.empty[String]
@@ -86,9 +88,17 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       wrappedWidth = width
     wrapped
 
+  /** The title, the code and the texts, as the expanded view writes them. */
   private def writeHead(): Unit =
-    write(titleRow + "\n")
+    write(titleRow(title) + "\n")
     codeRows.foreach(row => write(row + "\n"))
+    currentTexts.foreach: (name, text) =>
+      write(textHeading(name))
+      text.linesIterator.map(Ansi.sanitize).flatMap(outputRows).foreach(row => write(gutter(Dim) + row + "\n"))
+
+  /** The heading of a text: how the code names it, on one row whatever the name holds. */
+  private def textHeading(name: String): String =
+    section(Ansi.sanitize(s"""texts("$name")""").map(c => if c == '\n' || c == '\t' then ' ' else c), Dim)
 
   def fileChanged(change: FileChange): Unit =
     if open && fileChanges.size < 50 then fileChanges += change
@@ -182,7 +192,8 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       val hidden = lines - tail.size
       Indent + styled(s"${g.tee} output", Dim) :: Option.when(hidden > 0)(moreLines(hidden, Dim)).toList ++ tail
     def rows(codeMax: Int, tailMax: Int): List[String] =
-      (if headed then titleRow :: codePart(codeMax) else Nil) ++ (if outputStarted then outputPart(tailMax) else Nil)
+      (if headed then titleRow(title) :: codePart(codeMax) else Nil) ++
+        (if outputStarted then outputPart(tailMax) else Nil)
     var codeMax = ToolBlock.CodePreviewRows
     var tailMax = ToolBlock.OutputTailRows
     while rows(codeMax, tailMax).size > room && codeMax > 1 do codeMax -= 1
@@ -194,8 +205,8 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
   private def summaryRows(r: ExecutionResult, millis: Long, id: Int): List[String] =
     val first = Ansi.sanitize(currentCode).linesIterator.map(_.trim).find(_.nonEmpty).getOrElse("")
     val more = if currentCode.trim.linesIterator.size > 1 then s" ${g.ellipsis}" else ""
-    val head = Option.when(headed)(titleRow + "  " + styled(first + more, Dim))
-    val start = verdict(r, millis)
+    val head = Option.when(headed)(titleRow(title) + "  " + styled(first + more, Dim))
+    val start = verdict(r.success, millis)
     val link = outputLink(id)
     val detail =
       if r.success then
@@ -205,11 +216,11 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
         ToolBlock.firstProblem(r, printed.toString).map(Ansi.sanitize).fold(""): problem =>
           val used = Screen.displayWidth(start) + Screen.displayWidth(link) + 3
           styled(s" ${g.dot} ", Red) + styled(screen.fit(problem, used), Red)
-    head.toList ++ changeRows :+ (start + detail + link)
+    head.toList ++ changeRows(fileChanges.toList) :+ (start + detail + link)
 
   /** The start of the verdict row: `└ ok 12 ms` or `└ failed 12 ms`. */
-  private def verdict(r: ExecutionResult, millis: Long): String =
-    val (word, colour) = if r.success then ("ok", Green) else ("failed", Red)
+  private def verdict(success: Boolean, millis: Long): String =
+    val (word, colour) = if success then ("ok", Green) else ("failed", Red)
     Indent + styled(s"${g.end} $word $millis ms", colour)
 
   /** Where the whole result can be read again. */
@@ -217,9 +228,9 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
 
   /** A row per file change, with a change repeated in a row (four one-line edits of a
     * file) folded into one row that counts them. */
-  private def changeRows: List[String] =
+  private def changeRows(changes: List[FileChange]): List[String] =
     val folded =
-      fileChanges.toList.map(change => s"${change.path}: ${change.summary}").foldRight(List.empty[(String, Int)]):
+      changes.map(change => s"${change.path}: ${change.summary}").foldRight(List.empty[(String, Int)]):
         case (line, (same, n) :: rest) if same == line => (same, n + 1) :: rest
         case (line, rest) => (line, 1) :: rest
     folded.map((line, n) => Indent + styled(Ansi.sanitize(if n == 1 then line else s"$line, $n times"), Cyan))
@@ -231,7 +242,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
     * diagnostics, echoed values and exceptions, follows, then the verdict. */
   def end(r: ExecutionResult, millis: Long): Unit =
     val liveText = liveCaptured.toString + (if liveTruncated then "\n[retained live output limit reached]" else "")
-    val record = history.add(currentCode, r, millis, liveText, fileChanges.toList)
+    val record = history.add(title, currentCode, currentTexts, r, millis, liveText, fileChanges.toList)
     screen.stopSpinner()
     if compact then
       val live = liveRegion()
@@ -250,16 +261,26 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
     if lines.nonEmpty then
       // REPL output holds the agent's raw prints and compiler diagnostics: sanitize
       // before display. The subtraction above runs on the raw text, before this.
-      val cleaned = lines.map(Ansi.sanitize).flatMap: line =>
-        if plain then List(line) else TextLayout.wrap(line, width - GutterWidth - 1, GutterWidth)
+      val cleaned = lines.map(Ansi.sanitize).flatMap(outputRows)
       if r.success then
         write(section("result", Dim))
         cleaned.foreach(l => write(gutter(Dim) + styled(l, Dim) + "\n"))
       else
         write(section("error", Red))
         cleaned.foreach(l => write(gutter(Red) + l + "\n"))
-    changeRows.foreach(row => write(row + "\n"))
-    write(verdict(r, millis) + outputLink(id) + "\n")
+    changeRows(fileChanges.toList).foreach(row => write(row + "\n"))
+    write(verdict(r.success, millis) + outputLink(id) + "\n")
+
+  /** A line of output in rows inside the gutter. A compiler heading wider than the row
+    * (`-- [E007] Type Mismatch Error: ----`) has its rule cut to the row instead of wrapped. */
+  private def outputRows(line: String): List[String] =
+    val room = width - GutterWidth - 1
+    val heading = line.reverse.dropWhile(_ == '-').reverse
+    if plain then List(line)
+    else if line.startsWith("-- ") && line.endsWith("---") && Screen.displayWidth(line) > room
+      && Screen.displayWidth(heading) + 3 <= room
+    then List(heading + "-" * (room - Screen.displayWidth(heading)))
+    else TextLayout.wrap(line, room, GutterWidth)
 
   /** Something else takes the screen (a pop-up, a notice): what the running block shows
     * stays as ordinary output, and what follows is drawn below it. */
@@ -301,10 +322,77 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       outputStarted = false
       shownFrom = output.lineCount
 
+  // ── /output ───────────────────────────────────────────────────────
+
+  /** `/output`: a row per retained call, its number, title, verdict and the code's first line. */
+  def writeIndex(): Unit =
+    val entries = history.entries
+    /** The cells padded to one width, on the left for numbers. */
+    def column(cells: Vector[String], numbers: Boolean): Vector[String] =
+      val w = cells.map(Screen.displayWidth(_)).maxOption.getOrElse(0)
+      cells.map: c =>
+        val pad = " " * (w - Screen.displayWidth(c))
+        if numbers then pad + c else c + pad
+    val ids = column(entries.map(_.id.toString), numbers = true)
+    val titles = column(entries.map(e => Ansi.sanitize(e.title)), numbers = false)
+    val times = column(entries.map(_.millis.toString), numbers = true)
+    entries.indices.foreach: i =>
+      val e = entries(i)
+      val (word, colour) = if e.success then ("ok    ", Green) else ("failed", Red)
+      val head = Indent + styled(ids(i), Bold) + "  " + styled(titles(i), Magenta) + "  " +
+        styled(word, colour) + " " + styled(s"${times(i)} ms", Dim) + "  "
+      val code = Ansi.sanitize(e.code).linesIterator.map(_.trim).filter(_.nonEmpty).toList
+      val first = code.headOption.getOrElse("") + (if code.size > 1 then s" ${g.ellipsis}" else "")
+      write(head + screen.fit(first, Screen.displayWidth(head)) + "\n")
+
+  /** `/output <id> [line]`: retained call `e` written out as the expanded view writes a
+    * block. Its code, texts, output, command output and file previews count as one run of lines;
+    * the page holds [[RetainedPage]] of them from line `from` on, each part under its
+    * heading, and ends with the verdict or with where the next page starts. Nothing is
+    * written when `from` is past the last line. Returns the number of lines. */
+  def writeRetained(e: ToolHistory.Entry, from: Int): Int =
+    def lines(text: String) = text.linesIterator.map(Ansi.sanitize).toList
+    val code = Ansi.sanitize(e.code)
+    val (result, resultBar) = if e.success then ("output", Dim) else ("error", Red)
+    // Each part: its heading row, if any, the colour of its gutter and its lines.
+    val parts: List[(Option[String], Int, List[String])] =
+      (None, Magenta, if screen.colors > 0 then Highlight.scala(code) else code.linesIterator.toList) ::
+        e.texts.map((name, text) => (Some(textHeading(name)), Dim, lines(text))) :::
+        (Some(section(result, resultBar)), resultBar, lines(e.output)) ::
+        Option.when(e.live.nonEmpty)((Some(section("command output", Dim)), Dim, lines(e.live))).toList :::
+        e.changes.map: c =>
+          (Some(section(Ansi.sanitize(s"${c.path}: ${c.summary}"), Cyan)), Dim, lines(c.preview).map(diffLine))
+    val total = parts.map(_._3.size).sum
+    if from <= total then
+      val end = (from.toLong - 1 + ToolBlock.RetainedPage).min(total.toLong).toInt
+      val page = if from > 1 || end < total then s" ${g.dot} lines $from to $end of $total" else ""
+      write(titleRow(Ansi.sanitize(e.title)) + styled(s"  /output ${e.id}$page", Dim) + "\n")
+      var first = 1 // the number of the part's first line
+      parts.foreach: (heading, bar, partLines) =>
+        val shown = partLines.slice(from - first, end - first + 1)
+        if shown.nonEmpty then
+          heading.foreach(h => write(h))
+          shown.flatMap(outputRows).foreach(row => write(gutter(bar) + row + "\n"))
+        first += partLines.size
+      if end < total then
+        val more = s"${g.end} ${Format.plural(total - end, "more line")} ${g.dot} /output ${e.id} ${end + 1}"
+        write(Indent + styled(more, Dim) + "\n")
+      else write(verdict(e.success, e.millis) + "\n")
+    total
+
+  /** A line of a file-change preview: additions green, removals red, the hunk and notes dim. */
+  private def diffLine(line: String): String =
+    if line.startsWith("@@") || line.startsWith("[") then styled(line, Dim)
+    else if line.startsWith("+") then styled(line, Green)
+    else if line.startsWith("-") then styled(line, Red)
+    else line
+
 private[ui] object ToolBlock:
   /** Rows of code and of output tail a running block shows in the compact view. */
   private val CodePreviewRows = 8
   private val OutputTailRows = 10
+  /** Lines of a retained call that one `/output` page shows. */
+  val RetainedPage = 200
 
   /** The first line that says why a call failed: its error, else the first line of
     * what the REPL wrote besides the agent's own prints. A compiler diagnostic's

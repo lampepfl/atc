@@ -110,28 +110,16 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   /** The results kept for `/output`. */
   def outputHistory: ToolHistory = tool.history
 
-  /** `/output`: a line per retained result. */
-  def listOutput(): Unit = frame(tool.history.list(g.dot).foreach(println))
+  /** `/output`: a row per retained result. */
+  def listOutput(): Unit = frame:
+    ensureNewline()
+    tool.writeIndex()
 
-  /** `/output`: `entry` from line `from` on, 200 lines at a time. */
+  /** `/output <id> [line]`: `entry` from line `from` on, a page at a time. */
   def showOutput(entry: ToolHistory.Entry, from: Int): Unit = frame:
-    val lines = entry.render.linesIterator.toVector
-    if from > lines.size then error(s"Tool ${entry.id} has ${lines.size} lines of retained output.")
-    else
-      val end = (from.toLong - 1 + 200).min(lines.size.toLong).toInt
-      val diffFrom = entry.changesFrom
-      (from - 1 until end).foreach: i =>
-        val line = Ansi.sanitize(lines(i))
-        renderedLine(if i < diffFrom then line else diffLine(line))
-      if lines.size > end then info(s"More output: /output ${entry.id} ${end + 1}")
-
-  /** A line of a file-change preview: the file's header bold, additions green, removals red. */
-  private def diffLine(line: String): String =
-    if line.startsWith("@@") then styled(line, Dim)
-    else if line.startsWith("+") then styled(line, Green)
-    else if line.startsWith("-") then styled(line, Red)
-    else if line.nonEmpty && !line.startsWith(" ") then styled(line, Bold)
-    else line
+    ensureNewline()
+    val lines = tool.writeRetained(entry, from)
+    if from > lines then error(s"Tool ${entry.id} has ${Format.plural(lines, "line")} of retained output.")
 
   def setContext(mode: String, model: String, directory: String): Unit = screen.synchronized:
     val title = s"atc ${g.dot} $directory"
@@ -333,13 +321,15 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   // ── tool blocks ───────────────────────────────────────────────────
 
-  def toolStart(code: String): Unit = toolStart(code, "run_scala")
+  def toolStart(code: String, texts: List[(String, String)]): Unit = toolStart(code, "run_scala", texts)
 
   /** Open a code block titled `title`: the agent's `run_scala`, or the user's own `/run`. */
-  def toolStart(code: String, title: String): Unit = frame:
+  def toolStart(code: String, title: String): Unit = toolStart(code, title, Nil)
+
+  private def toolStart(code: String, title: String, texts: List[(String, String)]): Unit = frame:
     statusLine.setOperation("running Scala")
     beginBlock()
-    tool.start(code, title)
+    tool.start(code, title, texts)
     flushProcessEvents()
     if !plain && !statusLine.shown then screen.spin(Indent, "running")
 
