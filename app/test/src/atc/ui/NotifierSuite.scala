@@ -24,8 +24,12 @@ class NotifierSuite extends munit.FunSuite:
 
   test("terminal notifications cannot be broken out of by the text"):
     var emitted = List.empty[String]
-    Notifier.Terminal(Osc.Notify).send("atc", "rm -rf x; \u0007\u001b]0;evil\u0007\nnext", s => emitted :+= s)
+    Notifier.Terminal(Osc.Notify).send("atc", "rm -rf x; \u0007\u001b]0;evil\u0007\nnext", s => emitted :+= s, env())
     assertEquals(emitted, List("\u001b]777;notify;atc;rm -rf x, ]0,evil next\u0007"))
+    emitted = Nil
+    // Inside tmux, wrapped for passthrough with its escapes doubled.
+    Notifier.Terminal(Osc.Nine).send("atc", "done", s => emitted :+= s, env("TMUX" -> "/tmp/tmux-1000/default,1,0"))
+    assertEquals(emitted, List("\u001bPtmux;\u001b\u001b]9;atc: done\u0007\u001b\\"))
     emitted = Nil
     Notifier.Bell.send("atc", "done", s => emitted :+= s)
     assertEquals(emitted, List("\u0007"))
