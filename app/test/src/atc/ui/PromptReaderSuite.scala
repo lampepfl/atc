@@ -186,6 +186,41 @@ class PromptReaderSuite extends munit.FunSuite:
   private def commandRows =
     List("/model [ref]" -> "choose a model", "/models" -> "list models", "/mode [name]" -> "change mode")
 
+  /** What the main prompt returns for the keys `input`, with `rows` to list. */
+  private def typed(input: String, rows: List[(String, String)] = commandRows): String =
+    val (prompt, terminal, _) = promptOn(input)
+    prompt.commandList = rows
+    try prompt.read("> ", "")
+    finally terminal.close()
+
+  test("Tab fills in the selected command, then the next one each time, around the list"):
+    assertEquals(typed("/mo\t\r"), "/model")
+    assertEquals(typed("/mo\t\t\r"), "/models")
+    assertEquals(typed("/mo\t\t\t\r"), "/mode")
+    assertEquals(typed("/mo\t\t\t\t\r"), "/model")
+
+  test("Shift-Tab goes back through the command list, from its end when it is the first key"):
+    assertEquals(typed("/mo\u001b[Z\r"), "/mode")
+    assertEquals(typed("/mo\t\t\u001b[Z\r"), "/model")
+
+  test("Tab on a name typed in full moves to the next command that starts with it"):
+    assertEquals(typed("/model\t\r"), "/models")
+
+  test("Tab fills in the only matching command with the space its arguments follow"):
+    assertEquals(typed("/e\t\r", commandRows :+ ("/effort [level]" -> "choose the effort")), "/effort ")
+    assertEquals(typed("/models\tx\r"), "/modelsx")
+
+  test("an edit ends Tab's round: the list is the one for the new text"):
+    // The space chooses `/models`; Tab then completes arguments, and there are none.
+    assertEquals(typed("/mo\t\t \t\r"), "/models ")
+    // Backspace leaves `/model`, which lists two commands again.
+    assertEquals(typed("/mo\t\t\u007f\t\r"), "/models")
+
+  test("↑/↓ fill in the selection too once Tab has started"):
+    // The space shows what the buffer held: Enter alone would fill in the selection.
+    assertEquals(typed("/mo\t\u001b[B \r"), "/models ")
+    assertEquals(typed("/mo\u001b[B \r"), "/mo ")
+
   test("matchingCommands: a single word starting with / lists the names it starts, case-insensitively"):
     assertEquals(PromptReader.matchingCommands("/", commandRows), commandRows)
     assertEquals(

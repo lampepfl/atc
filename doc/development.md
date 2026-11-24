@@ -1488,10 +1488,16 @@ paste's end.
 
 While the main prompt holds a single word starting with `/`, `PromptReader` lists the
 matching `SlashCommand.table` rows in JLine's `post` area under the buffer, with an exact
-name preselected. ↑/↓ move the selection, Tab fills in the name (and a space for commands
-with arguments), and Enter replaces the word with the selected name before accepting. A line
-that ↑/↓ recalled from history is not listed until it is edited, so the arrows keep browsing
-history. Answers, block input and dumb terminals get no list. Enter runs the selection, so
+name preselected. Tab goes through the list as a shell's menu completion does: the first Tab
+fills in the selected name and each further one the next, around the list, and Shift-Tab goes
+back. The list stays the one for the text typed before the first Tab until another edit, and
+the names get no space, which would read as a choice made; typing one makes it. A first Tab
+on a name already typed in full moves on at once, so the key always changes the line. The
+only match is filled in with a space when the command takes arguments, and Tab then completes
+those, which JLine's menu goes through in the same way. ↑/↓ move the selection, and fill it in
+too once Tab has started; Enter replaces the word with the selected name before accepting. A
+line that ↑/↓ recalled from history is not listed until it is edited, so the arrows keep
+browsing history. Answers, block input and dumb terminals get no list. Enter runs the selection, so
 no alias may be a prefix of another command's name. A line is a command when its first word
 starts with `/` and holds no other `/`: a mistyped name is reported as an unknown command,
 and a line that starts with an absolute path goes to the agent.
