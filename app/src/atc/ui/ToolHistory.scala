@@ -8,48 +8,56 @@ private[ui] final class ToolHistory(maxChars: Int = 8 * 1024 * 1024, maxEntries:
   import ToolHistory.Entry
   require(maxChars > 0 && maxEntries > 0, "Tool history limits must be positive")
 
-  private var entries = Vector.empty[Entry]
+  private var retained = Vector.empty[Entry]
   private var nextId = 0
   private def cap(text: String, limit: Int): String =
     if text.length <= limit then text else text.take(limit) + "\n[retained output limit reached]"
 
-  def add(code: String, result: ExecutionResult, millis: Long, live: String, changes: List[FileChange]): Entry =
+  /** Keep a finished call. The result and the command output share one output limit. */
+  def add(
+    title: String,
+    code: String,
+    result: ExecutionResult,
+    millis: Long,
+    live: String,
+    changes: List[FileChange]
+  ): Entry =
     nextId += 1
+    val limit = math.min(maxChars / 2, 2 * 1024 * 1024)
+    val output = cap(result.render, limit)
     val entry = Entry(
       nextId,
+      title,
       cap(code, 32000),
-      cap(
-        result.render + Option.when(live.nonEmpty)(s"\n\nLive output:\n$live").getOrElse(""),
-        math.min(maxChars / 2, 2 * 1024 * 1024)
-      ),
+      output,
+      cap(live, (limit - output.length).max(0)),
       result.success,
       millis,
       changes.take(50).map(c => c.copy(preview = cap(c.preview, 4000)))
     )
-    entries :+= entry
-    while entries.size > maxEntries || entries.size > 1 && entries.map(_.size).sum > maxChars do entries = entries.tail
+    retained :+= entry
+    while retained.size > maxEntries || retained.size > 1 && retained.map(_.size).sum > maxChars do
+      retained = retained.tail
     entry
 
-  /** One line per retained result, its fields separated by `dot`. */
-  def list(dot: String): List[String] = entries.toList.map: e =>
-    val firstLine = e.code.linesIterator.nextOption().getOrElse("").take(80)
-    s"${e.id}. ${if e.success then "ok" else "failed"} $dot ${e.millis} ms $dot $firstLine"
-  def get(id: Int): Option[Entry] = entries.find(_.id == id)
-  def latest: Option[Entry] = entries.lastOption
-  def clear(): Unit = entries = Vector.empty
+  /** The retained calls, oldest first. */
+  def entries: Vector[Entry] = retained
+  def get(id: Int): Option[Entry] = retained.find(_.id == id)
+  def latest: Option[Entry] = retained.lastOption
+  def clear(): Unit = retained = Vector.empty
 
 private[ui] object ToolHistory:
+  /** One finished call: `output` is what the REPL returned, without the hints and the cut
+    * of the model's copy, and `live` is what the commands it ran wrote. */
   final case class Entry(
     id: Int,
+    title: String,
     code: String,
     output: String,
+    live: String,
     success: Boolean,
     millis: Long,
     changes: List[FileChange]
   ):
-    private def result = s"Tool $id (${if success then "ok" else "failed"}, $millis ms)\n\n$code\n\n$output"
-    def render: String = result + changes.map(c => s"\n\n${c.path}: ${c.summary}\n${c.preview}").mkString
-    /** The first line of [[render]] that belongs to the file-change previews. */
-    def changesFrom: Int = result.linesIterator.size
-    def size: Int = code.length + output.length +
+    def size: Int = code.length + output.length + live.length +
       changes.map(c => c.path.length + c.summary.length + c.preview.length).sum

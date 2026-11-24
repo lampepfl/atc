@@ -1578,22 +1578,25 @@ at the main prompt only, since answer and secret fields share the key map and wo
 `/mode` line it submits as their text. The expanded view and a plain terminal write every
 block in full, with the result panel; the expanded view breaks output lines at the row's end
 (`Screen.breakLines`, which keeps the column across chunks), so a long line stays inside the
-block's gutter.
+block's gutter. Result lines wrap inside the gutter too, except that a compiler heading's rule
+of dashes is cut to the row.
 
 The TODO panel is drawn once per tool call. A new list is drawn whole; when only statuses
 changed, the header gives the progress (`· 3 of 7 done`) and only the items that changed are
 drawn, so marking one item per call does not repeat the whole list each time. `/todos`
 always draws the whole list.
 
-`ToolHistory` retains up to 20 results within an eight-million-character budget. Each
-result retains at most two million output characters plus bounded code and file previews;
-live command output is capped separately at one million characters. A live view keeps its
-text in a `TailBuffer`, which grows to half again its cap before cutting back, so small
-appends do not move the whole text. `/output` lists the retained results, and
-`/output <n|last> [line]` shows one in 200-line windows without evaluating code again, with
-file-change previews coloured as diffs (`ToolHistory.Entry.changesFrom` says where they
-start). Classified terminal-only output is never added to the history, and `/new` clears it.
-These records are for inspection and are not part of saved conversations.
+`ToolHistory` retains up to 20 results within an eight-million-character budget. Each result
+retains at most two million output characters plus bounded code and file previews; live command
+output is capped separately at one million characters. A live view keeps its text in a `TailBuffer`,
+which grows to half again its cap before cutting back, so small appends do not move the whole
+text. `/output` lists the retained results in columns, and `/output <n|last> [line]` writes one
+as the expanded view writes a block, without evaluating code again: the code, the output or
+error, the command output and each file's preview (coloured as a diff) under their headings,
+then the verdict. Those lines are numbered as one run and shown 200 at a time; a page that
+stops early ends with the command for the next. Classified terminal-only output is never added
+to the history, and `/new` and `/resume` clear it. These records are for inspection and are not
+part of saved conversations.
 
 `PromptReader.readAnswer` consumes JLine's preserved input-cancellation interrupt so the
 next menu can read normally. A plain yes/no confirmation (`Tui.confirm`) takes only `y` or

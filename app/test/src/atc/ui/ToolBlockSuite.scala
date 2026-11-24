@@ -1,5 +1,6 @@
 package atc.ui
 
+import atc.host.FileChange
 import atc.sandbox.ExecutionResult
 
 import java.io.ByteArrayOutputStream
@@ -185,3 +186,71 @@ class ToolBlockSuite extends munit.FunSuite:
   test("withoutPrinted leaves the body alone when the prints are not found verbatim"):
     val body = "hel...[truncated]"
     assertEquals(ToolBlock.withoutPrinted(body, "hello world\n"), body)
+
+  test("/output writes a retained call as the expanded view writes a block"):
+    val (screen, tool, out) = block(expanded = false)
+    screen.frame(tool.start("write(\"a.txt\", s)\nprintln(1)", "run_scala"))
+    screen.frame(tool.fileChanged(FileChange("a.txt", "updated (+1 -1)", "@@ line 2 @@\n- two\n+ 2")))
+    screen.frame(tool.commandOutput("built\n"))
+    screen.frame(tool.end(ExecutionResult(success = true, output = "1"), 4))
+    out.reset()
+    assertEquals(screen.frame(tool.writeRetained(tool.history.latest.get, 1)), 7)
+    assertEquals(
+      rows(out),
+      List(
+        "● run_scala  /output 1",
+        "  │ write(\"a.txt\", s)",
+        "  │ println(1)",
+        "  ├ output",
+        "  │ 1",
+        "  ├ command output",
+        "  │ built",
+        "  ├ a.txt: updated (+1 -1)",
+        "  │ @@ line 2 @@",
+        "  │ - two",
+        "  │ + 2",
+        "  └ ok 4 ms",
+      ),
+    )
+
+  test("/output pages a long result, repeating the heading of the part a page starts in"):
+    val (screen, tool, out) = block(expanded = false)
+    screen.frame(tool.start("1 to 300", "run_scala"))
+    screen.frame(tool.end(ExecutionResult(success = false, output = (1 to 300).mkString("\n")), 2))
+    val entry = tool.history.latest.get
+    out.reset()
+    assertEquals(screen.frame(tool.writeRetained(entry, 1)), 301)
+    val first = rows(out)
+    assertEquals(
+      first.take(4),
+      List("● run_scala  /output 1 · lines 1 to 200 of 301", "  │ 1 to 300", "  ├ error", "  │ 1")
+    )
+    assertEquals(first.takeRight(2), List("  │ 199", "  └ 101 more lines · /output 1 201"))
+    out.reset()
+    screen.frame(tool.writeRetained(entry, 201))
+    val second = rows(out)
+    assertEquals(second.take(3), List("● run_scala  /output 1 · lines 201 to 301 of 301", "  ├ error", "  │ 200"))
+    assertEquals(second.takeRight(2), List("  │ 300", "  └ failed 2 ms"))
+    out.reset()
+    assertEquals(screen.frame(tool.writeRetained(entry, 302)), 301)
+    assertEquals(out.size, 0, "nothing is written past the last line")
+
+  test("/output lists the retained calls in columns"):
+    val (screen, tool, out) = block(expanded = false)
+    screen.frame(tool.start("val x = 1\nx", "run_scala"))
+    screen.frame(tool.end(ExecutionResult(success = true, output = "val x: Int = 1"), 12))
+    screen.frame(tool.start("oops", "/run"))
+    screen.frame(tool.end(ExecutionResult(success = false, output = "Not found: oops"), 7))
+    out.reset()
+    screen.frame(tool.writeIndex())
+    assertEquals(rows(out), List("  1  run_scala  ok     12 ms  val x = 1 …", "  2  /run       failed  7 ms  oops"))
+
+  test("a compiler heading wider than the row has its rule cut, not wrapped"):
+    val out = ByteArrayOutputStream()
+    val screen = TestTerminal.screen(width = 40, output = out)
+    val tool = ToolBlock(screen, () => true)
+    screen.frame(tool.start("val x: Int = \"s\"", "run_scala"))
+    val diagnostic = "-- [E007] Type Mismatch Error: " + "-" * 50 + "\n1 |val x: Int = \"s\""
+    screen.frame(tool.end(ExecutionResult(success = false, output = diagnostic), 5))
+    val shown = rows(out).dropWhile(!_.contains("E007"))
+    assertEquals(shown.take(2), List("  │ -- [E007] Type Mismatch Error: ----", "  │ 1 |val x: Int = \"s\""))
