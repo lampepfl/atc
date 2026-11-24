@@ -1586,9 +1586,10 @@ changed, the header gives the progress (`· 3 of 7 done`) and only the items tha
 drawn, so marking one item per call does not repeat the whole list each time. `/todos`
 always draws the whole list.
 
-`ToolHistory` retains up to 20 results within an eight-million-character budget. Each result
-retains at most two million output characters plus bounded code and file previews; live command
-output is capped separately at one million characters. A live view keeps its text in a `TailBuffer`,
+`ToolHistory` retains up to 200 results, the default `maxToolCalls` of one turn, within an
+eight-million-character budget, which is what bounds its memory. Each result retains at most
+two million output characters plus bounded code and file previews; live command output is
+capped separately at one million characters. A live view keeps its text in a `TailBuffer`,
 which grows to half again its cap before cutting back, so small appends do not move the whole
 text. `/output` lists the retained results in columns, and `/output <n|last> [line]` writes one
 as the expanded view writes a block, without evaluating code again: the code, the output or

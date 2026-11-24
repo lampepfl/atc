@@ -3,8 +3,10 @@ package atc.ui
 import atc.host.FileChange
 import atc.sandbox.ExecutionResult
 
-/** Recent model-visible output and file previews. Classified terminal text is never stored. */
-private[ui] final class ToolHistory(maxChars: Int = 8 * 1024 * 1024, maxEntries: Int = 20):
+/** Recent model-visible output and file previews. Classified terminal text is never stored.
+  * The count matches the default `maxToolCalls`, so a whole turn's calls stay reachable;
+  * memory is bounded by `maxChars`. */
+private[ui] final class ToolHistory(maxChars: Int = 8 * 1024 * 1024, maxEntries: Int = 200):
   import ToolHistory.Entry
   require(maxChars > 0 && maxEntries > 0, "Tool history limits must be positive")
 
