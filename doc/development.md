@@ -1029,6 +1029,11 @@ bell otherwise), `system`, `terminal`, `bell` or `off`. An alert comes only afte
 which the user neither typed nor had the terminal focused: ten seconds for a question or
 permission request, thirty for a finished turn.
 
+**Terminal title.** `terminalTitle` (on by default) names the terminal tab `atc · <directory>`,
+with `●` in front while a turn runs and `?` while it waits for an answer, and inside tmux
+names the window so unless the user named it (see [The terminal](#the-terminal)). `false`
+leaves both alone.
+
 ### File rules and command patterns
 
 Each file rule has a `path` pattern and may specify `access` (`none|read|write`),
@@ -1491,8 +1496,8 @@ that could not be resumed never replaces the previous checkpoint, and a turn tha
 a fatal error too, first answers its open tool calls. Concurrent instances in one directory
 share the checkpoint, so the last successful save becomes the resume point. A missing or
 invalid checkpoint never prevents
-startup. No shutdown hook saves the session (the one ATC installs kills spawned processes),
-so a forced termination loses the turn in progress.
+startup. No shutdown hook saves the session, so a forced termination loses the turn in
+progress.
 
 ### Input prediction
 
@@ -1511,7 +1516,8 @@ never looks sent after Ctrl-D or Enter.
 `Tui` implements `AgentUI` and owns the turn lifecycle, prose, the TODO panel, input and
 the framing of pop-ups. It composes parts that live in their own files: `Screen` (writes
 that track line boundaries, styles, width, live regions and the spinner; its monitor is the
-TUI's lock), `StatusLine` (the footer and the window title), `ToolBlock` (one tool call's
+TUI's lock), `StatusLine` (the footer and the window title), `TmuxWindow` (the name of the
+tmux window, which follows the title), `ToolBlock` (one tool call's
 block, its live output, its summary and the `/output` history), `ThinkingView` (the
 reasoning window), `Dialogs` (what pop-ups show and read, through `ListMenu`), `KeyReader`
 (the key thread during a turn), `PromptReader` (the JLine line reader and its bindings),
@@ -1673,8 +1679,22 @@ the bell if the command cannot start. Alert text is sanitized, put on one line a
 `StatusLine.refreshTitle` sets the window title (OSC 0) from `busy` and the pop-up depth
 whenever the status refreshes, on one line, writing only changes. The previous title is
 pushed on xterm's title stack (`CSI 22;0t`) at start and popped (`CSI 23;0t`) by `close`;
-terminals without the stack keep ATC's title until the shell sets its own. The same refresh
-sends the program status (OSC 7501, the Program Status Protocol) when it changes: `idle` at
+terminals without the stack keep ATC's title until the shell sets its own. The title is
+`atc · <directory>`, or the name `/title <name>` gave the tab for the session (`/title` alone
+gives the directory's back). `"terminalTitle": false` leaves the title alone; it is not set
+before the config is read.
+
+Inside tmux (`TMUX` and `TMUX_PANE`) the title only becomes the pane's title, and what tmux
+shows as a window's tab is its name, which `automatic-rename` takes from the pane's command:
+`java`. `TmuxWindow` therefore names the window with every title (`tmux rename-window`),
+provided `#{automatic-rename}` is on, so a window the user named keeps its name. Naming a
+window turns `automatic-rename` off for it; `close`, and a shutdown hook for an exit by
+signal, hand the naming back by unsetting the window's option, or setting it on when the
+window had one of its own. The escape sequence for a window name (`ESC k`) is not used: tmux
+ignores it unless `allow-rename` is on, which it is not by default. The commands run on one
+daemon thread, with two seconds each, so the screen's lock never waits for tmux.
+
+The refresh of the title also sends the program status (OSC 7501, the Program Status Protocol) when it changes: `idle` at
 start, `working` with the footer's operation during a turn, `blocked` with `permission`,
 `question` or `auth` while a pop-up waits during one, then `done` or `error` with the turn's
 alert text, or `idle` after an interruption, until the next turn. `close` clears it. ATC
@@ -1779,9 +1799,9 @@ Tests use munit under `app/test/src/atc`. Extend the suite responsible for the b
 - `ToolOutputSuite`, `PromptsSuite`, `InputPredictorSuite`, `SessionStoreSuite`: tool results, the
   system prompt, input prediction and saved conversations.
 - The suites in `ui` test the terminal, each the class it is named after: `TuiSuite`,
-  `ScreenSuite`, `StatusLineSuite`, `PromptReaderSuite`, `KeyReaderSuite`, `DialogsSuite`,
-  `ListMenuSuite`, `ToolBlockSuite`, `ToolHistorySuite`, `RenderSuite`, `TextLayoutSuite`,
-  `AlertsSuite` and `NotifierSuite`.
+  `ScreenSuite`, `StatusLineSuite`, `TmuxWindowSuite`, `PromptReaderSuite`, `KeyReaderSuite`,
+  `DialogsSuite`, `ListMenuSuite`, `ToolBlockSuite`, `ToolHistorySuite`, `RenderSuite`,
+  `TextLayoutSuite`, `AlertsSuite` and `NotifierSuite`.
 - `MainSuite`, `FirstRunSuite`, `commands.SlashCommandSuite`, `JsonSuite`, `DebugSuite`:
   command-line parsing, first-run setup, slash commands, the agent-facing JSON type and error
   reporting.

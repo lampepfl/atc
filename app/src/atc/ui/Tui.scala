@@ -93,7 +93,14 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     text => onSubmit(text),
     text => frame { statusLine.draft = text; statusLine.refresh() },
   )
-  private val statusLine = StatusLine(screen, () => busy, () => popupDepth > 0, () => queuedInputs())
+  private val statusLine =
+    StatusLine(
+      screen,
+      () => busy,
+      () => popupDepth > 0,
+      () => queuedInputs(),
+      if plain then None else TmuxWindow.current(ProcessEnvironment.get),
+    )
   private val dialogs = Dialogs(screen, alerts, statusLine, prompt)
 
   def fileChanged(change: FileChange): Unit = screen.synchronized(tool.fileChanged(change))
@@ -122,9 +129,25 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     if from > lines then error(s"Tool ${entry.id} has ${Format.plural(lines, "line")} of retained output.")
 
   def setContext(mode: String, model: String, directory: String): Unit = screen.synchronized:
-    val title = s"atc ${g.dot} $directory"
-    alerts.title = title
-    statusLine.setContext(s"$mode ${g.dot} $model ${g.dot} $directory", title)
+    directoryTitle = s"atc ${g.dot} $directory"
+    alerts.title = directoryTitle
+    statusLine.setContext(s"$mode ${g.dot} $model ${g.dot} $directory")
+    showTitle()
+
+  /** Whether atc names the terminal tab, and the tmux window (config `terminalTitle`). */
+  @volatile var terminalTitle: Boolean = true
+  /** The tab's name unless `/title` gave it one: `atc · <directory>`. */
+  private var directoryTitle = "atc"
+  private var givenTitle: Option[String] = None
+
+  private def showTitle(): Unit = statusLine.setTitle(Option.when(terminalTitle)(givenTitle.getOrElse(directoryTitle)))
+
+  /** `/title`: name the terminal tab `name` until the session ends, or give it its own name
+    * back (empty). The name in use, on one line; `None` when this terminal's tab is not named. */
+  def nameTab(name: String): Option[String] = screen.synchronized:
+    givenTitle = Some(Notifier.clean(name)).filter(_.nonEmpty)
+    showTitle()
+    Option.when(terminalTitle && !plain)(givenTitle.getOrElse(directoryTitle))
 
   override def inputAccepted(text: String): Unit = frame:
     beginBlock()

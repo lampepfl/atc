@@ -114,6 +114,7 @@ final class App(args: Cli.Args, val tui: Tui):
       tui.info(s"$command was not run: commands run between turns. Ctrl-C stops this turn.")
     else agent.submit(line)
   if args.prompt.isEmpty then tui.notifier = Notifier.fromSetting(config.notifications)
+  tui.terminalTitle = config.terminalTitle
   tui.queuedInputs = () => agent.queuedInputCount
   tui.onInterrupt = () =>
     agent.interrupt()

@@ -9,8 +9,39 @@ class StatusLineSuite extends munit.FunSuite:
     val out = ByteArrayOutputStream()
     val screen = TestTerminal.screen(output = out)
     val status = StatusLine(screen, () => false, () => false, () => 0)
-    screen.frame(status.setContext("model", "atc · a\nb\tc"))
+    screen.frame(status.setTitle(Some("atc · a\nb\tc")))
     assert(out.toString(UTF_8).contains("\u001b]0;atc · a b c\u0007"), out.toString(UTF_8))
+
+  test("the title also names the tmux window, when it changes; without one, neither is touched"):
+    val out = ByteArrayOutputStream()
+    val screen = TestTerminal.screen(output = out)
+    val named = scala.collection.mutable.Buffer[String]()
+    val run: List[String] => Option[String] =
+      case "display-message" :: _ => Some("1")
+      case "rename-window" :: arguments => named += arguments.last; Some("")
+      case _ => Some("")
+    var busy = false
+    val status = StatusLine(screen, () => busy, () => false, () => 0, Some(TmuxWindow("%1", run, _.run())))
+    def titles(): List[String] =
+      val sent = "\u001b\\]0;([^\u0007]*)\u0007".r.findAllMatchIn(out.toString(UTF_8)).map(_.group(1).nn).toList
+      out.reset()
+      sent
+
+    // Before the config says whether the tab is named, and when it says no.
+    screen.frame(status.setContext("model"))
+    screen.frame(status.setTitle(None))
+    assertEquals(titles(), Nil)
+    assertEquals(named.toList, Nil)
+    screen.frame(status.setTitle(Some("atc · project")))
+    screen.frame(status.refresh())
+    busy = true
+    screen.frame(status.beginTurn())
+    screen.frame(status.setOperation("reasoning"))
+    busy = false
+    screen.frame(status.setTitle(Some("my tab")))
+    val expected = List("atc · project", "● atc · project", "my tab")
+    assertEquals(titles(), expected)
+    assertEquals(named.toList, expected)
 
   test("a terminal that cannot draw a footer gets none, so the spinner shows progress"):
     val vt52 = org.jline.terminal.impl.DumbTerminal(
@@ -53,7 +84,7 @@ class StatusLineSuite extends munit.FunSuite:
       sent
     def encoded(text: String) = java.util.Base64.getEncoder.nn.encodeToString(text.getBytes(UTF_8))
 
-    screen.frame(status.setContext("model", "atc"))
+    screen.frame(status.setContext("model"))
     assertEquals(reports(), List("state=idle:app=atc"))
     busy = true
     screen.frame(status.beginTurn())

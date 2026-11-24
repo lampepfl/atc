@@ -22,6 +22,7 @@ enum SlashCommand(val usage: String, val help: String, val aliases: String*):
   case Reset extends SlashCommand("/reset", "restart the REPL; keep the conversation")
   case Compact extends SlashCommand("/compact [focus]", "summarize conversation context; keep the REPL")
   case Todos extends SlashCommand("/todos", "show tasks and progress", "/todo")
+  case Title extends SlashCommand("/title [name]", "name the terminal tab; omit the name for the default")
   case Ps extends SlashCommand("/ps", "list background processes", "/processes")
   case Kill extends SlashCommand("/kill <id|all>", "stop one or all background processes")
   case Monitors extends SlashCommand("/monitors [stop <id|all>]", "list the agent's monitors, or stop them")

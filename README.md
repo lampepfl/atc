@@ -527,6 +527,10 @@ reports whether it is working, waiting or done to terminals that track program s
 monitor's message starts a turn when the agent is idle and you are not typing, and
 `/monitors` lists and stops them; the footer counts the running processes and monitors.
 
+The terminal tab, and inside tmux the window, is named `atc · <directory>` and marked while
+the agent works (`●`) or waits for you (`?`). `/title <name>` gives it another name, and
+`"terminalTitle": false` leaves it alone.
+
 A `-p` run asks nothing: a permission the configuration does not grant fails instead of
 waiting. `--approve-all` approves such requests instead; use it only in a trusted setup. The
 answer goes to standard output and everything else to standard error.
