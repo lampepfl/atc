@@ -31,8 +31,9 @@ import Ansi.{Bold, Cyan}
 
 /** The JLine line reader for the prompt and for typed answers: history, ghost
   * text for the predicted next message, slash-command completion, multi-line
-  * input ([[Continuation]]) and the key bindings that go with them. A changed
-  * buffer and focus reports go to `alerts`. */
+  * input ([[Continuation]]), placeholders for long pastes ([[PastedText]]) and
+  * the key bindings that go with them. A changed buffer and focus reports go
+  * to `alerts`. */
 private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: Alerts):
   private val terminal: Terminal = screen.terminal
   private val plain = screen.plain
@@ -60,7 +61,8 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
       if buffer != seen then
         seen = buffer
         alerts.touch()
-      val base = super.highlight(r, buffer).nn
+      val text = super.highlight(r, buffer).nn
+      val base = pasted.pattern.filter(_ => !plain).fold(text)(text.styleMatches(_, PromptReader.PlaceholderStyle).nn)
       ghost(buffer) match
         case Some(rest) if !plain && !closing =>
           AttributedStringBuilder().append(base).styled(AttributedStyle.DEFAULT.faint(), rest).toAttributedString.nn
@@ -80,13 +82,22 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
 
   /** `readBlock` is reading: Enter continues until an empty line. */
   @volatile var blockMode = false
+
+  /** The long pastes of the current read, which the buffer shows as placeholders. */
+  private val pasted = PastedText()
+  /** Whether a long paste gets a placeholder: not in a code block, which is there to be
+    * read and edited, nor in a secret, whose every character shows as `*`. */
+  private var collapsePastes = false
   /** Multi-line input ([[Continuation]]): on Enter, an `EOFError` tells JLine
     * to insert a newline (indented by the open-bracket depth) instead of
     * accepting; everything else is the default word splitting the completer uses. */
   private val continuationParser: Parser = new DefaultParser:
     override def parse(line: String, cursor: Int, context: Parser.ParseContext): ParsedLine =
       if context == Parser.ParseContext.ACCEPT_LINE then
-        Continuation.pending(line, blockMode).foreach(depth => throw EOFError(-1, -1, "incomplete", "", depth, null))
+        // The pasted text itself: its brackets, not the placeholder's, say whether the input is complete.
+        Continuation
+          .pending(pasted.expand(line), blockMode)
+          .foreach(depth => throw EOFError(-1, -1, "incomplete", "", depth, null))
       super.parse(line, cursor, context)
 
   /** The slash commands as `/help` lists them (usage, description). While the
@@ -149,6 +160,27 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
       closing = true
       try super.doCleanup(nl)
       finally closing = false
+
+    /** A bracketed paste: JLine writes it into the buffer, and a long one is then replaced by
+      * its placeholder, which stays marked as the pasted region until the next key. */
+    override def beginPaste(): Boolean =
+      val start = buf.cursor
+      val read = super.beginPaste()
+      if collapsePastes then
+        pasted.collapse(buf.substring(start, buf.cursor).nn).foreach: placeholder =>
+          buf.backspace(buf.cursor - start)
+          buf.write(placeholder)
+      read
+
+    /** Backspace after a placeholder removes all of it: a part would stand for nothing. */
+    override protected def backwardDeleteChar(): Boolean =
+      pasted.endingAt(buf.toString, buf.cursor) match
+        case Some(placeholder) => buf.backspace(placeholder.length); true
+        case None => super.backwardDeleteChar()
+
+    /** What the read returns and the history keeps is the pasted text, not its placeholder,
+      * which only this read can resolve. The line left on screen keeps the placeholder. */
+    override protected def finish(line: String): String = super.finish(pasted.expand(line))
 
   val reader: LineReaderImpl = Reader()
   reader.setHistory(DefaultHistory())
@@ -285,9 +317,12 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
   private def read(prompt: String, typed: String, commands: Boolean): String =
     ghostHighlighter.seen = typed
     mainPrompt = commands && !plain
+    pasted.clear()
+    collapsePastes = !blockMode
     try reader.readLine(prompt, null: String | Null, null: MaskingCallback | Null, typed)
     finally
       mainPrompt = false
+      collapsePastes = false
       alerts.reportFocus(false) // Ctrl-C and Ctrl-D leave without `callback-finish`
 
   /** Read a typed answer, kept out of the prompt history; `None` when it is empty or cancelled. */
@@ -320,6 +355,9 @@ private[ui] object PromptReader:
   /** The line `readLine` returns when the user presses Shift-Tab on an empty
     * prompt: the app treats it as the `/mode` command (cycle the sandbox mode). */
   val CycleModeLine: String = "/mode"
+
+  /** How a placeholder for pasted text is drawn, to tell it from text that was typed. */
+  private val PlaceholderStyle = AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN).nn
 
   /** The command a usage line names: `/model` for `/model [ref]`. */
   private[ui] def commandName(usage: String): String = usage.takeWhile(_ != ' ')
