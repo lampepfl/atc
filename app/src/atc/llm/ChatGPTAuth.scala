@@ -38,7 +38,8 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
     try Option.when(Files.isRegularFile(file))(read[SignIn](Files.readString(file).nn))
     catch case NonFatal(_) => None
 
-  /** The sign-in for a request: the saved one, refreshed first when it expires soon. */
+  /** The sign-in for a request: the saved one, refreshed first when it expires soon. When the
+    * refresh fails without a refusal, the saved one serves until it expires. */
   def current(): SignIn = synchronized:
     def fresh(t: SignIn) = t.expiresAt - System.currentTimeMillis() > RefreshMargin.toMillis
     val saved = signedIn()
@@ -47,7 +48,13 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
       locked:
         // Another process may have refreshed while this one waited for the lock.
         val latest = signedIn()
-        if fresh(latest) then latest else refresh(latest)
+        if fresh(latest) then latest
+        else
+          try refresh(latest)
+          catch
+            case e: IOException if !e.isInstanceOf[SignInNeeded] && latest.expiresAt > System.currentTimeMillis() =>
+              Debug.log(s"using the ChatGPT token until it expires: ${e.getMessage}")
+              latest
 
   /** A new sign-in after the backend rejected `stale`. Another process may have refreshed already. */
   def renewed(stale: SignIn): SignIn = synchronized:
@@ -71,10 +78,11 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
     val body = ujson.Obj("grant_type" -> "refresh_token", "client_id" -> ClientId, "refresh_token" -> saved.refresh)
     try save(tokens(post(okhttp3.RequestBody.create(ujson.write(body), JsonType)), Some(saved)))
     catch
-      case e: TokenRejected =>
+      case e: TokenRejected if e.refused =>
         // A refresh token is single-use: another process may have used it and saved the next one.
         load().filter(_.refresh != saved.refresh)
           .getOrElse(throw SignInNeeded(s"The ChatGPT sign-in expired (${e.getMessage})"))
+      case e: TokenRejected => throw IOException(s"Could not refresh the ChatGPT sign-in (${e.getMessage})")
 
   /** Start signing in: the callback server listens until the login is closed. */
   def begin(): Login =
@@ -171,15 +179,16 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
     Using.resource(http.newCall(request).execute()): response =>
       val text = Option(response.body).fold("")(_.string())
       if !response.isSuccessful then
-        throw TokenRejected(s"HTTP ${response.code}${errorOf(text).fold("")(e => s": $e")}")
+        val why = s"HTTP ${response.code}${errorOf(text).fold("")(e => s": $e")}"
+        throw TokenRejected(why, refused = response.code == 400 || response.code == 401)
       ujson.read(text)
 
   /** The sign-in of a token-endpoint answer; a refresh may omit what did not change. */
   private def tokens(json: ujson.Value, previous: Option[SignIn]): SignIn =
     def field(name: String) = json.obj.get(name).flatMap(_.strOpt).filter(_.nonEmpty)
-    val access = field("access_token").getOrElse(throw TokenRejected("the answer has no access token"))
+    val access = field("access_token").getOrElse(throw TokenRejected("the answer has no access token", refused = false))
     val refresh = field("refresh_token").orElse(previous.map(_.refresh))
-      .getOrElse(throw TokenRejected("the answer has no refresh token"))
+      .getOrElse(throw TokenRejected("the answer has no refresh token", refused = false))
     val idClaims = field("id_token").flatMap(claims)
     val accessClaims = claims(access)
     def account(claims: ujson.Value) = claims.obj.get("https://api.openai.com/auth").flatMap(_.objOpt)
@@ -231,7 +240,9 @@ object ChatGPTAuth:
   final class SignInNeeded(val reason: String)
       extends IOException(s"$reason; choose chatgpt in /providers to sign in")
 
-  private final class TokenRejected(message: String) extends IOException(message)
+  /** The token endpoint did not give tokens. `refused`: it turned the grant down (400 or 401), so
+    * signing in again is the remedy; otherwise the failure may pass. */
+  private final class TokenRejected(message: String, val refused: Boolean) extends IOException(message)
 
   private val random = SecureRandom()
   private def randomToken(bytes: Int): String =

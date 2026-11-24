@@ -222,6 +222,19 @@ class ChatGPTSuite extends munit.FunSuite:
       assert(e.getMessage.contains("refresh_token_reused"), e.getMessage)
       assert(e.getMessage.contains("/providers"), e.getMessage)
 
+  test("a refresh the token endpoint fails to answer keeps the current token until it expires"):
+    withServer(_ => (503, "text/plain", "unavailable")): (url, requests) =>
+      val file = tempFile()
+      saved(file, "current", "refresh-1", expiresIn = 60_000)
+      val auth = ChatGPTAuth(file, url, List(0))
+      assertEquals(auth.current().access, "current")
+      assertEquals(requests().size, 1, "the refresh was tried")
+      assertEquals(auth.load().map(_.refresh), Some("refresh-1"))
+      saved(file, "current", "refresh-1", expiresIn = 0)
+      val e = intercept[java.io.IOException](auth.current())
+      assert(!e.isInstanceOf[ChatGPTAuth.SignInNeeded], e.toString)
+      assert(e.getMessage.contains("Could not refresh") && e.getMessage.contains("503"), e.getMessage)
+
   // ── the backend ─────────────────────────────────────────────────
 
   private def backend(url: String) = ModelSpec(
