@@ -26,7 +26,8 @@ import scala.util.control.NonFatal
   * The file is read again for every request, so every atc process uses the
   * newest tokens. A refresh token can be used once: each refresh saves the
   * one it returns, holding a lock on a file beside the tokens so that two
-  * processes do not refresh with the same one. */
+  * processes do not refresh with the same one. A browser sign-in saves under
+  * the same lock, so that a refresh in progress does not overwrite it. */
 final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: List[Int] = ChatGPTAuth.Ports):
   import ChatGPTAuth.*
 
@@ -62,6 +63,9 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
     val path = file.resolveSibling(s"${file.getFileName}.lock").nn
     val channel = OwnerOnlyFiles.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
     Using.resource(channel)(c => Using.resource(c.lock().nn)(_ => step))
+
+  /** Save a new sign-in, under the same locks as a refresh. */
+  private def commit(t: SignIn): SignIn = synchronized(locked(save(t)))
 
   private def refresh(saved: SignIn): SignIn =
     val body = ujson.Obj("grant_type" -> "refresh_token", "client_id" -> ClientId, "refresh_token" -> saved.refresh)
@@ -146,7 +150,7 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
             params.get("code").filter(_.nonEmpty) match
               case None => Left("The callback carried no authorization code")
               case Some(code) =>
-                try Right(save(tokens(exchange(code), None)))
+                try Right(commit(tokens(exchange(code), None)))
                 catch case NonFatal(e) => Left(Debug.message(e))
         outcome.fold(why => done.completeExceptionally(RuntimeException(why)), done.complete)
         outcome

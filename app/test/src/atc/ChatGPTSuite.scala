@@ -157,22 +157,27 @@ class ChatGPTSuite extends munit.FunSuite:
           "rw-------"
         )
 
+  /** Another process holding the lock beside `file` until its input is closed. */
+  private def lockHolder(file: Path): Process =
+    val javaBin =
+      Path.of(sys.props("java.home"), "bin", if atc.platform.Platform.isWindows then "java.exe" else "java")
+    val holder = ProcessBuilder(
+      javaBin.toString,
+      "-cp",
+      sys.props("java.class.path"),
+      "atc.ChatGPTLockHolder",
+      s"$file.lock",
+    ).redirectError(ProcessBuilder.Redirect.INHERIT).nn.start().nn
+    val out = java.io.BufferedReader(java.io.InputStreamReader(holder.getInputStream.nn, UTF_8))
+    assertEquals(out.readLine(), "locked")
+    holder
+
   test("a refresh waits for another process's refresh and uses the tokens it saved"):
     withServer(_ => (200, "application/json", tokenAnswer("mine", "refresh-3"))): (url, requests) =>
       val file = tempFile()
       saved(file, "old", "refresh-1", expiresIn = 0)
-      val javaBin =
-        Path.of(sys.props("java.home"), "bin", if atc.platform.Platform.isWindows then "java.exe" else "java")
-      val holder = ProcessBuilder(
-        javaBin.toString,
-        "-cp",
-        sys.props("java.class.path"),
-        "atc.ChatGPTLockHolder",
-        s"$file.lock",
-      ).redirectError(ProcessBuilder.Redirect.INHERIT).nn.start().nn
+      val holder = lockHolder(file)
       try
-        val out = java.io.BufferedReader(java.io.InputStreamReader(holder.getInputStream.nn, UTF_8))
-        assertEquals(out.readLine(), "locked")
         val access =
           java.util.concurrent.CompletableFuture.supplyAsync(() => ChatGPTAuth(file, url, List(0)).current().access)
         Thread.sleep(300) // it reads the expired tokens and waits for the lock
@@ -180,6 +185,25 @@ class ChatGPTSuite extends munit.FunSuite:
         holder.getOutputStream.nn.close()
         assertEquals(access.get(10, java.util.concurrent.TimeUnit.SECONDS), "theirs")
         assert(requests().isEmpty, "the refresh token the other process used is not used again")
+      finally holder.destroy()
+
+  test("a browser sign-in waits for another process's refresh before saving"):
+    withServer(_ => (200, "application/json", tokenAnswer("signed-in", "refresh-new"))): (url, _) =>
+      val file = tempFile()
+      val auth = ChatGPTAuth(file, url, List(0))
+      val holder = lockHolder(file)
+      try
+        scala.util.Using.resource(auth.begin()): login =>
+          val asked = query(login.url)
+          val pasted = java.util.concurrent.CompletableFuture.supplyAsync(() =>
+            login.paste(s"${asked("redirect_uri")}?code=c&state=${asked("state")}")
+          )
+          Thread.sleep(300) // the code is exchanged; saving waits for the lock
+          assert(!pasted.isDone, "the sign-in was saved while another process held the lock")
+          assertEquals(auth.load(), None)
+          holder.getOutputStream.nn.close()
+          assertEquals(pasted.get(10, java.util.concurrent.TimeUnit.SECONDS).map(_.access), Right("signed-in"))
+        assertEquals(auth.load().map(_.access), Some("signed-in"))
       finally holder.destroy()
 
   test("a refresh token another process used gives way to the tokens it saved; otherwise sign in again"):

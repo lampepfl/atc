@@ -1157,7 +1157,8 @@ for every request, so every atc process sees the newest tokens. The interceptor 
 tokens five minutes before they expire, and once more after a 401. A refresh token can be
 used once, so a refresh holds a lock on `chatgpt-auth.json.lock` (created readable only by its
 owner) and reads the saved tokens again once it has the lock: another process may have
-refreshed while it waited. When the token endpoint still rejects a refresh token, the saved
+refreshed while it waited. A browser sign-in exchanges its code first and saves under the
+same lock, so that a refresh in progress does not overwrite it. When the token endpoint still rejects a refresh token, the saved
 tokens win if their refresh token differs; otherwise `SignInNeeded` tells the user to sign in
 again from `/providers`. A failure of the sign-in step that is not an `IOException`, such as a
 malformed token answer, fails the request as an `IOException` that names only the exception's
