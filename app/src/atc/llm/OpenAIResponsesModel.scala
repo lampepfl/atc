@@ -46,6 +46,9 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
       else if it.isReasoning then Some(ResponseInputItem.ofReasoning(it.asReasoning()))
       else None
 
+  private def message(role: EasyInputMessage.Role, text: String): ResponseInputItem =
+    ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder().role(role).content(text).build())
+
   private def params(system: SystemPrompt, history: List[Msg], tools: List[ToolSpec]): ResponseCreateParams =
     val b = ResponseCreateParams.builder().model(modelId).instructions(system).store(false)
     // Stateless (store(false)) replay must carry the reasoning between calls: ask
@@ -57,8 +60,6 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     if searches(tools) then
       b.addTool(Tool.ofWebSearch(WebSearchTool.builder().`type`(WebSearchTool.Type.WEB_SEARCH).build()))
     val input = List.newBuilder[ResponseInputItem]
-    def message(role: EasyInputMessage.Role, text: String): ResponseInputItem =
-      ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder().role(role).content(text).build())
     history.foreach:
       case Msg.User(text) => input += message(EasyInputMessage.Role.USER, text)
       case Msg.Continuation(text) => input += message(EasyInputMessage.Role.USER, text)
@@ -170,7 +171,9 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
 
   def simple(system: Option[String], prompt: String, thinking: Boolean): Reply =
     def request(reasoning: Option[Reasoning]): Response =
-      val b = ResponseCreateParams.builder().model(modelId).input(prompt).store(false)
+      // A list, not a bare string: the ChatGPT backend takes no other input.
+      val b = ResponseCreateParams.builder().model(modelId)
+        .inputOfResponse(List(message(EasyInputMessage.Role.USER, prompt)).asJava).store(false)
       system.foreach(b.instructions)
       configure(b, thinking, reasoning)
       send(b.build())

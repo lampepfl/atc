@@ -1162,18 +1162,18 @@ again from `/providers`. A failure of the sign-in step that is not an `IOExcepti
 malformed token answer, fails the request as an `IOException` that names only the exception's
 class, since its message may quote a token.
 
-The backend streams only, requires instructions and rejects `max_output_tokens` and
-`temperature`. Its closing `response.completed` carries an empty `output`, so
-`OpenAIResponsesModel.Accumulator` keeps the items of the `response.output_item.done` events
-and uses them when the final response has none. The adapter streams one-shot calls too,
-supplies instructions when a call has none, sends neither setting and sets
-`prompt_cache_key` to the conversation id. The backend never returns the reasoning itself,
-so a model without `reasoningSummary` asks for `auto` summaries, as Codex does, and shows
-them as thinking. Its model list is `GET /models?client_version=`, filtered to the models
-marked `list`, with their context windows and efforts. The backend lists the models that
-Codex release may use, so `ChatGPTModel.ClientVersion` follows Codex releases. The preset
-sends `originator: atc` and `session-id: ${ATC_SESSION}`. `ChatGPTSuite` covers the flow
-against a local server.
+The backend streams only, requires instructions, takes the input only as a list and rejects
+`max_output_tokens` and `temperature`. Its closing `response.completed` carries an empty
+`output`, so `OpenAIResponsesModel.Accumulator` keeps the items of the
+`response.output_item.done` events and uses them when the final response has none. The
+adapter streams one-shot calls too, sends their prompt as a one-message list, supplies
+instructions when a call has none, sends neither setting and sets `prompt_cache_key` to the
+conversation id. The backend never returns the reasoning itself, so a model without
+`reasoningSummary` asks for `auto` summaries and shows them as thinking. Its model list is
+`GET /models?client_version=`, filtered to the models marked `list`, with their context
+windows and efforts. The backend lists the models that Codex release may use, so
+`ChatGPTModel.ClientVersion` follows Codex releases. The preset sends `originator: atc` and
+`session-id: ${ATC_SESSION}`. `ChatGPTSuite` covers the flow against a local server.
 
 The `claude-code` api reaches the models of a Claude plan through the `claude` CLI the user
 installed and signed in to; ATC never reads its credentials. `ClaudeCli` starts `claude -p`

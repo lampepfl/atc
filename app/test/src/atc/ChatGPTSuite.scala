@@ -273,7 +273,7 @@ class ChatGPTSuite extends munit.FunSuite:
         assertEquals(completion.stop, CompletionStop.Incomplete)
       finally model.close()
 
-  test("a one-shot call streams and carries instructions"):
+  test("a one-shot call streams, carries instructions and sends its prompt as a list"):
     withServer(_ => (200, "text/event-stream", streamed)): (url, requests) =>
       val file = tempFile()
       saved(file, "token", "refresh", expiresIn = 3_600_000)
@@ -283,6 +283,9 @@ class ChatGPTSuite extends munit.FunSuite:
         val body = requests().single.json.obj
         assertEquals(body("stream"), ujson.Bool(true))
         assert(body("instructions").str.nonEmpty)
+        // The backend answers a bare string with 400 "Input must be a list".
+        val input = body("input").arr.toList
+        assertEquals(input.map(m => (m("role").str, m("content").str)), List("user" -> "hello"))
         assert(!body.get("reasoning").exists(_.obj.contains("summary")), "a call that does not think asks for none")
       finally model.close()
 
