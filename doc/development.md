@@ -1174,6 +1174,9 @@ command-line limit. The CLI asks the API to omit thinking text by default; the h
 give it (Haiku 4.5), which the `showThinkingSummaries` setting does not do for newer models.
 ATC's tools are an in-process MCP server (`"type": "sdk"`): the CLI sends JSON-RPC as
 `mcp_message` control requests and every one, notifications included, needs a response.
+When the CLI exits, as a version that does not know an option does, its pending and later
+control requests fail with the last line of its standard error instead of waiting for the
+60-second timeout.
 
 The CLI runs its own agent loop, and `ClaudeCodeModel` keeps ATC's loop in charge. A
 response that calls tools ends at its `message_stop` and is returned as a completion; the

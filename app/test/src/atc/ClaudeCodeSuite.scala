@@ -381,6 +381,19 @@ class ClaudeCodeSuite extends munit.FunSuite:
     val error = intercept[IOException](h.model.complete("system", List(Msg.User("hi")), tools, quiet, () => false))
     assertEquals(error.getMessage, "Claude Code exited: fake stderr line")
 
+  test("a request sent after the CLI's output has ended fails at once"):
+    // The CLI exited before the host asked anything, and the reader saw its output end first.
+    val process = ClaudeCli.Process(
+      java.io.ByteArrayOutputStream(),
+      java.io.ByteArrayInputStream(Array.emptyByteArray),
+      () => (),
+      () => "fake stderr line",
+    )
+    val cli = ClaudeCli.start(process, Nil)
+    intercept[IOException](cli.next()) // the reader has ended
+    val error = intercept[IOException](cli.initialize("system"))
+    assertEquals(error.getMessage, "Claude Code exited: fake stderr line")
+
   test("cancelling a request stops its CLI"):
     val waiting = java.util.concurrent.CountDownLatch(1)
     val h = Harness(cli => { cli.handshake(); cli.user(); waiting.countDown() })
