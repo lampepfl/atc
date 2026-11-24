@@ -1086,10 +1086,11 @@ reads and writes; adapters normalize provider-specific accounting.
 Anthropic requests set two cache breakpoints: the system prompt and the last user-role
 message (user text, a continuation or tool results), so each round reads the previous
 round's prefix from the cache. Responses requests use stateless replay with encrypted
-reasoning content. OpenAI-compatible adapters send vendor `thinking` parameters only when
-configured. Non-thinking one-shot requests can retry without a guessed reasoning effort when
-the provider rejects that parameter; unrelated bad requests are not retried by this
-fallback.
+reasoning content. A Responses one-shot call has no continuation, so a response that failed
+or ended incomplete raises instead of returning its partial text. OpenAI-compatible adapters
+send vendor `thinking` parameters only when configured. Non-thinking one-shot requests can
+retry without a guessed reasoning effort when the provider rejects that parameter; unrelated
+bad requests are not retried by this fallback.
 
 Provider SDK request construction remains in each adapter. Shared configuration and client
 setup belong in `Providers`; model selection belongs in `ModelCatalog`. Every adapter builds

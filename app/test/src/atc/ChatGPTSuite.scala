@@ -289,6 +289,29 @@ class ChatGPTSuite extends munit.FunSuite:
         assert(!body.get("reasoning").exists(_.obj.contains("summary")), "a call that does not think asks for none")
       finally model.close()
 
+  test("a one-shot call that fails or is cut short raises instead of answering"):
+    val message =
+      """{"id":"m","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"partial","annotations":[]}]}"""
+    val error =
+      """event: error
+        |data: {"type":"error","sequence_number":1,"code":"server_error","message":"the backend broke","param":null}
+        |
+        |""".stripMargin
+    val streams = List(
+      backendStreamEnding("incomplete", message) -> "incomplete",
+      backendStreamEnding("failed") -> "failed",
+      error -> "the backend broke",
+    )
+    for (stream, expected) <- streams do
+      withServer(_ => (200, "text/event-stream", stream)): (url, _) =>
+        val file = tempFile()
+        saved(file, "token", "refresh", expiresIn = 3_600_000)
+        val model = ChatGPTModel(backend(url), ChatGPTAuth(file, url, List(0)))
+        try
+          val e = intercept[RuntimeException](model.simple(None, "hello", thinking = false))
+          assert(e.getMessage.contains(expected), e.getMessage)
+        finally model.close()
+
   test("without a sign-in a request fails before reaching the backend and says how to sign in"):
     withServer(_ => (200, "text/event-stream", streamed)): (url, requests) =>
       val model = ChatGPTModel(backend(url), ChatGPTAuth(tempFile(), url, List(0)))

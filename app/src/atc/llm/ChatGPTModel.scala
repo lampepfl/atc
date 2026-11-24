@@ -47,7 +47,9 @@ final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
       if params.instructions().isPresent then params
       else params.toBuilder().instructions(Providers.DefaultInstructions).build()
     val acc = OpenAIResponsesModel.Accumulator()
-    Using.resource(client.responses().createStreaming(complete))(_.stream().forEach(acc.accumulate(_)))
+    Using.resource(client.responses().createStreaming(complete))(_.stream().forEach: ev =>
+      acc.accumulate(ev)
+      OpenAIResponsesModel.failOn(ev))
     acc.response()
 
   /** `GET /models`, the list Codex shows: the models marked for listing, in
