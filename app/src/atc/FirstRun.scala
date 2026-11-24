@@ -65,13 +65,14 @@ object FirstRun:
 
   /** Ask until the user sets up a provider or chooses one of the other two ways.
     * `keys` are the bindings already in force; `list` fetches a provider's models;
-    * `signIn` signs in to a provider that takes no key (ChatGPT). */
+    * `signIn` signs in to a provider that takes no key (ChatGPT), keeping a saved sign-in
+    * unless its second argument (`again`) is true. */
   @tailrec def run(
     ui: Ui,
     presets: List[ProviderPreset],
     keys: KeyBindings,
     list: ModelSpec => List[ModelSpec],
-    signIn: Ui => Boolean,
+    signIn: (Ui, Boolean) => Boolean,
   ): Outcome =
     val labels = presets.map(_.label) ++ CustomServers.map(_.label) :+ ConfigureYourselfLabel :+ NotNowLabel
     ui.choose("Choose a model provider to set up", labels) match
@@ -104,8 +105,8 @@ object FirstRun:
         val question =
           s"The API key for $name, saved as $variable in ~/.atc/keys.properties (leave it empty if the server takes none)"
         ui.askSecret(question) match
-          case Some(key) => provider(ui, preset, keys, list, _ => false, Some(key))
-          case None => provider(ui, preset.copy(key = None), keys, list, _ => false)
+          case Some(key) => provider(ui, preset, keys, list, (_, _) => false, Some(key))
+          case None => provider(ui, preset.copy(key = None), keys, list, (_, _) => false)
 
   private val ProviderName = "[A-Za-z][A-Za-z0-9._-]*".r
 
@@ -151,9 +152,10 @@ object FirstRun:
     preset: ProviderPreset,
     keys: KeyBindings,
     list: ModelSpec => List[ModelSpec],
-    signIn: Ui => Boolean,
+    signIn: (Ui, Boolean) => Boolean,
     typed: Option[String] = None,
   ): Option[Outcome.Ready] =
+    val chatgpt = ProviderConfig.canonicalApi(preset.api).contains("chatgpt")
     def ask(): Option[String] =
       preset.keyUrl.foreach(url => ui.info(s"Create a key at $url"))
       ui.askSecret(s"Paste your ${preset.label} API key (saved in ~/.atc/keys.properties, readable only by you)")
@@ -180,14 +182,19 @@ object FirstRun:
             case Right(models) => chooseModel(ui, models).map(new Outcome.Ready(preset, typed, spec, models, _))
             case Left(why) =>
               ui.error(s"Could not list the models of ${preset.label}: $why")
+              // A saved ChatGPT sign-in the backend no longer accepts is replaced by signing in again.
+              if chatgpt then
+                ui.choose("Sign in to ChatGPT again?", List(SignInAgainLabel, CancelLabel)) match
+                  case Some(SignInAgainLabel) if signIn(ui, true) => attempt(typed)
+                  case _ => None
               // Without a key there is nothing to correct (a local server that is not running).
-              if preset.keyVariable.isEmpty then None
+              else if preset.keyVariable.isEmpty then None
               else
                 ask() match
                   case None => None
                   case Some(key) => attempt(Some(key))
 
-    if ProviderConfig.canonicalApi(preset.api).contains("chatgpt") && !signIn(ui) then None else attempt(typed)
+    if chatgpt && !signIn(ui, false) then None else attempt(typed)
 
   /** Sign in with a ChatGPT plan in the browser, unless already signed in and not `again`. */
   def signIn(ui: Ui, auth: ChatGPTAuth, openBrowser: String => Boolean, again: Boolean): Boolean =
@@ -228,6 +235,7 @@ object FirstRun:
           case _ => false
 
   private val KeepWaitingLabel = "Keep waiting"
+  private val SignInAgainLabel = "Sign in again"
   private val CancelLabel = "Cancel"
 
   /** A sub-menu: Back returns to where the provider was chosen. */
@@ -237,5 +245,9 @@ object FirstRun:
       models.zip(labels).collectFirst { case (m, l) if l == label => m }
 
   /** The messages of `e` and its causes: an SDK's "Request failed" alone does not say why. */
+  /** The messages of `e` and its causes; for a sign-in the backend refused, only why, since
+    * the way to sign in again is offered here. */
   private def reasons(e: Throwable): String =
-    Debug.causes(e).flatMap(t => Option(t.getMessage)).filter(_.nonEmpty).distinct.mkString(": ")
+    Debug.causes(e).collectFirst { case s: ChatGPTAuth.SignInNeeded => s.reason }.getOrElse(
+      Debug.causes(e).flatMap(t => Option(t.getMessage)).filter(_.nonEmpty).distinct.mkString(": ")
+    )

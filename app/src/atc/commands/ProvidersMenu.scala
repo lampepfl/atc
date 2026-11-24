@@ -67,7 +67,7 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
         )
       val signIn = "Sign in with ChatGPT" ->
         (() =>
-          val signedIn = Setup.signIn(again = true)(Setup.firstRunUi(tui))
+          val signedIn = Setup.signIn(Setup.firstRunUi(tui), again = true)
           if signedIn then modelCommands.reload()
           signedIn
         )
@@ -133,7 +133,7 @@ final class ProvidersMenu(app: App, modelCommands: ModelCommands):
       val ui = Setup.firstRunUi(tui)
       val keys = models.configuration.keys
       val outcome = addable.lift(index) match
-        case Some(preset) => FirstRun.provider(ui, preset, keys, ChatModel.listModels, Setup.signIn(again = false))
+        case Some(preset) => FirstRun.provider(ui, preset, keys, ChatModel.listModels, Setup.signIn)
         case None =>
           val taken = models.configuration.settings.providers.keySet ++ ProviderPreset.all.map(_.name)
           FirstRun.custom(ui, FirstRun.CustomServers(index - addable.size), taken, keys, ChatModel.listModels)

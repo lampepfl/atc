@@ -228,7 +228,8 @@ object ChatGPTAuth:
 
   /** The request cannot be authorized until the user signs in (again). An
     * `IOException`, so OkHttp reports it as a failed call. */
-  final class SignInNeeded(message: String) extends IOException(s"$message; choose chatgpt in /providers to sign in")
+  final class SignInNeeded(val reason: String)
+      extends IOException(s"$reason; choose chatgpt in /providers to sign in")
 
   private final class TokenRejected(message: String) extends IOException(message)
 

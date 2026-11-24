@@ -41,7 +41,7 @@ object Setup:
         if tui.menusAvailable then
           // Only the user's own keys: a project's key file is not trusted yet.
           val keys = KeyBindings.load(List(Config.globalKeysPath))
-          FirstRun.run(firstRunUi(tui), ProviderPreset.all, keys, ChatModel.listModels, signIn(again = false))
+          FirstRun.run(firstRunUi(tui), ProviderPreset.all, keys, ChatModel.listModels, signIn)
         else if tui.confirm("Write the starting config and key bindings there?") then
           FirstRun.Outcome.ConfigureYourself
         else FirstRun.Outcome.NotNow
@@ -159,7 +159,7 @@ object Setup:
     ModelListStore.global.save(ready.endpoint, ready.models)
 
   /** Sign in with a ChatGPT plan, keeping a sign-in already saved unless `again`. */
-  def signIn(again: Boolean)(ui: FirstRun.Ui): Boolean =
+  def signIn(ui: FirstRun.Ui, again: Boolean): Boolean =
     FirstRun.signIn(ui, ChatGPTAuth.default, Platform.openBrowser, again)
 
   def firstRunUi(tui: Tui): FirstRun.Ui = new FirstRun.Ui:

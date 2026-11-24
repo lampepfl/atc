@@ -892,7 +892,9 @@ window. Without `-m` or `model`, a session starts with the model last chosen wit
 the user chooses one of the `atc/providers.json` presets, gives its key unless one is
 already bound (read by `Tui.askSecret`, masked and kept out of the prompt history) or signs
 in (`chatgpt`, see `FirstRun.signIn`; `claude-code` needs `claude auth login` beforehand), and
-chooses a model from the provider's list, which also checks the key. `Setup.load` then
+chooses a model from the provider's list, which also checks the key. A saved ChatGPT
+sign-in is used as it is; when the list cannot be fetched with it, setup offers to sign in
+again, which replaces a sign-in the backend no longer accepts. `Setup.load` then
 writes a global config naming only that provider, binds the key in
 `~/.atc/keys.properties` (`KeyBindings.bind`, owner-only, other lines kept), stores the
 list and records the model as the last one, so the session starts without another fetch.
