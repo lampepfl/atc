@@ -17,7 +17,10 @@ import scala.util.control.NonFatal
 final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
     extends OpenAIResponsesModel(configured.copy(baseUrl = configured.baseUrl.orElse(Some(ChatGPTModel.BackendUrl)))):
   override protected def authorization: Option[okhttp3.Interceptor] = Some: chain =>
+    // A request with a body carries the conversation; the model list may use any sign-in.
+    val conversation = Option.when(chain.request().body != null)(Providers.conversation)
     def authorized(t: ChatGPTAuth.SignIn) =
+      conversation.foreach(auth.keepAccount(_, t))
       val b = chain.request().newBuilder().header("Authorization", s"Bearer ${t.access}")
       t.accountId.foreach(b.header("ChatGPT-Account-ID", _))
       b.build()
@@ -35,7 +38,7 @@ final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
       response.close()
       chain.proceed(authorized(signedIn(auth.renewed(tokens))))
 
-  /** Codex asks for summaries, the only reasoning text the backend shows. */
+  /** Summaries are the only reasoning text the backend shows. */
   override protected def defaultReasoningSummary: Option[String] = Some("auto")
 
   /** In place of the output limit and temperature the backend rejects, the conversation as the prompt cache key. */
@@ -47,7 +50,9 @@ final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
       if params.instructions().isPresent then params
       else params.toBuilder().instructions(Providers.DefaultInstructions).build()
     val acc = OpenAIResponsesModel.Accumulator()
-    Using.resource(client.responses().createStreaming(complete))(_.stream().forEach(acc.accumulate(_)))
+    Using.resource(client.responses().createStreaming(complete))(_.stream().forEach: ev =>
+      acc.accumulate(ev)
+      OpenAIResponsesModel.failOn(ev))
     acc.response()
 
   /** `GET /models`, the list Codex shows: the models marked for listing, in
@@ -65,7 +70,7 @@ final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
 object ChatGPTModel:
   val BackendUrl = "https://chatgpt.com/backend-api/codex"
   /** The backend lists the models a Codex release of this version may use. */
-  val ClientVersion = "0.156.1"
+  val ClientVersion = "0.172.0"
 
   /** The models of a `GET /models` answer, as listed models of `spec`'s provider. */
   private[atc] def models(spec: ModelSpec, json: ujson.Value): List[ModelSpec] =

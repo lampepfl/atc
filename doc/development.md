@@ -892,7 +892,9 @@ window. Without `-m` or `model`, a session starts with the model last chosen wit
 the user chooses one of the `atc/providers.json` presets, gives its key unless one is
 already bound (read by `Tui.askSecret`, masked and kept out of the prompt history) or signs
 in (`chatgpt`, see `FirstRun.signIn`; `claude-code` needs `claude auth login` beforehand), and
-chooses a model from the provider's list, which also checks the key. `Setup.load` then
+chooses a model from the provider's list, which also checks the key. A saved ChatGPT
+sign-in is used as it is; when the list cannot be fetched with it, setup offers to sign in
+again, which replaces a sign-in the backend no longer accepts. `Setup.load` then
 writes a global config naming only that provider, binds the key in
 `~/.atc/keys.properties` (`KeyBindings.bind`, owner-only, other lines kept), stores the
 list and records the model as the last one, so the session starts without another fetch.
@@ -1086,10 +1088,11 @@ reads and writes; adapters normalize provider-specific accounting.
 Anthropic requests set two cache breakpoints: the system prompt and the last user-role
 message (user text, a continuation or tool results), so each round reads the previous
 round's prefix from the cache. Responses requests use stateless replay with encrypted
-reasoning content. OpenAI-compatible adapters send vendor `thinking` parameters only when
-configured. Non-thinking one-shot requests can retry without a guessed reasoning effort when
-the provider rejects that parameter; unrelated bad requests are not retried by this
-fallback.
+reasoning content. A Responses one-shot call has no continuation, so a response that failed
+or ended incomplete raises instead of returning its partial text. OpenAI-compatible adapters
+send vendor `thinking` parameters only when configured. Non-thinking one-shot requests can
+retry without a guessed reasoning effort when the provider rejects that parameter; unrelated
+bad requests are not retried by this fallback.
 
 Provider SDK request construction remains in each adapter. Shared configuration and client
 setup belong in `Providers`; model selection belongs in `ModelCatalog`. Every adapter builds
@@ -1141,39 +1144,46 @@ preset's `reasoningStyle`, arrive in the answer text between `<thought>` tags;
 could begin a tag, and the stored answer and the replayed turn keep only the answer text.
 
 The `chatgpt` api reaches the models of a ChatGPT plan through the backend the Codex CLI
-uses (the provider's `url`, by default `https://chatgpt.com/backend-api/codex`), signed in the
-way Codex signs in. `ChatGPTAuth.begin` starts an OAuth authorization-code grant with PKCE and
-Codex's client id at `auth.openai.com`, with a callback server on the loopback interface at
-port 1455 or 1457, the two callbacks registered for that client. `FirstRun.signIn` opens the
-browser (`Platform.openBrowser`) and prints the address. When the browser cannot reach the
-callback (atc runs over SSH), the user pastes the address the browser ended on instead, and
-`Login.paste` reads the code from it. The state must match either way. The tokens go to
-`~/.atc/chatgpt-auth.json`, replaced atomically and readable only by its owner; the default
-policy's locked `.atc` rule keeps the agent out of it. The ChatGPT account id comes from
-the ID token's `https://api.openai.com/auth` claim, and the expiry from the access token's
-`exp`. `ChatGPTModel` is the Responses adapter with an OkHttp interceptor that reads the file
-for every request, so every atc process sees the newest tokens. The interceptor refreshes
-tokens five minutes before they expire, and once more after a 401. A refresh token can be
-used once, so a refresh holds a lock on `chatgpt-auth.json.lock` (created readable only by its
-owner) and reads the saved tokens again once it has the lock: another process may have
-refreshed while it waited. When the token endpoint still rejects a refresh token, the saved
-tokens win if their refresh token differs; otherwise `SignInNeeded` tells the user to sign in
-again from `/providers`. A failure of the sign-in step that is not an `IOException`, such as a
-malformed token answer, fails the request as an `IOException` that names only the exception's
-class, since its message may quote a token.
+uses (the provider's `url`, by default `https://chatgpt.com/backend-api/codex`), signed in
+the way Codex signs in. `ChatGPTAuth.begin` starts an OAuth authorization-code grant with
+PKCE and Codex's client id at `auth.openai.com`, with a callback server on the loopback
+interface at port 1455 or 1457, the two callbacks registered for that client.
+`FirstRun.signIn` opens the browser (`Platform.openBrowser`) and prints the address. When
+the browser cannot reach the callback (atc runs over SSH), the user pastes the address the
+browser ended on instead, and `Login.paste` reads the code from it. The state must match
+either way. The tokens go to `~/.atc/chatgpt-auth.json`, replaced atomically and readable
+only by its owner; the default policy's locked `.atc` rule keeps the agent out of it. The
+ChatGPT account id comes from the ID token's `https://api.openai.com/auth` claim, and the
+expiry from the access token's `exp`. `ChatGPTModel` is the Responses adapter with an OkHttp
+interceptor that reads the file for every request, so every atc process sees the newest
+tokens. A conversation stays in the account (workspace) it was first sent to:
+`ChatGPTAuth.keepAccount` refuses a request that carries it under another account, as after
+a sign-in to another workspace in another atc, until `/new` starts a conversation. The model
+list follows the newest sign-in. The interceptor refreshes tokens five minutes before they
+expire, and once more after a 401. A refresh token can be used once, so a refresh holds a
+lock on `chatgpt-auth.json.lock` (created readable only by its owner) and reads the saved
+tokens again once it has the lock: another process may have refreshed while it waited. A
+browser sign-in exchanges its code first and saves under the same lock, so that a refresh in
+progress does not overwrite it. When the token endpoint refuses a refresh token (400 or
+401), the saved tokens win if their refresh token differs; otherwise `SignInNeeded` tells
+the user to sign in again from `/providers`. Another failure (a server error, no connection)
+is not a refusal: the current access token serves until it expires, and then the request
+fails without asking for a new sign-in. A failure of the sign-in step that is not an
+`IOException`, such as a malformed token answer, fails the request as an `IOException` that
+names only the exception's class, since its message may quote a token.
 
-The backend streams only, requires instructions and rejects `max_output_tokens` and
-`temperature`. Its closing `response.completed` carries an empty `output`, so
-`OpenAIResponsesModel.Accumulator` keeps the items of the `response.output_item.done` events
-and uses them when the final response has none. The adapter streams one-shot calls too,
-supplies instructions when a call has none, sends neither setting and sets
-`prompt_cache_key` to the conversation id. The backend never returns the reasoning itself,
-so a model without `reasoningSummary` asks for `auto` summaries, as Codex does, and shows
-them as thinking. Its model list is `GET /models?client_version=`, filtered to the models
-marked `list`, with their context windows and efforts. The backend lists the models that
-Codex release may use, so `ChatGPTModel.ClientVersion` follows Codex releases. The preset
-sends `originator: atc` and `session-id: ${ATC_SESSION}`. `ChatGPTSuite` covers the flow
-against a local server.
+The backend streams only, requires instructions, takes the input only as a list and rejects
+`max_output_tokens` and `temperature`. Its closing `response.completed` carries an empty
+`output`, so `OpenAIResponsesModel.Accumulator` keeps the items of the
+`response.output_item.done` events and uses them when the final response has none. The
+adapter streams one-shot calls too, sends their prompt as a one-message list, supplies
+instructions when a call has none, sends neither setting and sets `prompt_cache_key` to the
+conversation id. The backend never returns the reasoning itself, so a model without
+`reasoningSummary` asks for `auto` summaries and shows them as thinking. Its model list is
+`GET /models?client_version=`, filtered to the models marked `list`, with their context
+windows and efforts. The backend lists the models that Codex release may use, so
+`ChatGPTModel.ClientVersion` follows Codex releases. The preset sends `originator: atc` and
+`session-id: ${ATC_SESSION}`. `ChatGPTSuite` covers the flow against a local server.
 
 The `claude-code` api reaches the models of a Claude plan through the `claude` CLI the user
 installed and signed in to; ATC never reads its credentials. `ClaudeCli` starts `claude -p`

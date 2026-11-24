@@ -157,22 +157,27 @@ class ChatGPTSuite extends munit.FunSuite:
           "rw-------"
         )
 
+  /** Another process holding the lock beside `file` until its input is closed. */
+  private def lockHolder(file: Path): Process =
+    val javaBin =
+      Path.of(sys.props("java.home"), "bin", if atc.platform.Platform.isWindows then "java.exe" else "java")
+    val holder = ProcessBuilder(
+      javaBin.toString,
+      "-cp",
+      sys.props("java.class.path"),
+      "atc.ChatGPTLockHolder",
+      s"$file.lock",
+    ).redirectError(ProcessBuilder.Redirect.INHERIT).nn.start().nn
+    val out = java.io.BufferedReader(java.io.InputStreamReader(holder.getInputStream.nn, UTF_8))
+    assertEquals(out.readLine(), "locked")
+    holder
+
   test("a refresh waits for another process's refresh and uses the tokens it saved"):
     withServer(_ => (200, "application/json", tokenAnswer("mine", "refresh-3"))): (url, requests) =>
       val file = tempFile()
       saved(file, "old", "refresh-1", expiresIn = 0)
-      val javaBin =
-        Path.of(sys.props("java.home"), "bin", if atc.platform.Platform.isWindows then "java.exe" else "java")
-      val holder = ProcessBuilder(
-        javaBin.toString,
-        "-cp",
-        sys.props("java.class.path"),
-        "atc.ChatGPTLockHolder",
-        s"$file.lock",
-      ).redirectError(ProcessBuilder.Redirect.INHERIT).nn.start().nn
+      val holder = lockHolder(file)
       try
-        val out = java.io.BufferedReader(java.io.InputStreamReader(holder.getInputStream.nn, UTF_8))
-        assertEquals(out.readLine(), "locked")
         val access =
           java.util.concurrent.CompletableFuture.supplyAsync(() => ChatGPTAuth(file, url, List(0)).current().access)
         Thread.sleep(300) // it reads the expired tokens and waits for the lock
@@ -180,6 +185,25 @@ class ChatGPTSuite extends munit.FunSuite:
         holder.getOutputStream.nn.close()
         assertEquals(access.get(10, java.util.concurrent.TimeUnit.SECONDS), "theirs")
         assert(requests().isEmpty, "the refresh token the other process used is not used again")
+      finally holder.destroy()
+
+  test("a browser sign-in waits for another process's refresh before saving"):
+    withServer(_ => (200, "application/json", tokenAnswer("signed-in", "refresh-new"))): (url, _) =>
+      val file = tempFile()
+      val auth = ChatGPTAuth(file, url, List(0))
+      val holder = lockHolder(file)
+      try
+        scala.util.Using.resource(auth.begin()): login =>
+          val asked = query(login.url)
+          val pasted = java.util.concurrent.CompletableFuture.supplyAsync(() =>
+            login.paste(s"${asked("redirect_uri")}?code=c&state=${asked("state")}")
+          )
+          Thread.sleep(300) // the code is exchanged; saving waits for the lock
+          assert(!pasted.isDone, "the sign-in was saved while another process held the lock")
+          assertEquals(auth.load(), None)
+          holder.getOutputStream.nn.close()
+          assertEquals(pasted.get(10, java.util.concurrent.TimeUnit.SECONDS).map(_.access), Right("signed-in"))
+        assertEquals(auth.load().map(_.access), Some("signed-in"))
       finally holder.destroy()
 
   test("a refresh token another process used gives way to the tokens it saved; otherwise sign in again"):
@@ -197,6 +221,19 @@ class ChatGPTSuite extends munit.FunSuite:
       val e = intercept[ChatGPTAuth.SignInNeeded](ChatGPTAuth(file, url, List(0)).current())
       assert(e.getMessage.contains("refresh_token_reused"), e.getMessage)
       assert(e.getMessage.contains("/providers"), e.getMessage)
+
+  test("a refresh the token endpoint fails to answer keeps the current token until it expires"):
+    withServer(_ => (503, "text/plain", "unavailable")): (url, requests) =>
+      val file = tempFile()
+      saved(file, "current", "refresh-1", expiresIn = 60_000)
+      val auth = ChatGPTAuth(file, url, List(0))
+      assertEquals(auth.current().access, "current")
+      assertEquals(requests().size, 1, "the refresh was tried")
+      assertEquals(auth.load().map(_.refresh), Some("refresh-1"))
+      saved(file, "current", "refresh-1", expiresIn = 0)
+      val e = intercept[java.io.IOException](auth.current())
+      assert(!e.isInstanceOf[ChatGPTAuth.SignInNeeded], e.toString)
+      assert(e.getMessage.contains("Could not refresh") && e.getMessage.contains("503"), e.getMessage)
 
   // ── the backend ─────────────────────────────────────────────────
 
@@ -273,7 +310,7 @@ class ChatGPTSuite extends munit.FunSuite:
         assertEquals(completion.stop, CompletionStop.Incomplete)
       finally model.close()
 
-  test("a one-shot call streams and carries instructions"):
+  test("a one-shot call streams, carries instructions and sends its prompt as a list"):
     withServer(_ => (200, "text/event-stream", streamed)): (url, requests) =>
       val file = tempFile()
       saved(file, "token", "refresh", expiresIn = 3_600_000)
@@ -283,8 +320,72 @@ class ChatGPTSuite extends munit.FunSuite:
         val body = requests().single.json.obj
         assertEquals(body("stream"), ujson.Bool(true))
         assert(body("instructions").str.nonEmpty)
+        // The backend answers a bare string with 400 "Input must be a list".
+        val input = body("input").arr.toList
+        assertEquals(input.map(m => (m("role").str, m("content").str)), List("user" -> "hello"))
         assert(!body.get("reasoning").exists(_.obj.contains("summary")), "a call that does not think asks for none")
       finally model.close()
+
+  test("a one-shot call that fails or is cut short raises instead of answering"):
+    val message =
+      """{"id":"m","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"partial","annotations":[]}]}"""
+    val error =
+      """event: error
+        |data: {"type":"error","sequence_number":1,"code":"server_error","message":"the backend broke","param":null}
+        |
+        |""".stripMargin
+    val streams = List(
+      backendStreamEnding("incomplete", message) -> "incomplete",
+      backendStreamEnding("failed") -> "failed",
+      error -> "the backend broke",
+    )
+    for (stream, expected) <- streams do
+      withServer(_ => (200, "text/event-stream", stream)): (url, _) =>
+        val file = tempFile()
+        saved(file, "token", "refresh", expiresIn = 3_600_000)
+        val model = ChatGPTModel(backend(url), ChatGPTAuth(file, url, List(0)))
+        try
+          val e = intercept[RuntimeException](model.simple(None, "hello", thinking = false))
+          assert(e.getMessage.contains(expected), e.getMessage)
+        finally model.close()
+
+  test("a conversation stays in its workspace when the sign-in changes to another; /new follows the sign-in"):
+    withServer { r =>
+      if r.path.endsWith("/models") then (200, "application/json", """{"models":[]}""")
+      else (200, "text/event-stream", streamed)
+    } { (url, requests) =>
+      val file = tempFile()
+      val auth = ChatGPTAuth(file, url, List(0))
+      def signedIn(account: String) = Files.writeString(
+        file,
+        upickle.default.write(SignIn(
+          s"token-$account",
+          "refresh",
+          Some(account),
+          System.currentTimeMillis() + 3_600_000
+        )),
+      )
+      def accounts = requests().filter(_.path.endsWith("/responses")).map(_.headers.get("chatgpt-account-id"))
+      val model = ChatGPTModel(backend(url), auth)
+      val other = ChatGPTModel(backend(url), auth)
+      try
+        signedIn("account-1")
+        assertEquals(model.simple(None, "hello", thinking = false).text, "done")
+        signedIn("account-2")
+        for m <- List(model, other) do
+          val e = intercept[Exception](m.simple(None, "hello", thinking = false))
+          val messages = Iterator.iterate[Throwable | Null](e)(_.nn.getCause).takeWhile(_ != null)
+            .map(t => String.valueOf(t.nn.getMessage)).toList
+          assert(messages.exists(_.contains("/new")), messages.toString)
+        assertEquals(accounts, List(Some("account-1")), "the conversation did not reach the other workspace")
+        assertEquals(model.listModels(), Nil, "the model list follows the sign-in")
+        Providers.newConversation()
+        assertEquals(other.simple(None, "hello", thinking = false).text, "done")
+        assertEquals(accounts, List(Some("account-1"), Some("account-2")))
+      finally
+        model.close()
+        other.close()
+    }
 
   test("without a sign-in a request fails before reaching the backend and says how to sign in"):
     withServer(_ => (200, "text/event-stream", streamed)): (url, requests) =>

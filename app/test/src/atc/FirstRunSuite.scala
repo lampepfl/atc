@@ -2,6 +2,7 @@ package atc
 
 import atc.FirstRun.Outcome
 import atc.config.*
+import atc.llm.ChatGPTAuth
 import atc.platform.Platform
 
 import java.nio.file.{Files, Path}
@@ -30,7 +31,7 @@ class FirstRunSuite extends munit.FunSuite:
     def error(text: String): Unit = shown += s"error: $text"
     def done(): Unit = assert(pending.isEmpty, s"unused answers: $pending")
 
-  private val noSignIn: FirstRun.Ui => Boolean = _ => fail("only ChatGPT signs in")
+  private val noSignIn: (FirstRun.Ui, Boolean) => Boolean = (_, _) => fail("only ChatGPT signs in")
 
   private val presets = ProviderPreset.all
   private def preset(name: String) = presets.find(_.name == name).get
@@ -140,9 +141,12 @@ class FirstRunSuite extends munit.FunSuite:
   test("ChatGPT is signed in to instead of asking for a key, and a failed sign-in goes back to the providers"):
     val label = preset("chatgpt").label
     val signIns = mutable.ListBuffer[Boolean]()
-    def signIn(results: Boolean*): FirstRun.Ui => Boolean =
+    def signIn(results: Boolean*): (FirstRun.Ui, Boolean) => Boolean =
       val pending = mutable.Queue(results*)
-      _ => { signIns += pending.head; pending.dequeue() }
+      (_, again) =>
+        assert(!again, "a saved sign-in is kept")
+        signIns += pending.head
+        pending.dequeue()
     val models = (spec: ModelSpec) => List("gpt-a", "gpt-b").map(id => spec.copy(alias = id, modelId = id))
     val ui = Script(Some(label), Some(label), Some("gpt-b"))
     FirstRun.run(ui, presets, KeyBindings.empty, models, signIn(false, true)) match
@@ -155,6 +159,27 @@ class FirstRunSuite extends munit.FunSuite:
     ui.done()
     assertEquals(signIns.toList, List(false, true))
     assert(!ui.shown.result().exists(_.startsWith("secret:")), ui.shown.result())
+
+  test("a saved ChatGPT sign-in the backend refuses is replaced by signing in again"):
+    val label = preset("chatgpt").label
+    val again = mutable.ListBuffer[Boolean]()
+    val signIn: (FirstRun.Ui, Boolean) => Boolean = (_, a) => { again += a; true }
+    var refused = true
+    val models = (spec: ModelSpec) =>
+      if refused then
+        refused = false
+        throw ChatGPTAuth.SignInNeeded("The ChatGPT sign-in expired (HTTP 401)")
+      List("gpt-a").map(id => spec.copy(alias = id, modelId = id))
+    val ui = Script(Some(label), Some("Sign in again"), Some("gpt-a"))
+    FirstRun.run(ui, presets, KeyBindings.empty, models, signIn) match
+      case Outcome.Ready(provider, _, _, _, model) =>
+        assertEquals(provider.name, "chatgpt")
+        assertEquals(model.ref, "chatgpt/gpt-a")
+      case other => fail(s"unexpected $other")
+    ui.done()
+    assertEquals(again.toList, List(false, true))
+    val error = ui.shown.result().find(_.startsWith("error:")).get
+    assert(error.contains("expired (HTTP 401)") && !error.contains("/providers"), error)
 
   // ── what setup writes ───────────────────────────────────────────
 

@@ -46,6 +46,9 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
       else if it.isReasoning then Some(ResponseInputItem.ofReasoning(it.asReasoning()))
       else None
 
+  private def message(role: EasyInputMessage.Role, text: String): ResponseInputItem =
+    ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder().role(role).content(text).build())
+
   private def params(system: SystemPrompt, history: List[Msg], tools: List[ToolSpec]): ResponseCreateParams =
     val b = ResponseCreateParams.builder().model(modelId).instructions(system).store(false)
     // Stateless (store(false)) replay must carry the reasoning between calls: ask
@@ -57,8 +60,6 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
     if searches(tools) then
       b.addTool(Tool.ofWebSearch(WebSearchTool.builder().`type`(WebSearchTool.Type.WEB_SEARCH).build()))
     val input = List.newBuilder[ResponseInputItem]
-    def message(role: EasyInputMessage.Role, text: String): ResponseInputItem =
-      ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder().role(role).content(text).build())
     history.foreach:
       case Msg.User(text) => input += message(EasyInputMessage.Role.USER, text)
       case Msg.Continuation(text) => input += message(EasyInputMessage.Role.USER, text)
@@ -143,10 +144,7 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
           ev.reasoningTextDelta().toScala.foreach(d => sink.thinking(d.delta()))
           ev.reasoningSummaryTextDelta().toScala.foreach(d => sink.thinking(d.delta()))
           ev.reasoningSummaryPartDone().toScala.foreach(_ => sink.thinking("\n\n"))
-          ev.error().toScala.foreach(e => throw RuntimeException(s"OpenAI stream error: ${e.message()}"))
-          ev.failed().toScala.foreach: f =>
-            val why = f.response().error().toScala.map(_.message()).getOrElse("unknown")
-            throw RuntimeException(s"OpenAI response failed: $why")
+          OpenAIResponsesModel.failOn(ev)
         }.onCompleteFuture()
       }
       val r = acc.response()
@@ -170,17 +168,33 @@ class OpenAIResponsesModel(spec: ModelSpec) extends OpenAIShapedModel(spec):
 
   def simple(system: Option[String], prompt: String, thinking: Boolean): Reply =
     def request(reasoning: Option[Reasoning]): Response =
-      val b = ResponseCreateParams.builder().model(modelId).input(prompt).store(false)
+      // A list, not a bare string: the ChatGPT backend takes no other input.
+      val b = ResponseCreateParams.builder().model(modelId)
+        .inputOfResponse(List(message(EasyInputMessage.Role.USER, prompt)).asJava).store(false)
       system.foreach(b.instructions)
       configure(b, thinking, reasoning)
       send(b.build())
     val r = withEffortFallback(thinking, reasoning(thinking))(request)
+    // A one-shot answer has no continuation: a failed or cut-short response is an error, not a reply.
+    val status = r.status().toScala
+    if status.contains(ResponseStatus.FAILED) then
+      throw RuntimeException(s"OpenAI response failed: ${OpenAIResponsesModel.failure(r)}")
+    if status.contains(ResponseStatus.INCOMPLETE) then
+      val reason = r.incompleteDetails().toScala.flatMap(_.reason().toScala).fold("unknown")(_.asString())
+      throw RuntimeException(s"The OpenAI response is incomplete ($reason)")
     val text = r.output().asScala.filter(_.isMessage)
       .flatMap(_.asMessage().content().asScala.flatMap(_.outputText().toScala.map(_.text())))
       .mkString
     Reply(text, usageOf(r))
 
 object OpenAIResponsesModel:
+  /** Throw the failure a stream event reports: an `error` event, or a `response.failed`. */
+  def failOn(ev: ResponseStreamEvent): Unit =
+    ev.error().toScala.foreach(e => throw RuntimeException(s"OpenAI stream error: ${e.message()}"))
+    ev.failed().toScala.foreach(f => throw RuntimeException(s"OpenAI response failed: ${failure(f.response())}"))
+
+  private def failure(r: Response): String = r.error().toScala.map(_.message()).getOrElse("unknown")
+
   /** The SDK's accumulator, keeping the finished output items as well: the
     * ChatGPT backend streams them but ends with a `response.completed` whose
     * `output` is empty, as Codex expects. */

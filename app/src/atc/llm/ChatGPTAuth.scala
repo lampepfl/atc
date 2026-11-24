@@ -24,9 +24,11 @@ import scala.util.control.NonFatal
   * owner; the default policy denies the agent access to `.atc`.
   *
   * The file is read again for every request, so every atc process uses the
-  * newest tokens. A refresh token can be used once: each refresh saves the
+  * newest tokens, except that a conversation stays in the ChatGPT account
+  * (workspace) it started in ([[keepAccount]]). A refresh token can be used once: each refresh saves the
   * one it returns, holding a lock on a file beside the tokens so that two
-  * processes do not refresh with the same one. */
+  * processes do not refresh with the same one. A browser sign-in saves under
+  * the same lock, so that a refresh in progress does not overwrite it. */
 final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: List[Int] = ChatGPTAuth.Ports):
   import ChatGPTAuth.*
 
@@ -37,7 +39,8 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
     try Option.when(Files.isRegularFile(file))(read[SignIn](Files.readString(file).nn))
     catch case NonFatal(_) => None
 
-  /** The sign-in for a request: the saved one, refreshed first when it expires soon. */
+  /** The sign-in for a request: the saved one, refreshed first when it expires soon. When the
+    * refresh fails without a refusal, the saved one serves until it expires. */
   def current(): SignIn = synchronized:
     def fresh(t: SignIn) = t.expiresAt - System.currentTimeMillis() > RefreshMargin.toMillis
     val saved = signedIn()
@@ -46,7 +49,13 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
       locked:
         // Another process may have refreshed while this one waited for the lock.
         val latest = signedIn()
-        if fresh(latest) then latest else refresh(latest)
+        if fresh(latest) then latest
+        else
+          try refresh(latest)
+          catch
+            case e: IOException if !e.isInstanceOf[SignInNeeded] && latest.expiresAt > System.currentTimeMillis() =>
+              Debug.log(s"using the ChatGPT token until it expires: ${e.getMessage}")
+              latest
 
   /** A new sign-in after the backend rejected `stale`. Another process may have refreshed already. */
   def renewed(stale: SignIn): SignIn = synchronized:
@@ -56,6 +65,18 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
 
   private def signedIn(): SignIn = load().getOrElse(throw SignInNeeded("Not signed in to ChatGPT"))
 
+  /** The last conversation a request carried, and the account it was sent to. */
+  private var conversationAccount: Option[(String, String)] = None
+
+  /** Check that `t` may carry `conversation`: refused when the conversation was sent to another
+    * account, as after signing in to another workspace in another atc. Otherwise `conversation`
+    * now belongs to the account of `t`, when the sign-in names one. */
+  def keepAccount(conversation: String, t: SignIn): Unit = synchronized:
+    (conversationAccount, t.accountId) match
+      case (Some((c, account)), Some(now)) if c == conversation && account != now => throw AccountChanged()
+      case (_, Some(now)) => conversationAccount = Some(conversation -> now)
+      case _ => ()
+
   /** Run `step` holding the lock on `<file>.lock`, which keeps two atc processes from using
     * the same single-use refresh token. */
   private def locked[T](step: => T): T =
@@ -63,14 +84,18 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
     val channel = OwnerOnlyFiles.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
     Using.resource(channel)(c => Using.resource(c.lock().nn)(_ => step))
 
+  /** Save a new sign-in, under the same locks as a refresh. */
+  private def commit(t: SignIn): SignIn = synchronized(locked(save(t)))
+
   private def refresh(saved: SignIn): SignIn =
     val body = ujson.Obj("grant_type" -> "refresh_token", "client_id" -> ClientId, "refresh_token" -> saved.refresh)
     try save(tokens(post(okhttp3.RequestBody.create(ujson.write(body), JsonType)), Some(saved)))
     catch
-      case e: TokenRejected =>
+      case e: TokenRejected if e.refused =>
         // A refresh token is single-use: another process may have used it and saved the next one.
         load().filter(_.refresh != saved.refresh)
           .getOrElse(throw SignInNeeded(s"The ChatGPT sign-in expired (${e.getMessage})"))
+      case e: TokenRejected => throw IOException(s"Could not refresh the ChatGPT sign-in (${e.getMessage})")
 
   /** Start signing in: the callback server listens until the login is closed. */
   def begin(): Login =
@@ -146,7 +171,7 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
             params.get("code").filter(_.nonEmpty) match
               case None => Left("The callback carried no authorization code")
               case Some(code) =>
-                try Right(save(tokens(exchange(code), None)))
+                try Right(commit(tokens(exchange(code), None)))
                 catch case NonFatal(e) => Left(Debug.message(e))
         outcome.fold(why => done.completeExceptionally(RuntimeException(why)), done.complete)
         outcome
@@ -167,15 +192,16 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
     Using.resource(http.newCall(request).execute()): response =>
       val text = Option(response.body).fold("")(_.string())
       if !response.isSuccessful then
-        throw TokenRejected(s"HTTP ${response.code}${errorOf(text).fold("")(e => s": $e")}")
+        val why = s"HTTP ${response.code}${errorOf(text).fold("")(e => s": $e")}"
+        throw TokenRejected(why, refused = response.code == 400 || response.code == 401)
       ujson.read(text)
 
   /** The sign-in of a token-endpoint answer; a refresh may omit what did not change. */
   private def tokens(json: ujson.Value, previous: Option[SignIn]): SignIn =
     def field(name: String) = json.obj.get(name).flatMap(_.strOpt).filter(_.nonEmpty)
-    val access = field("access_token").getOrElse(throw TokenRejected("the answer has no access token"))
+    val access = field("access_token").getOrElse(throw TokenRejected("the answer has no access token", refused = false))
     val refresh = field("refresh_token").orElse(previous.map(_.refresh))
-      .getOrElse(throw TokenRejected("the answer has no refresh token"))
+      .getOrElse(throw TokenRejected("the answer has no refresh token", refused = false))
     val idClaims = field("id_token").flatMap(claims)
     val accessClaims = claims(access)
     def account(claims: ujson.Value) = claims.obj.get("https://api.openai.com/auth").flatMap(_.objOpt)
@@ -224,9 +250,18 @@ object ChatGPTAuth:
 
   /** The request cannot be authorized until the user signs in (again). An
     * `IOException`, so OkHttp reports it as a failed call. */
-  final class SignInNeeded(message: String) extends IOException(s"$message; choose chatgpt in /providers to sign in")
+  final class SignInNeeded(val reason: String)
+      extends IOException(s"$reason; choose chatgpt in /providers to sign in")
 
-  private final class TokenRejected(message: String) extends IOException(message)
+  /** The token endpoint did not give tokens. `refused`: it turned the grant down (400 or 401), so
+    * signing in again is the remedy; otherwise the failure may pass. */
+  /** The sign-in now belongs to another account than the conversation of the request. */
+  final class AccountChanged
+      extends IOException(
+        "The ChatGPT sign-in changed to another workspace during this conversation; /new starts a conversation there"
+      )
+
+  private final class TokenRejected(message: String, val refused: Boolean) extends IOException(message)
 
   private val random = SecureRandom()
   private def randomToken(bytes: Int): String =
