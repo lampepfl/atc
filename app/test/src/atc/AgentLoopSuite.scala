@@ -164,6 +164,64 @@ class AgentLoopSuite extends munit.FunSuite:
     assert(tr.output.contains("Missing 'code'"), tr.output)
     assert(env.session.isEmpty, "the REPL was started")
 
+  /** A `run_scala` call with `texts`, its arguments built as a provider would send them. */
+  private def withTexts(id: String, code: String, texts: ujson.Value): ToolCall =
+    ToolCall(id, Prompts.ToolName, ujson.write(ujson.Obj("code" -> code, "texts" -> texts)))
+
+  test("a call's texts reach its code exactly as sent, and only that call"):
+    // What a Scala literal would need escapes for: triple quotes, an escaped quote, a
+    // backslash before `n`, `$` interpolation, and more than a string constant can hold.
+    val hostile =
+      "def f():\n    \"\"\"Doc with \\\"quotes\\\" and a literal \\\\n.\"\"\"\n    return f\"{name}: $price ${x}\"\n"
+    val big = "x" * 70000 + "\n"
+    val oldLine = "old line with \"quotes\" and $dollar"
+    val newLine = "new line with \"\"\" and \\ a backslash"
+    val first = withTexts(
+      "c1",
+      """write("hostile.py", texts("hostile.py")); replaceExact("edit.txt", texts("old"), texts("new")); write("big.txt", texts("big"))""",
+      ujson.Obj("hostile.py" -> hostile, "old" -> oldLine, "new" -> newLine, "big" -> big),
+    )
+    val second =
+      ToolCall("c2", Prompts.ToolName, ujson.write(ujson.Obj("code" -> """println(texts.isEmpty); texts("old")""")))
+    val loop = Loop(ScriptedModel(
+      "m",
+      Seq(
+        ScriptedModel.Comp(completion("x", List(first), reason = "tool_use")),
+        ScriptedModel.Comp(completion("x", List(second), reason = "tool_use")),
+        ScriptedModel.Reply("done"),
+      ),
+    ))
+    import loop.*
+    env.file("edit.txt", s"keep\n$oldLine\nkeep\n")
+    turn("go")
+    val results = toolResults.map(_.results.head)
+    assert(!results.head.isError, results.head.output)
+    assertEquals(env.contents("hostile.py"), hostile)
+    assertEquals(env.contents("edit.txt"), s"keep\n$newLine\nkeep\n")
+    assertEquals(env.contents("big.txt"), big)
+    assertEquals(ui.toolTexts.head.map(_._1), List("hostile.py", "old", "new", "big"))
+    assert(results(1).isError, results(1).output)
+    assert(results(1).output.contains("true"), results(1).output)
+    assert(results(1).output.contains("""No text named "old" in this call's texts; this call sent no texts."""))
+
+  test("texts of another shape than an object of strings are refused without touching the REPL"):
+    val calls = List(
+      withTexts("c1", "1", ujson.Str("""{"a": "b"}""")),
+      withTexts("c2", "1", ujson.Arr(ujson.Str("a"))),
+      withTexts("c3", "1", ujson.Obj("a.py" -> 1)),
+    )
+    val loop = Loop(ScriptedModel("m", Seq(ScriptedModel.Comp(completion("x", calls, reason = "tool_use")))))
+    import loop.*
+    turn("go")
+    val outputs = toolResults.head.results.map(r => (r.isError, r.output))
+    assert(outputs.forall(_._1), outputs.toString)
+    assert(outputs.forall(_._2.contains("must be a JSON object mapping names to strings")), outputs.toString)
+    assert(outputs.forall(_._2.contains("""texts(\"app.py\")""")), "each shows the expected shape")
+    assert(outputs(0)._2.contains("send the object itself, not its JSON text"), outputs(0)._2)
+    assert(outputs(1)._2.contains("it is an array"), outputs(1)._2)
+    assert(outputs(2)._2.contains("""the value of "a.py" is not a string"""), outputs(2)._2)
+    assert(env.session.isEmpty, "the REPL was started")
+
   test("an unknown tool name is reported back to the model"):
     val unknown = completion("x", List(ToolCall("c1", "delete_everything", "{}")), reason = "tool_use")
     val loop = Loop(ScriptedModel("m", Seq(ScriptedModel.Comp(unknown), ScriptedModel.Reply("ok"))))

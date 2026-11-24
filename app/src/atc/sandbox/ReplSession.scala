@@ -1,8 +1,7 @@
 package atc.sandbox
 
 import atc.Threads
-import atc.host.ClassifiedImpl
-import atc.lib.{Derivations, Interface}
+import atc.host.{ClassifiedImpl, Host}
 import atc.perms.Mode
 import atc.platform.Platform
 
@@ -193,7 +192,7 @@ object ReplSession:
     "The code nests too deeply for the compiler to parse (stack overflow); split the expression into smaller definitions."
 
 /** One persistent REPL with its own sandbox class loader and host. */
-final class ReplSession(config: SandboxConfig, host: Interface & Derivations, preambleOverride: Option[String] = None):
+final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Option[String] = None):
   import ReplSession.*
 
   private val outputCapture = BoundedOutputStream(MaxOutputBytes)
@@ -253,6 +252,10 @@ final class ReplSession(config: SandboxConfig, host: Interface & Derivations, pr
     if t != null then t.interrupt()
 
   def run(code: String): ExecutionResult = run(code, () => false)
+
+  /** [[run]] with the `texts` the agent's call sent, which its code reads through `texts`. */
+  def run(code: String, texts: Map[String, String], cancelled: () => Boolean): ExecutionResult =
+    host.withTexts(texts)(run(code, cancelled))
 
   /** [[run]] for a caller with a stop flag of its own, `cancelled`: raised before this call,
     * when an `interrupt()` it caused may already have been cleared, it keeps the code from

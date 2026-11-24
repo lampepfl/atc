@@ -10,7 +10,8 @@ trait AgentUI:
   def assistantEnd(): Unit
   /** A piece of the model's reasoning, when the provider streams it. */
   def thinkingDelta(text: String): Unit
-  def toolStart(code: String): Unit
+  /** A `run_scala` call starts: its `code` and the `texts` it sent, in the order sent. */
+  def toolStart(code: String, texts: List[(String, String)]): Unit
   /** `millis` is execution time excluding the time spent waiting for the user. */
   def toolEnd(result: ExecutionResult, millis: Long): Unit
   def status(text: String): Unit

@@ -348,6 +348,21 @@ object Json:
 @assumeSafe
 trait Interface:
 
+  // ── Texts of this call ──────────────────────────────────────────
+
+  /** The `texts` argument of the `run_scala` call being run: each name to its
+   *  string exactly as sent, with no Scala escaping. Put file contents, code in
+   *  other languages and the strings of an edit there rather than in Scala
+   *  literals, where `"""`, `\` and `$` need escapes:
+   *  {{{
+   *  // run_scala {"code": "...", "texts": {"app.py": "...", "old": "...", "new": "..."}}
+   *  write("app.py", texts("app.py"))
+   *  replaceExact("main.py", texts("old"), texts("new"))
+   *  }}}
+   *  A name the call did not send throws `NoSuchElementException` listing the names
+   *  it did. Each call has its own texts: keep one in a `val` to use it later. */
+  def texts: Map[String, String]
+
   // ── File system ─────────────────────────────────────────────────
 
   /** Ask the user for `access` (`Read` unless given) to `path`, a file or a whole

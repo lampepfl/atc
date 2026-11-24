@@ -321,13 +321,15 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   // ── tool blocks ───────────────────────────────────────────────────
 
-  def toolStart(code: String): Unit = toolStart(code, "run_scala")
+  def toolStart(code: String, texts: List[(String, String)]): Unit = toolStart(code, "run_scala", texts)
 
   /** Open a code block titled `title`: the agent's `run_scala`, or the user's own `/run`. */
-  def toolStart(code: String, title: String): Unit = frame:
+  def toolStart(code: String, title: String): Unit = toolStart(code, title, Nil)
+
+  private def toolStart(code: String, title: String, texts: List[(String, String)]): Unit = frame:
     statusLine.setOperation("running Scala")
     beginBlock()
-    tool.start(code, title)
+    tool.start(code, title, texts)
     flushProcessEvents()
     if !plain && !statusLine.shown then screen.spin(Indent, "running")
 

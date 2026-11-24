@@ -43,9 +43,10 @@ class PromptsSuite extends munit.FunSuite:
     assert(prompt.contains(s"working directory: ${ujson.write(platform.workingDirectory)}"), prompt)
     assert(prompt.contains(s"OS: ${ujson.write(platform.operatingSystem)}"), prompt)
     assert(prompt.contains("- user: at the terminal"), prompt)
-    // The prompt is itself an `s`-interpolated triple-quoted literal, so the quirk it
-    // describes must survive its own escape processing.
-    assert(prompt.contains("In a plain `\"\"\"` literal `\\\"` stays a backslash"), prompt)
+    // The prompt is itself an `s`-interpolated triple-quoted literal, so the characters
+    // the editing rule names must survive its own escape processing.
+    assert(prompt.contains("so `\"\"\"`, `\\` and `$` need no Scala"), prompt)
+    assert(prompt.contains("`replaceExact(path, texts(\"old\"), texts(\"new\"))`"), prompt)
 
   test("a scripted run tells the model that nobody answers ask or permission prompts"):
     val env = TestEnv(prefix = "atc-prompt")

@@ -128,11 +128,20 @@ App → Agent → ChatModel.complete → CompletionPolicy
 `run_scala`, invokes the REPL, records execution time and renders results through
 `ToolOutput`. `AgentMessages` holds the notices exchanged with the model and the UI.
 
+Besides `code`, a call may send `texts`, an object of named strings that the code reads with
+`texts("name")`. File contents, code in other languages and the strings of an edit then reach
+the code exactly as sent: only JSON escaping applies, which every tool-calling model handles,
+instead of Scala's rules for `"""`, `\` and `$`, and no string constant limits their size.
+`Host` holds them for the evaluation (`withTexts`), so they follow any call that reaches the
+host, and a later call or `/run` sees none. Another shape is refused before the REPL starts,
+with an example of the expected one.
+
 `ToolOutput.renderForModel` appends at most one hint keyed on a failed run's output (a
 safe-mode rejection, a missing capability, a command that could not start) and, after the
 length cut, one keyed on the snippet itself (`codeHint`): a `\"` inside a plain
 triple-quoted literal stays a backslash and a quote, so a Python docstring written as
-`\"\"\"` reaches the file with backslashes. The system prompt's editing rule says the same.
+`\"\"\"` reaches the file with backslashes. The hint and the system prompt's editing rule
+send such text through `texts`.
 Its Environment block says whether a user is present (`AgentEnvironment.userPresent`, false
 for a `-p` run, where `ask` returns `None`), so the model does not wait for an answer nobody
 gives. The REPL echo of a `ProcessResult` shows the exit code and the length of each stream
@@ -1591,16 +1600,16 @@ always draws the whole list.
 
 `ToolHistory` retains up to 200 results, the default `maxToolCalls` of one turn, within an
 eight-million-character budget, which is what bounds its memory. Each result retains at most
-two million output characters plus bounded code and file previews; live command output is
-capped separately at one million characters. A live view keeps its text in a `TailBuffer`,
-which grows to half again its cap before cutting back, so small appends do not move the whole
-text. `/output` lists the retained results in columns, and `/output <n|last> [line]` writes one
-as the expanded view writes a block, without evaluating code again: the code, the output or
-error, the command output and each file's preview (coloured as a diff) under their headings,
-then the verdict. Those lines are numbered as one run and shown 200 at a time; a page that
-stops early ends with the command for the next. Classified terminal-only output is never added
-to the history, and `/new` and `/resume` clear it. These records are for inspection and are not
-part of saved conversations.
+two million output characters plus bounded code, texts and file previews; live command
+output is capped separately at one million characters. A live view keeps its text in a
+`TailBuffer`, which grows to half again its cap before cutting back, so small appends do not
+move the whole text. `/output` lists the retained results in columns, and `/output <n|last> [line]` writes one
+as the expanded view writes a block, without evaluating code again: the code, its texts, the
+output or error, the command output and each file's preview (coloured as a diff) under their
+headings, then the verdict. Those lines are numbered as one run and shown 200 at a time; a page
+that stops early ends with the command for the next. Classified terminal-only output is never
+added to the history, and `/new` and `/resume` clear it. These records are for inspection and
+are not part of saved conversations.
 
 `PromptReader.readAnswer` consumes JLine's preserved input-cancellation interrupt so the
 next menu can read normally. A plain yes/no confirmation (`Tui.confirm`) takes only `y` or

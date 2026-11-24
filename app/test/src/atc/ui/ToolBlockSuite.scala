@@ -52,7 +52,7 @@ class ToolBlockSuite extends munit.FunSuite:
 
   test("a finished block in the compact view leaves only its summary"):
     val (screen, tool, out) = block(expanded = false)
-    screen.frame(tool.start("val xs = 1 to 30\nxs.foreach(println)", "run_scala"))
+    screen.frame(tool.start("val xs = 1 to 30\nxs.foreach(println)", "run_scala", Nil))
     for i <- 1 to 30 do
       screen.frame(tool.emit(s"line $i\n"))
       assert(rows(out).size <= screen.height - 3, s"the running block must fit above the footer: ${rows(out)}")
@@ -65,7 +65,7 @@ class ToolBlockSuite extends munit.FunSuite:
   test("a summary longer than the width is cut to one row, styles and all"):
     val (screen, tool, out) = block(expanded = false)
     val code = "grep(\"app/src/atc/agent/ToolRunner.scala\", \"^(final class|object)\").foreach(m => println(m.line))"
-    screen.frame(tool.start(code, "run_scala"))
+    screen.frame(tool.start(code, "run_scala", Nil))
     screen.frame(tool.end(ExecutionResult(success = true, output = ""), 7))
     val summary = rows(out)
     assertEquals(summary.head, ("● run_scala  " + code).take(78) + "…")
@@ -73,7 +73,7 @@ class ToolBlockSuite extends munit.FunSuite:
 
   test("a failed block's summary says why"):
     val (screen, tool, out) = block(expanded = false)
-    screen.frame(tool.start("val x: Int = \"s\"", "run_scala"))
+    screen.frame(tool.start("val x: Int = \"s\"", "run_scala", Nil))
     val diagnostic = "-- [E007] Type Mismatch Error: ------\n1 |val x: Int = \"s\"\n  |             ^^^\n"
     screen.frame(tool.end(ExecutionResult(success = false, output = diagnostic), 5))
     assertEquals(
@@ -83,7 +83,7 @@ class ToolBlockSuite extends munit.FunSuite:
 
   test("the expanded view writes the block out in full"):
     val (screen, tool, out) = block(expanded = true)
-    screen.frame(tool.start("println(1)", "run_scala"))
+    screen.frame(tool.start("println(1)", "run_scala", Nil))
     screen.frame(tool.print("1\n", "1\n"))
     screen.frame(tool.end(ExecutionResult(success = true, output = "1\nval r: Int = 1"), 3))
     assertEquals(
@@ -122,13 +122,13 @@ class ToolBlockSuite extends munit.FunSuite:
 
   test("every line of a classified print is marked"):
     val (screen, tool, out) = block(expanded = true)
-    screen.frame(tool.start("println(secret)", "run_scala"))
+    screen.frame(tool.start("println(secret)", "run_scala", Nil))
     screen.frame(tool.print("[classified]\n", "first secret\nsecond secret\n"))
     assertEquals(rows(out).takeRight(2), List("  │ [classified] first secret", "  │ [classified] second secret"))
 
   test("the expanded view keeps a long output line inside the gutter, across chunks"):
     val (screen, tool, out) = block(expanded = true)
-    screen.frame(tool.start("println(long)", "run_scala"))
+    screen.frame(tool.start("println(long)", "run_scala", Nil))
     screen.frame(tool.emit("x" * 60))
     screen.frame(tool.emit("y" * 60 + "\nshort\n"))
     val shown = rows(out).dropWhile(!_.contains("output")).drop(1)
@@ -142,7 +142,7 @@ class ToolBlockSuite extends munit.FunSuite:
     def toggle(): Unit =
       expanded = !expanded
       screen.frame { tool.detach(); tool.reattach() }
-    screen.frame(tool.start("println(long)", "run_scala"))
+    screen.frame(tool.start("println(long)", "run_scala", Nil))
     screen.frame(tool.emit("abc")) // the expanded view's row now holds three cells
     toggle()
     screen.frame(tool.emit("\n" + "x" * 120 + "\n"))
@@ -155,7 +155,7 @@ class ToolBlockSuite extends munit.FunSuite:
 
   test("repeated identical file changes fold into one row with a count"):
     val (screen, tool, out) = block(expanded = false)
-    screen.frame(tool.start("edits", "run_scala"))
+    screen.frame(tool.start("edits", "run_scala", Nil))
     for _ <- 1 to 4 do tool.fileChanged(atc.host.FileChange("a.py", "updated (+1 -1)", ""))
     tool.fileChanged(atc.host.FileChange("b.py", "created (+3 -0)", ""))
     screen.frame(tool.end(ExecutionResult(success = true, output = ""), 5))
@@ -163,7 +163,7 @@ class ToolBlockSuite extends munit.FunSuite:
 
   test("output that arrives while a pop-up is drawn waits for it to close"):
     val (screen, tool, out) = block(expanded = false)
-    screen.frame(tool.start("parallel(tasks)", "run_scala"))
+    screen.frame(tool.start("parallel(tasks)", "run_scala", Nil))
     screen.frame(tool.emit("before\n"))
     screen.frame { tool.endOutput(); tool.hold() }
     val shown = out.size
@@ -189,7 +189,7 @@ class ToolBlockSuite extends munit.FunSuite:
 
   test("/output writes a retained call as the expanded view writes a block"):
     val (screen, tool, out) = block(expanded = false)
-    screen.frame(tool.start("write(\"a.txt\", s)\nprintln(1)", "run_scala"))
+    screen.frame(tool.start("write(\"a.txt\", s)\nprintln(1)", "run_scala", Nil))
     screen.frame(tool.fileChanged(FileChange("a.txt", "updated (+1 -1)", "@@ line 2 @@\n- two\n+ 2")))
     screen.frame(tool.commandOutput("built\n"))
     screen.frame(tool.end(ExecutionResult(success = true, output = "1"), 4))
@@ -215,7 +215,7 @@ class ToolBlockSuite extends munit.FunSuite:
 
   test("/output pages a long result, repeating the heading of the part a page starts in"):
     val (screen, tool, out) = block(expanded = false)
-    screen.frame(tool.start("1 to 300", "run_scala"))
+    screen.frame(tool.start("1 to 300", "run_scala", Nil))
     screen.frame(tool.end(ExecutionResult(success = false, output = (1 to 300).mkString("\n")), 2))
     val entry = tool.history.latest.get
     out.reset()
@@ -237,9 +237,9 @@ class ToolBlockSuite extends munit.FunSuite:
 
   test("/output lists the retained calls in columns"):
     val (screen, tool, out) = block(expanded = false)
-    screen.frame(tool.start("val x = 1\nx", "run_scala"))
+    screen.frame(tool.start("val x = 1\nx", "run_scala", Nil))
     screen.frame(tool.end(ExecutionResult(success = true, output = "val x: Int = 1"), 12))
-    screen.frame(tool.start("oops", "/run"))
+    screen.frame(tool.start("oops", "/run", Nil))
     screen.frame(tool.end(ExecutionResult(success = false, output = "Not found: oops"), 7))
     out.reset()
     screen.frame(tool.writeIndex())
@@ -249,8 +249,33 @@ class ToolBlockSuite extends munit.FunSuite:
     val out = ByteArrayOutputStream()
     val screen = TestTerminal.screen(width = 40, output = out)
     val tool = ToolBlock(screen, () => true)
-    screen.frame(tool.start("val x: Int = \"s\"", "run_scala"))
+    screen.frame(tool.start("val x: Int = \"s\"", "run_scala", Nil))
     val diagnostic = "-- [E007] Type Mismatch Error: " + "-" * 50 + "\n1 |val x: Int = \"s\""
     screen.frame(tool.end(ExecutionResult(success = false, output = diagnostic), 5))
     val shown = rows(out).dropWhile(!_.contains("E007"))
     assertEquals(shown.take(2), List("  │ -- [E007] Type Mismatch Error: ----", "  │ 1 |val x: Int = \"s\""))
+
+  test("the expanded view and /output show a call's texts under their names, after the code"):
+    val (screen, tool, out) = block(expanded = true)
+    screen.frame(tool.start(
+      "write(\"a.py\", texts(\"a.py\"))",
+      "run_scala",
+      List("a.py" -> "def f():\n    return 1\n")
+    ))
+    screen.frame(tool.end(ExecutionResult(success = true, output = ""), 3))
+    val texts = List("  ├ texts(\"a.py\")", "  │ def f():", "  │     return 1")
+    assertEquals(rows(out).slice(2, 5), texts)
+    out.reset()
+    assertEquals(screen.frame(tool.writeRetained(tool.history.latest.get, 1)), 4)
+    assertEquals(rows(out).slice(2, 5), texts)
+
+  test("the compact summary of a call with texts is the usual one"):
+    val (screen, tool, out) = block(expanded = false)
+    screen.frame(tool.start("write(\"a.py\", texts(\"a.py\"))", "run_scala", List("a.py" -> "print(1)\n")))
+    screen.frame(tool.end(ExecutionResult(success = true, output = ""), 3))
+    assertEquals(rows(out), List("● run_scala  write(\"a.py\", texts(\"a.py\"))", "  └ ok 3 ms · /output 1"))
+
+  test("a text's heading stays on one row whatever its name holds"):
+    val (screen, tool, out) = block(expanded = true)
+    screen.frame(tool.start("1", "run_scala", List("a\nb\tc" -> "x")))
+    assertEquals(rows(out).slice(2, 4), List("  ├ texts(\"a b c\")", "  │ x"))

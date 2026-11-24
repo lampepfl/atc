@@ -33,6 +33,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
   private var liveTruncated = false
   private val fileChanges = mutable.ListBuffer[FileChange]()
   private var currentCode = ""
+  private var currentTexts = List.empty[(String, String)]
   private var title = ""
   /** The code as the block shows it, one (highlighted) line each. */
   private var codeLines = List.empty[String]
@@ -49,10 +50,11 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
 
   def isOpen: Boolean = open
 
-  /** Open a code block titled `title`. */
-  def start(code: String, title: String): Unit =
+  /** Open a code block titled `title` for `code` and the `texts` its call sent. */
+  def start(code: String, title: String, texts: List[(String, String)]): Unit =
     this.title = title
     currentCode = code
+    currentTexts = texts
     // The code is model-written: sanitize before highlighting/printing.
     val clean = Ansi.sanitize(code)
     codeLines = if screen.colors > 0 then Highlight.scala(clean) else clean.linesIterator.toList
@@ -86,9 +88,17 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       wrappedWidth = width
     wrapped
 
+  /** The title, the code and the texts, as the expanded view writes them. */
   private def writeHead(): Unit =
     write(titleRow(title) + "\n")
     codeRows.foreach(row => write(row + "\n"))
+    currentTexts.foreach: (name, text) =>
+      write(textHeading(name))
+      text.linesIterator.map(Ansi.sanitize).flatMap(outputRows).foreach(row => write(gutter(Dim) + row + "\n"))
+
+  /** The heading of a text: how the code names it, on one row whatever the name holds. */
+  private def textHeading(name: String): String =
+    section(Ansi.sanitize(s"""texts("$name")""").map(c => if c == '\n' || c == '\t' then ' ' else c), Dim)
 
   def fileChanged(change: FileChange): Unit =
     if open && fileChanges.size < 50 then fileChanges += change
@@ -232,7 +242,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
     * diagnostics, echoed values and exceptions, follows, then the verdict. */
   def end(r: ExecutionResult, millis: Long): Unit =
     val liveText = liveCaptured.toString + (if liveTruncated then "\n[retained live output limit reached]" else "")
-    val record = history.add(title, currentCode, r, millis, liveText, fileChanges.toList)
+    val record = history.add(title, currentCode, currentTexts, r, millis, liveText, fileChanges.toList)
     screen.stopSpinner()
     if compact then
       val live = liveRegion()
@@ -336,7 +346,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
       write(head + screen.fit(first, Screen.displayWidth(head)) + "\n")
 
   /** `/output <id> [line]`: retained call `e` written out as the expanded view writes a
-    * block. Its code, output, command output and file previews count as one run of lines;
+    * block. Its code, texts, output, command output and file previews count as one run of lines;
     * the page holds [[RetainedPage]] of them from line `from` on, each part under its
     * heading, and ends with the verdict or with where the next page starts. Nothing is
     * written when `from` is past the last line. Returns the number of lines. */
@@ -347,6 +357,7 @@ private[ui] final class ToolBlock(screen: Screen, expanded: () => Boolean):
     // Each part: its heading row, if any, the colour of its gutter and its lines.
     val parts: List[(Option[String], Int, List[String])] =
       (None, Magenta, if screen.colors > 0 then Highlight.scala(code) else code.linesIterator.toList) ::
+        e.texts.map((name, text) => (Some(textHeading(name)), Dim, lines(text))) :::
         (Some(section(result, resultBar)), resultBar, lines(e.output)) ::
         Option.when(e.live.nonEmpty)((Some(section("command output", Dim)), Dim, lines(e.live))).toList :::
         e.changes.map: c =>

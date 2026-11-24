@@ -76,8 +76,8 @@ object ToolOutput:
   private def codeHint(code: String): Option[String] =
     Option.when(hasEscapedQuoteInRawLiteral(code))(
       "inside a plain triple-quoted literal `\\\"` is two characters, a backslash and a quote, so the text " +
-        "you wrote contains backslashes; to put `\"\"\"` in text, prefix the literal with `s` (`s\"\"\"...\"\"\"` " +
-        "processes escapes; write `$` as `$$` in it) or use an ordinary `\"...\"` string."
+        "you wrote contains backslashes; send such text in the call's `texts` argument instead and read it " +
+        "with `texts(\"name\")`, which keeps it exactly as sent."
     )
 
   /** Whether `code` has a triple-quoted literal without an interpolator prefix whose body

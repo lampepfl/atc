@@ -44,7 +44,7 @@ class TuiSuite extends munit.FunSuite:
       tui.beginTurn()
       tui.assistantDelta("First line\nsecond ")
       tui.assistantDelta("line")
-      tui.toolStart("1 + 1")
+      tui.toolStart("1 + 1", Nil)
       tui.toolEnd(atc.sandbox.ExecutionResult(true, "val res0: Int = 2"), 5)
       tui.assistantDelta("Done.")
       tui.endTurn()

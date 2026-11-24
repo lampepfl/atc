@@ -19,6 +19,7 @@ private[ui] final class ToolHistory(maxChars: Int = 8 * 1024 * 1024, maxEntries:
   def add(
     title: String,
     code: String,
+    texts: List[(String, String)],
     result: ExecutionResult,
     millis: Long,
     live: String,
@@ -31,6 +32,7 @@ private[ui] final class ToolHistory(maxChars: Int = 8 * 1024 * 1024, maxEntries:
       nextId,
       title,
       cap(code, 32000),
+      texts.map((name, text) => name -> cap(text, 32000)),
       output,
       cap(live, (limit - output.length).max(0)),
       result.success,
@@ -49,17 +51,20 @@ private[ui] final class ToolHistory(maxChars: Int = 8 * 1024 * 1024, maxEntries:
   def clear(): Unit = retained = Vector.empty
 
 private[ui] object ToolHistory:
-  /** One finished call: `output` is what the REPL returned, without the hints and the cut
-    * of the model's copy, and `live` is what the commands it ran wrote. */
+  /** One finished call: `texts` are those it sent, `output` is what the REPL returned,
+    * without the hints and the cut of the model's copy, and `live` is what the commands
+    * it ran wrote. */
   final case class Entry(
     id: Int,
     title: String,
     code: String,
+    texts: List[(String, String)],
     output: String,
     live: String,
     success: Boolean,
     millis: Long,
     changes: List[FileChange]
   ):
-    def size: Int = code.length + output.length + live.length +
+    def size: Int = code.length + texts.map((name, text) => name.length + text.length).sum + output.length +
+      live.length +
       changes.map(c => c.path.length + c.summary.length + c.preview.length).sum
