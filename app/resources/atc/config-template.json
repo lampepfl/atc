@@ -33,6 +33,7 @@
   "executionTimeoutMs": 300000,
   "maxToolCalls": 200,
   "maxToolOutputChars": 40000,
+  "apiReference": "compact",
   "autoCompactThreshold": 0.8,
   "compactKeepRatio": 0.2
 }

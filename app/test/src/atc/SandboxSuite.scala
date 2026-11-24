@@ -53,6 +53,11 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
       assertOk(run("1 + 1"))
     finally warmed.close()
 
+  test("help prints an API name's whole documentation to the agent"):
+    env.clearOutput()
+    assertOk(run("""help("replaceExact")"""))
+    assert(env.agentOut.toString.contains("Missing or ambiguous text throws before writing."), env.agentOut.toString)
+
   test("file effects go through the real host"):
     assertOk(run("""write("a.txt", "content")"""))
     assertEquals(env.contents("a.txt"), "content")

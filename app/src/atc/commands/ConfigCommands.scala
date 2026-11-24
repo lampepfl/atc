@@ -197,6 +197,8 @@ object ConfigCommands:
           "share of the context window compaction keeps verbatim",
           List("0", "0.1", "0.2", "0.3", "0.5"),
         )
+    case ApiReference
+        extends Setting("apiReference", "how much API documentation the system prompt holds", List("compact", "full"))
 
     def current(config: Config): String = this match
       case PredictInput => config.predictInput.toString
@@ -204,6 +206,7 @@ object ConfigCommands:
       case WebSearch => config.webSearch.contains(true).toString
       case AutoCompactThreshold => fraction(config.autoCompactThreshold)
       case CompactKeepRatio => fraction(config.compactKeepRatio)
+      case ApiReference => config.apiReference
 
     /** The config value `text` stands for, or why it is not one. */
     def parse(text: String): Either[String, ujson.Value] =
@@ -214,7 +217,7 @@ object ConfigCommands:
             case "true" | "on" => Right(ujson.True)
             case "false" | "off" => Right(ujson.False)
             case _ => Left(s"$key is true or false, not '${text.trim}'")
-        case Notifications =>
+        case Notifications | ApiReference =>
           if choices.contains(typed) then Right(ujson.Str(typed))
           else Left(s"$key is one of ${choices.mkString(" | ")}, not '${text.trim}'")
         case AutoCompactThreshold | CompactKeepRatio =>

@@ -295,6 +295,16 @@ Its comments are API documentation for the model: keep contracts and examples th
 keep implementation rationale in this guide or beside host code. Add operations to the
 interface and host together, then verify their required capabilities.
 
+`ApiReference` derives what the model reads from that source. The setting `apiReference`
+chooses the form: `compact` (the default) keeps every signature and cuts each doc comment to
+its first sentence, marking a cut with `…`, and drops code examples, method bodies,
+annotations and imports; `full` sends the source whole. A doc comment with a `@keepWhole`
+line stays whole in the compact form, for the few APIs where a guess causes a security slip or
+broken code (`Classified`, `exec`, `parallel`); neither form shows the marker. `help(name)`
+prints the whole documentation of a method with its overloads, of a type with its members, or
+of `Type.member`, and suggests names for an unknown one. On the current source the compact
+form is about two thirds of the full one.
+
 | Mode | Machine capabilities supplied by the preamble |
 |---|---|
 | `readonly` | `io: IOCap`, `fs: FileSystem^{io.rd}` |
@@ -786,8 +796,8 @@ the uniqueness of model references before execution; `model` and `classifiedMode
 resolved at the start (see [Models and providers](#models-and-providers)).
 
 `/config` (`ConfigCommands`) changes only `predictInput`, `notifications`, `webSearch`,
-`autoCompactThreshold` and `compactKeepRatio`. They are outside `PolicyKeys`, so none can
-loosen the sandbox, and a project config may set them; one that turns `webSearch` on needs
+`autoCompactThreshold`, `compactKeepRatio` and `apiReference`. They are outside `PolicyKeys`, so
+none can loosen the sandbox, and a project config may set them; one that turns `webSearch` on needs
 trust. A change goes into a `session` layer that `Models` keeps in memory and appends after
 the files on each reload, so a `/providers` edit does not drop it. That layer merges as a
 narrowing layer: a policy key in it could only tighten, and its other settings win in layer
@@ -1210,7 +1220,7 @@ protocol against a scripted CLI.
 ## Conversation context and agent loop
 
 The system prompt contains environment data, workflow instructions, capability rules, the
-API source and configured permissions. Session grants are reported in tool results so they
+API reference (see [The capability design](#the-capability-design)) and configured permissions. Session grants are reported in tool results so they
 do not change the prompt prefix. Repository-derived scalar values are JSON-quoted; larger
 instruction and permission blocks are marked as data.
 

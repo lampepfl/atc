@@ -146,6 +146,7 @@ final class Agent(
       classifiedModel.isDefined,
       config.safeMode,
       config.respectGitignore,
+      compactReference = config.apiReference == "compact",
       extraInstructions,
     )
 

@@ -10,6 +10,7 @@ import java.util.Locale
 object ConfigValidation:
   private val ReasoningSummaries = Set("auto", "concise", "detailed")
   private val NotificationChoices = Set("auto", "system", "terminal", "bell", "off")
+  private val ApiReferenceChoices = Set("compact", "full")
   private val AnthropicWebSearchVersions = Set("20250305", "20260209")
 
   /** Reject settings that would otherwise fail much later, in output slicing,
@@ -27,6 +28,7 @@ object ConfigValidation:
     )
     config.executionTimeoutMs.foreach(requirePositive("executionTimeoutMs", _))
     validateChoice("notifications", config.notifications, NotificationChoices)
+    validateChoice("apiReference", config.apiReference, ApiReferenceChoices)
     config.effort.foreach(validateChoice("effort", _, ModelConfig.ReasoningEfforts :+ ModelConfig.DefaultEffort))
     validateMode(config.mode, "")
     config.providers.foreach(validateProvider)

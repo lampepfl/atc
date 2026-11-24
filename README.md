@@ -380,7 +380,8 @@ provider web search, the keys in its `.atc/keys.properties`) applies only after 
 shown it to you and you chose to trust it; ATC asks again when that part changes. A project
 config that belongs to another user is ignored.
 `/config` changes the settings that cannot loosen the sandbox (input prediction,
-notifications, web search, compaction) for the session or in either file. The exact merge
+notifications, web search, compaction, how much API documentation the prompt holds) for the
+session or in either file. The exact merge
 rules are in [doc/development.md](doc/development.md#configuration-semantics).
 
 ```json

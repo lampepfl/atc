@@ -71,6 +71,7 @@ private[host] trait HostInteraction:
     output.print(String.valueOf(agentView(value)) + suffix, String.valueOf(userView(value)) + suffix)
 
   def println(value: Any)(using UserIO): Unit = emit(value, "\n")
+  def help(name: String)(using UserIO): Unit = println(atc.ApiReference.help(atc.ApiReference.full, name))
   def println()(using UserIO): Unit = output.print("\n", "\n")
   def print(value: Any)(using UserIO): Unit = emit(value)
   def printf(format: String, args: Any*)(using UserIO): Unit =

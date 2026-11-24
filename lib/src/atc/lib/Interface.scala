@@ -50,6 +50,7 @@ import caps.*
  *  val n      = secret.map(s => s.length * 2)   // ok
  *  println(secret)                              // the user sees it; you don't
  *  }}}
+ *  @keepWhole
  */
 @assumeSafe
 abstract class Classified[+T] private[atc] ():
@@ -348,6 +349,13 @@ object Json:
 @assumeSafe
 trait Interface:
 
+  // ── This reference ──────────────────────────────────────────────
+
+  /** Print the whole documentation of `name` in this reference: a method with
+   *  all its overloads, a type with its members, or one type's member
+   *  (`help("Process.read")`). An unknown name lists similar ones. */
+  def help(name: String)(using UserIO^): Unit
+
   // ── Texts of this call ──────────────────────────────────────────
 
   /** The `texts` argument of the `run_scala` call being run: each name to its
@@ -558,7 +566,9 @@ trait Interface:
    *  relative entry); use `./program` to select one there.
    *  Quote arguments containing spaces (on Windows, `\` is a path separator).
    *  A timeout throws with the output so far. Requires both `Exec^` and
-   *  `FileSystem^`. */
+   *  `FileSystem^`.
+   *  @keepWhole
+   */
   def exec(command: String)(using Exec^, FileSystem^): ProcessResult
   def exec(command: String, args: Seq[String])(using Exec^, FileSystem^): ProcessResult
   def exec(command: String, args: Seq[String], workingDir: String)(using Exec^, FileSystem^): ProcessResult
@@ -642,7 +652,9 @@ trait Interface:
    *  {{{
    *  val outputs = parallel(List("git status", "git diff --stat").map(c => () => execOutput(c)))
    *  val mixed = parallel(List(() => httpGet(url), () => execOutput("ls")))
-   *  }}} */
+   *  }}}
+   *  @keepWhole
+   */
   def parallel[A, C^](tasks: Seq[() ->{C} A]): List[A]
 
   // ── Output ──────────────────────────────────────────────────────
