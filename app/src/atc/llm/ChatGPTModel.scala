@@ -17,7 +17,10 @@ import scala.util.control.NonFatal
 final class ChatGPTModel(configured: ModelSpec, auth: ChatGPTAuth)
     extends OpenAIResponsesModel(configured.copy(baseUrl = configured.baseUrl.orElse(Some(ChatGPTModel.BackendUrl)))):
   override protected def authorization: Option[okhttp3.Interceptor] = Some: chain =>
+    // A request with a body carries the conversation; the model list may use any sign-in.
+    val conversation = Option.when(chain.request().body != null)(Providers.conversation)
     def authorized(t: ChatGPTAuth.SignIn) =
+      conversation.foreach(auth.keepAccount(_, t))
       val b = chain.request().newBuilder().header("Authorization", s"Bearer ${t.access}")
       t.accountId.foreach(b.header("ChatGPT-Account-ID", _))
       b.build()

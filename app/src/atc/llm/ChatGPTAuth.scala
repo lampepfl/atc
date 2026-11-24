@@ -24,7 +24,8 @@ import scala.util.control.NonFatal
   * owner; the default policy denies the agent access to `.atc`.
   *
   * The file is read again for every request, so every atc process uses the
-  * newest tokens. A refresh token can be used once: each refresh saves the
+  * newest tokens, except that a conversation stays in the ChatGPT account
+  * (workspace) it started in ([[keepAccount]]). A refresh token can be used once: each refresh saves the
   * one it returns, holding a lock on a file beside the tokens so that two
   * processes do not refresh with the same one. A browser sign-in saves under
   * the same lock, so that a refresh in progress does not overwrite it. */
@@ -63,6 +64,18 @@ final class ChatGPTAuth(file: Path, issuer: String = ChatGPTAuth.Issuer, ports: 
       if saved.access != stale.access then saved else refresh(saved)
 
   private def signedIn(): SignIn = load().getOrElse(throw SignInNeeded("Not signed in to ChatGPT"))
+
+  /** The last conversation a request carried, and the account it was sent to. */
+  private var conversationAccount: Option[(String, String)] = None
+
+  /** Check that `t` may carry `conversation`: refused when the conversation was sent to another
+    * account, as after signing in to another workspace in another atc. Otherwise `conversation`
+    * now belongs to the account of `t`, when the sign-in names one. */
+  def keepAccount(conversation: String, t: SignIn): Unit = synchronized:
+    (conversationAccount, t.accountId) match
+      case (Some((c, account)), Some(now)) if c == conversation && account != now => throw AccountChanged()
+      case (_, Some(now)) => conversationAccount = Some(conversation -> now)
+      case _ => ()
 
   /** Run `step` holding the lock on `<file>.lock`, which keeps two atc processes from using
     * the same single-use refresh token. */
@@ -242,6 +255,12 @@ object ChatGPTAuth:
 
   /** The token endpoint did not give tokens. `refused`: it turned the grant down (400 or 401), so
     * signing in again is the remedy; otherwise the failure may pass. */
+  /** The sign-in now belongs to another account than the conversation of the request. */
+  final class AccountChanged
+      extends IOException(
+        "The ChatGPT sign-in changed to another workspace during this conversation; /new starts a conversation there"
+      )
+
   private final class TokenRejected(message: String, val refused: Boolean) extends IOException(message)
 
   private val random = SecureRandom()

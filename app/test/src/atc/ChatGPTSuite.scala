@@ -349,6 +349,44 @@ class ChatGPTSuite extends munit.FunSuite:
           assert(e.getMessage.contains(expected), e.getMessage)
         finally model.close()
 
+  test("a conversation stays in its workspace when the sign-in changes to another; /new follows the sign-in"):
+    withServer { r =>
+      if r.path.endsWith("/models") then (200, "application/json", """{"models":[]}""")
+      else (200, "text/event-stream", streamed)
+    } { (url, requests) =>
+      val file = tempFile()
+      val auth = ChatGPTAuth(file, url, List(0))
+      def signedIn(account: String) = Files.writeString(
+        file,
+        upickle.default.write(SignIn(
+          s"token-$account",
+          "refresh",
+          Some(account),
+          System.currentTimeMillis() + 3_600_000
+        )),
+      )
+      def accounts = requests().filter(_.path.endsWith("/responses")).map(_.headers.get("chatgpt-account-id"))
+      val model = ChatGPTModel(backend(url), auth)
+      val other = ChatGPTModel(backend(url), auth)
+      try
+        signedIn("account-1")
+        assertEquals(model.simple(None, "hello", thinking = false).text, "done")
+        signedIn("account-2")
+        for m <- List(model, other) do
+          val e = intercept[Exception](m.simple(None, "hello", thinking = false))
+          val messages = Iterator.iterate[Throwable | Null](e)(_.nn.getCause).takeWhile(_ != null)
+            .map(t => String.valueOf(t.nn.getMessage)).toList
+          assert(messages.exists(_.contains("/new")), messages.toString)
+        assertEquals(accounts, List(Some("account-1")), "the conversation did not reach the other workspace")
+        assertEquals(model.listModels(), Nil, "the model list follows the sign-in")
+        Providers.newConversation()
+        assertEquals(other.simple(None, "hello", thinking = false).text, "done")
+        assertEquals(accounts, List(Some("account-1"), Some("account-2")))
+      finally
+        model.close()
+        other.close()
+    }
+
   test("without a sign-in a request fails before reaching the backend and says how to sign in"):
     withServer(_ => (200, "text/event-stream", streamed)): (url, requests) =>
       val model = ChatGPTModel(backend(url), ChatGPTAuth(tempFile(), url, List(0)))
