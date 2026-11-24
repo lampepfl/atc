@@ -11,7 +11,7 @@ object ToolOutput:
   private val hints = List(
     Hint(
       _.contains("needs an explicit type because the inferred type does not conform"),
-      "top-level vals that hold capabilities (FileEntry, closures using println/fs) need an explicit type, e.g. `val e: FileEntry^{fs} = access(...)`, or use a `def` / inline expression."
+      "top-level vals that hold capabilities (FileEntry, Process, closures using println/fs) need an explicit type, e.g. `val p: Process^{ex} = spawn(...)` or `val e: FileEntry^{fs} = access(...)`, or use a `def` / inline expression."
     ),
     Hint(
       out => out.contains("Mutable variable") && out.contains("does not extend") && out.contains("Stateful"),
