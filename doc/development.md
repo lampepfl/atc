@@ -1432,9 +1432,10 @@ that track line boundaries, styles, width, live regions and the spinner; its mon
 TUI's lock), `StatusLine` (the footer and the window title), `ToolBlock` (one tool call's
 block, its live output, its summary and the `/output` history), `ThinkingView` (the
 reasoning window), `Dialogs` (what pop-ups show and read, through `ListMenu`), `KeyReader`
-(the key thread during a turn), `PromptReader` (the JLine line reader and its bindings) and
-`Alerts` (notifications and focus tracking). `Format` holds the short number, duration and
-plural forms of status and summary lines. `Glyphs` chooses Unicode or ASCII markers, menu
+(the key thread during a turn), `PromptReader` (the JLine line reader and its bindings),
+`PastedText` (the placeholders of long pastes) and `Alerts` (notifications and focus
+tracking). `Format` holds the short number, duration and plural forms of status and summary
+lines. `Glyphs` chooses Unicode or ASCII markers, menu
 markers and control separators included: ASCII with `ATC_ASCII` or on a terminal that
 reports no UTF encoding. `Ansi` removes terminal controls from external text before display.
 Keep model-visible capture text unchanged; sanitize only at display boundaries. A `-p` run
@@ -1494,6 +1495,19 @@ history. Answers, block input and dumb terminals get no list. Enter runs the sel
 no alias may be a prefix of another command's name. A line is a command when its first word
 starts with `/` and holds no other `/`: a mistyped name is reported as an unknown command,
 and a line that starts with an absolute path goes to the agent.
+
+A bracketed paste of more than three lines or 800 characters (`PastedText.isLong`) would fill
+the prompt and scroll the conversation away, so the main prompt and answer fields show a
+placeholder for it, `[Pasted text #1: 120 lines]`, numbered within the read. `PromptReader`
+replaces the text JLine wrote into the buffer, and `finish` puts it back: the read returns
+the pasted text and the history keeps it, since only the read that took a paste can resolve
+its placeholder, while the line left on screen keeps the placeholder. A placeholder is buffer
+text in another colour: it can be moved, killed and yanked whole, Backspace after it removes
+all of it, and one that was edited stands for nothing and is sent as it reads. `/run` decides
+whether its code is complete from the pasted text, not the placeholder. Code blocks show a
+paste in full, since they are there to be read and edited, and so do secrets, which are
+masked. `PastedTextSuite` checks the placeholders and `PromptReaderSuite` the prompt with
+them.
 
 During a turn, Enter submits a correction and unsent text is shown in the status line.
 Bracketed pastes keep their newlines and are collected without submitting individual lines,

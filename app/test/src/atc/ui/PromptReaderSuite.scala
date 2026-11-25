@@ -85,6 +85,69 @@ class PromptReaderSuite extends munit.FunSuite:
       assertEquals(toggled, 1)
     finally terminal.close()
 
+  /** `text` as a terminal sends a bracketed paste: its line ends as carriage returns. One paste
+    * per prompt: JLine 4.7.0 repeats the end of a second paste it reads in one piece with the
+    * first (`BindingReader.readStringUntil` keeps the characters it read ahead). */
+  private def paste(text: String): String = s"\u001b[200~${text.replace('\n', '\r')}\u001b[201~"
+  private val pastedLines = (1 to 12).map(n => s"pasted line $n").mkString("\n")
+
+  test("a long paste shows as a placeholder; the read returns its text, and so does the history"):
+    val (prompt, terminal, out) = promptOn(s"see ${paste(pastedLines)} and this\r")
+    try
+      assertEquals(prompt.read("> ", ""), s"see $pastedLines and this")
+      assertEquals(prompt.reader.getHistory.asScala.map(_.line).toList, List(s"see $pastedLines and this"))
+      // What the prompt drew: before it, the test terminal echoes the input as it arrives.
+      val drawn = out.toString(UTF_8).split("> see ", 2).last
+      assert(drawn.contains("[Pasted text #1: 12 lines]"), drawn.replace("\u001b", "ESC"))
+      assert(!drawn.contains("pasted line 1"), drawn.replace("\u001b", "ESC"))
+    finally terminal.close()
+
+  test("Backspace after a placeholder removes it and its text"):
+    val (prompt, terminal, _) = promptOn(s"see ${paste(pastedLines)}\u007f\u007fnothing\r")
+    try assertEquals(prompt.read("> ", ""), "seenothing")
+    finally terminal.close()
+
+  test("the pastes of one read are not known to the next"):
+    val (prompt, terminal, _) = promptOn(s"${paste(pastedLines)}\r[Pasted text #1: 12 lines]\r")
+    try
+      assertEquals(prompt.read("> ", ""), pastedLines)
+      assertEquals(prompt.read("> ", ""), "[Pasted text #1: 12 lines]")
+    finally terminal.close()
+
+  test("a short paste is shown as it is"):
+    val (prompt, terminal, out) = promptOn(s"see ${paste("line 1\nline 2\nline 3")}\r")
+    try
+      assertEquals(prompt.read("> ", ""), "see line 1\nline 2\nline 3")
+      assert(!out.toString(UTF_8).contains("[Pasted text"), out.toString(UTF_8).replace("\u001b", "ESC"))
+    finally terminal.close()
+
+  test("a code block shows a long paste in full"):
+    val code = "val a = 1\nval b = 2\nval c = 3\nval d = 4"
+    val (prompt, terminal, out) = promptOn(s"${paste(code)}\r\r")
+    prompt.blockMode = true
+    try
+      assertEquals(prompt.read("| ", "").trim, code)
+      assert(!out.toString(UTF_8).contains("[Pasted text"), out.toString(UTF_8).replace("\u001b", "ESC"))
+    finally terminal.close()
+
+  test("an answer shows a long paste as a placeholder and a secret does not"):
+    val (answer, answerTerminal, answerOut) = promptOn(s"${paste(pastedLines)}\r")
+    try
+      assertEquals(answer.readAnswer("answer> "), Some(pastedLines))
+      assert(answerOut.toString(UTF_8).contains("[Pasted text #1: 12 lines]"))
+    finally answerTerminal.close()
+    val (secret, secretTerminal, secretOut) = promptOn(s"${paste("k" * 900)}\r")
+    try
+      assertEquals(secret.readSecret("key> "), Some("k" * 900))
+      assert(!secretOut.toString(UTF_8).contains("[Pasted text"))
+    finally secretTerminal.close()
+
+  test("an open bracket inside pasted code continues a /run, although the placeholder's are closed"):
+    val code = "List(1,\n2,\n3,\n4"
+    val (prompt, terminal, _) = promptOn(s"/run ${paste(code)}\r)\r")
+    try assertEquals(prompt.read("> ", ""), s"/run $code\n  )")
+    finally terminal.close()
+
   test("cancelling a text answer clears JLine's interrupt before returning to the menu"):
     try
       val answer = PromptReader.answerOf {

@@ -515,7 +515,8 @@ Tab fills in, Enter runs). Ctrl-C interrupts the turn, Shift-Tab cycles the mode
 Shift-Enter adds a line. Finished code runs fold to a summary, and `/output <n>` shows one
 in full. Ctrl-O switches to writing code, output and reasoning out in full. While the agent
 is working, type a correction and press Enter: it reaches the agent before its next tool
-call. Interactive sessions are saved after every turn, and the next start in the same
+call. A long paste shows as a placeholder such as `[Pasted text #1: 120 lines]` and is sent
+in full. Interactive sessions are saved after every turn, and the next start in the same
 directory offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
 reports whether it is working, waiting or done to terminals that track program status.
 
