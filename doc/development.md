@@ -783,6 +783,11 @@ and that line becomes the next prompt's draft. After an interrupted turn the mes
 the user's next message, so Ctrl-C also stops a monitor that keeps the agent busy. A `-p` run
 ends with its turn.
 
+A monitor's run is the first agent code that runs while no evaluation captures `System.err`,
+which is then the terminal, and `printStackTrace` writes there without a capability. A
+session therefore wraps the process's `System.err` once, under the evaluation lock, in a
+stream that drops what a monitor's thread writes, and the evaluation capture drops it too.
+
 `SandboxRepl.replace` (`/reset`, `/mode`, `/new`) and shutdown stop every monitor, and the
 restart notice tells the agent. `/monitors` lists them and `/monitors stop` stops them, which
 the agent hears about. At most eight run at once, at most once a second each.

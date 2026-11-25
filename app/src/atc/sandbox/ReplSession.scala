@@ -36,19 +36,20 @@ object ReplSession:
 
   /** Bounded capture buffer: retains at most `limit` bytes. It drops what a thread writes
     * while it runs code on classified data ([[ClassifiedImpl.running]]): the capture is
-    * model-visible, and `System.out` and `System.err` point here during an evaluation. */
+    * model-visible, and `System.out` and `System.err` point here during an evaluation. It
+    * drops what a monitor's run writes too, which is no part of the evaluation. */
   final class BoundedOutputStream(limit: Int) extends OutputStream:
     private val buffer = ByteArrayOutputStream(math.min(limit, 8192))
     @volatile var truncated: Boolean = false
 
     override def write(b: Int): Unit =
-      if ClassifiedImpl.running then ()
+      if ClassifiedImpl.running || Host.inMonitor then ()
       else if buffer.size() < limit then buffer.write(b)
       else truncated = true
 
     override def write(b: Array[Byte], off: Int, len: Int): Unit =
       val room = limit - buffer.size()
-      if ClassifiedImpl.running then ()
+      if ClassifiedImpl.running || Host.inMonitor then ()
       else if room <= 0 then truncated = true
       else
         if len > room then truncated = true
@@ -178,6 +179,35 @@ object ReplSession:
   private val outputLock = ReentrantLock()
   private val OutputLockWaitMs = 10000L
 
+  /** The process's `System.err` without what a monitor's run writes. A monitor runs agent
+    * code outside evaluations too, when `System.err` is the terminal, and `printStackTrace`
+    * writes there without a capability (agent code cannot name `System.out`). It encodes as
+    * the JDK encodes `System.err`. */
+  private final class MonitorSilenced(stream: PrintStream)
+      extends PrintStream(
+        new java.io.FilterOutputStream(stream):
+          override def write(b: Int): Unit = if !Host.inMonitor then stream.write(b)
+          override def write(b: Array[Byte], off: Int, len: Int): Unit =
+            if !Host.inMonitor then stream.write(b, off, len)
+        ,
+        true,
+        List("stderr.encoding", "sun.stderr.encoding")
+          .flatMap(property => Option(System.getProperty(property)))
+          .flatMap(name => scala.util.Try(java.nio.charset.Charset.forName(name).nn).toOption)
+          .headOption
+          .getOrElse(java.nio.charset.Charset.defaultCharset()),
+      )
+
+  /** Wrap `System.err` in [[MonitorSilenced]], once. Under the evaluation lock it is the
+    * process's own, not an evaluation's capture. */
+  private def silenceMonitors(): Unit =
+    if outputLock.tryLock(OutputLockWaitMs, TimeUnit.MILLISECONDS) then
+      try
+        System.err match
+          case _: MonitorSilenced => ()
+          case err => System.setErr(MonitorSilenced(err.nn))
+      finally outputLock.unlock()
+
   /** The lock is JVM-wide (so is `System.out`): a new session cannot recover
     * from a stuck evaluation either, only a restart of the process can. */
   private val StuckEvaluationMessage =
@@ -220,6 +250,7 @@ final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Opt
     * Each round installs this session's host under the evaluation lock; installing it
     * before would replace the host of a session that holds the lock. */
   def init(): this.type =
+    silenceMonitors()
     val chunks = preambleOverride.map(List(_)).getOrElse(preambleChunks(config.mode))
     chunks.foreach(setUp("Sandbox preamble", _))
     if config.safeMode then setUp("Safe mode import", SafeModeImport)

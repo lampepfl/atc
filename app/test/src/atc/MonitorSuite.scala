@@ -134,6 +134,29 @@ class MonitorSuite extends munit.FunSuite, ReplAssertions:
       e.host.stopMonitors()
       s.close()
 
+  test("what a monitor's run writes to System.err is dropped, since it may be the terminal"):
+    // `printStackTrace` needs no capability; between evaluations `System.err` is the
+    // process's own. A session wraps it once, so this one wraps the buffer.
+    val before = System.err
+    val buffer = java.io.ByteArrayOutputStream()
+    System.setErr(java.io.PrintStream(buffer, true, "UTF-8"))
+    val e = TestEnv(prefix = "atc-monitor-stderr")
+    try
+      val s = e.newSession(mode = Mode.Full)
+      assertOk(s.run(
+        """addMonitor("trace", Schedule(everyMs = 1000, delayMs = 500, maxRuns = 1)) { send =>
+          |  RuntimeException("\u001b]0;title\u0007MONITOR-TRACE").printStackTrace()
+          |  send("traced")
+          |}""".stripMargin
+      ))
+      eventually("the run")(messages(e).nonEmpty)
+      System.err.nn.println("APP-LINE")
+      val written = buffer.toString("UTF-8")
+      assert(!written.contains("MONITOR-TRACE"), written)
+      assert(written.contains("APP-LINE"), written)
+      s.close()
+    finally System.setErr(before)
+
   test("a monitor ends with the REPL that compiled it"):
     val e = TestEnv(prefix = "atc-monitor-close")
     val s = e.newSession(mode = Mode.Full)
