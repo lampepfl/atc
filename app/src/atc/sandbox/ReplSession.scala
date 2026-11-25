@@ -1,7 +1,7 @@
 package atc.sandbox
 
 import atc.Threads
-import atc.host.{ClassifiedImpl, Host}
+import atc.host.{ClassifiedImpl, Host, MonitorRepl}
 import atc.perms.Mode
 import atc.platform.Platform
 
@@ -36,19 +36,20 @@ object ReplSession:
 
   /** Bounded capture buffer: retains at most `limit` bytes. It drops what a thread writes
     * while it runs code on classified data ([[ClassifiedImpl.running]]): the capture is
-    * model-visible, and `System.out` and `System.err` point here during an evaluation. */
+    * model-visible, and `System.out` and `System.err` point here during an evaluation. It
+    * drops what a monitor's run writes too, which is no part of the evaluation. */
   final class BoundedOutputStream(limit: Int) extends OutputStream:
     private val buffer = ByteArrayOutputStream(math.min(limit, 8192))
     @volatile var truncated: Boolean = false
 
     override def write(b: Int): Unit =
-      if ClassifiedImpl.running then ()
+      if ClassifiedImpl.running || Host.inMonitor then ()
       else if buffer.size() < limit then buffer.write(b)
       else truncated = true
 
     override def write(b: Array[Byte], off: Int, len: Int): Unit =
       val room = limit - buffer.size()
-      if ClassifiedImpl.running then ()
+      if ClassifiedImpl.running || Host.inMonitor then ()
       else if room <= 0 then truncated = true
       else
         if len > room then truncated = true
@@ -107,8 +108,8 @@ object ReplSession:
 
   /** Definitions in scope before any agent code runs, for `mode`.
     *
-    * `object api` holds the host privately; the preamble publishes as givens
-    * only the root view and the derived capabilities of the mode:
+    * `object api` holds the host privately; the preamble publishes as implicit
+    * values only the root view and the derived capabilities of the mode:
     *
     *  - full: `io: IOCap^` (the root itself) and `fs`/`ex`/`net` derived from it;
     *  - local: `io: IOCap^` (the root itself) and `fs`/`ex` derived from it,
@@ -123,14 +124,17 @@ object ReplSession:
     * compiled before the safe-mode import, agent code after it, so agent code
     * cannot name them (nor `api.host`/`api.root`, which are private).
     *
+    * They are strict `implicit val`s, not givens. A given is a lazy val, and the
+    * checker charges a closure that uses one with the whole line wrapper holding
+    * it, which no capture set names: a callback typed `->{io}` could then use
+    * none of them. A strict val is the path `wrapper.fs`, charged as `fs`, whose
+    * type says what it captures. That relies on `Cap`'s update member: without
+    * one the checker charged every use of `user` or `fs` as read-only, which a
+    * pure `Classified.map` admits.
+    *
     * The chunks are loaded as separate REPL rounds (`init`): the base
-    * (`object api` and imports) first, then each given in its own round. That
-    * isolation matters for capture checking: each given becomes a field of its
-    * own line-wrapper object, so a pure `Classified.map` that reads a file
-    * captures only the `fs` wrapper, not the separate `user`/`io` givens,
-    * which live in other wrappers. If all givens shared one wrapper, capturing
-    * `fs` would also pull in the full `user` capability and the read would be
-    * rejected. */
+    * (`object api` and imports) first, then each capability in its own round, a
+    * field of its own line wrapper. */
   def preambleChunks(mode: Mode): List[String] =
     val base =
       """|import language.experimental.captureChecking
@@ -143,24 +147,24 @@ object ReplSession:
     val givens = mode match
       case Mode.Full =>
         List(
-          "@assumeSafe given io: (IOCap^) = atc.lib.Runtime.rootIO",
-          "@assumeSafe given user: (UserIO^) = atc.lib.Runtime.rootUser",
-          "@assumeSafe given fs: (FileSystem^{io}) = atc.lib.Runtime.fileSystem",
-          "@assumeSafe given ex: (Exec^{io}) = atc.lib.Runtime.processes",
-          "@assumeSafe given net: (Network^{io}) = atc.lib.Runtime.network",
+          "@assumeSafe implicit val io: IOCap^ = atc.lib.Runtime.rootIO",
+          "@assumeSafe implicit val user: UserIO^ = atc.lib.Runtime.rootUser",
+          "@assumeSafe implicit val fs: FileSystem^{io} = atc.lib.Runtime.fileSystem",
+          "@assumeSafe implicit val ex: Exec^{io} = atc.lib.Runtime.processes",
+          "@assumeSafe implicit val net: Network^{io} = atc.lib.Runtime.network",
         )
       case Mode.Local =>
         List(
-          "@assumeSafe given io: (IOCap^) = atc.lib.Runtime.rootIO",
-          "@assumeSafe given user: (UserIO^) = atc.lib.Runtime.rootUser",
-          "@assumeSafe given fs: (FileSystem^{io}) = atc.lib.Runtime.fileSystem",
-          "@assumeSafe given ex: (Exec^{io}) = atc.lib.Runtime.processes",
+          "@assumeSafe implicit val io: IOCap^ = atc.lib.Runtime.rootIO",
+          "@assumeSafe implicit val user: UserIO^ = atc.lib.Runtime.rootUser",
+          "@assumeSafe implicit val fs: FileSystem^{io} = atc.lib.Runtime.fileSystem",
+          "@assumeSafe implicit val ex: Exec^{io} = atc.lib.Runtime.processes",
         )
       case Mode.ReadOnly =>
         List(
-          "@assumeSafe given io: IOCap = atc.lib.Runtime.rootIO",
-          "@assumeSafe given user: (UserIO^) = atc.lib.Runtime.rootUser",
-          "@assumeSafe given fs: (FileSystem^{io.rd}) = atc.lib.Runtime.readOnlyFileSystem",
+          "@assumeSafe implicit val io: IOCap = atc.lib.Runtime.rootIO",
+          "@assumeSafe implicit val user: UserIO^ = atc.lib.Runtime.rootUser",
+          "@assumeSafe implicit val fs: FileSystem^{io.rd} = atc.lib.Runtime.readOnlyFileSystem",
         )
     base :: givens
 
@@ -174,6 +178,35 @@ object ReplSession:
     * it with `synchronized` would block every subsequent evaluation. */
   private val outputLock = ReentrantLock()
   private val OutputLockWaitMs = 10000L
+
+  /** The process's `System.err` without what a monitor's run writes. A monitor runs agent
+    * code outside evaluations too, when `System.err` is the terminal, and `printStackTrace`
+    * writes there without a capability (agent code cannot name `System.out`). It encodes as
+    * the JDK encodes `System.err`. */
+  private final class MonitorSilenced(stream: PrintStream)
+      extends PrintStream(
+        new java.io.FilterOutputStream(stream):
+          override def write(b: Int): Unit = if !Host.inMonitor then stream.write(b)
+          override def write(b: Array[Byte], off: Int, len: Int): Unit =
+            if !Host.inMonitor then stream.write(b, off, len)
+        ,
+        true,
+        List("stderr.encoding", "sun.stderr.encoding")
+          .flatMap(property => Option(System.getProperty(property)))
+          .flatMap(name => scala.util.Try(java.nio.charset.Charset.forName(name).nn).toOption)
+          .headOption
+          .getOrElse(java.nio.charset.Charset.defaultCharset()),
+      )
+
+  /** Wrap `System.err` in [[MonitorSilenced]], once. Under the evaluation lock it is the
+    * process's own, not an evaluation's capture. */
+  private def silenceMonitors(): Unit =
+    if outputLock.tryLock(OutputLockWaitMs, TimeUnit.MILLISECONDS) then
+      try
+        System.err match
+          case _: MonitorSilenced => ()
+          case err => System.setErr(MonitorSilenced(err.nn))
+      finally outputLock.unlock()
 
   /** The lock is JVM-wide (so is `System.out`): a new session cannot recover
     * from a stuck evaluation either, only a restart of the process can. */
@@ -192,7 +225,8 @@ object ReplSession:
     "The code nests too deeply for the compiler to parse (stack overflow); split the expression into smaller definitions."
 
 /** One persistent REPL with its own sandbox class loader and host. */
-final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Option[String] = None):
+final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Option[String] = None)
+    extends MonitorRepl:
   import ReplSession.*
 
   private val outputCapture = BoundedOutputStream(MaxOutputBytes)
@@ -211,11 +245,12 @@ final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Opt
   @volatile private var closed: Boolean = false
 
   /** Load the preamble; errors here are programmer bugs and are thrown. Each
-    * chunk is a separate REPL round so that every given lands in its own
+    * chunk is a separate REPL round so that every capability lands in its own
     * line-wrapper (see `preambleChunks`); a `preambleOverride` runs as one round.
     * Each round installs this session's host under the evaluation lock; installing it
     * before would replace the host of a session that holds the lock. */
   def init(): this.type =
+    silenceMonitors()
     val chunks = preambleOverride.map(List(_)).getOrElse(preambleChunks(config.mode))
     chunks.foreach(setUp("Sandbox preamble", _))
     if config.safeMode then setUp("Safe mode import", SafeModeImport)
@@ -228,6 +263,7 @@ final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Opt
       // than one session, so select this session's host while holding the same
       // process-wide lock that serializes evaluation and lazy wrapper loading.
       Sandbox.installHost(host)
+      host.repl = this
       state = driver.run(code)(using state)
     }
     thrown.foreach(throw _)
@@ -250,6 +286,16 @@ final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Opt
     driver.setStopFlag(true)
     val t = evalThread
     if t != null then t.interrupt()
+
+  /** A monitor runs this REPL's code outside evaluations, under the same stop flag. Holding
+    * the evaluation lock shows that no evaluation runs, so a raised flag is one an interrupt
+    * left behind (Ctrl-C raises it even between runs) and is lowered. While an evaluation
+    * runs, the flag is that evaluation's: a run it stops ends with it. */
+  def readyForMonitor(): Boolean =
+    if !closed && outputLock.tryLock() then
+      try if !closed then driver.setStopFlag(false)
+      finally outputLock.unlock()
+    !closed
 
   def run(code: String): ExecutionResult = run(code, () => false)
 
@@ -307,10 +353,11 @@ final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Opt
       driver.setStopFlag(false)
       if stopRequested then driver.setStopFlag(true)
       else
-        // A preamble object/given can be initialized lazily on the first agent
+        // The preamble's `object api` can be initialized lazily on the first agent
         // line, long after `init`. Re-select the owning host inside the global
         // evaluation lock so another session cannot supply its capabilities.
         Sandbox.installHost(host)
+        host.repl = this // a monitor this code adds runs code of this REPL
         driver.resetEvaluationThrew()
         newState = driver.runParseResult(res)(using state)
     }

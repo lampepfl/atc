@@ -35,6 +35,8 @@ final class Agent(
   private val context = ContextManager()
   private val request = ModelRequest()
   private val queuedInput = ConcurrentLinkedQueue[String]()
+  /** Monitor messages for the model, in the form it reads them. */
+  private val monitorMessages = ConcurrentLinkedQueue[String]()
   private val sink: StreamSink = StreamSink(ui.assistantDelta, ui.assistantNote, ui.thinkingDelta)
 
   /** The schema of the tools offered to the model. The active runner replaces it
@@ -82,6 +84,7 @@ final class Agent(
     toolCallCount = 0
     context.reset()
     queuedInput.clear()
+    monitorMessages.clear()
     compactRetryAt = 0
 
   /** Queue input typed while a turn runs. A model request in progress is cancelled so
@@ -107,6 +110,20 @@ final class Agent(
       conversation.steer(input)
       ui.inputAccepted(input)
       input = queuedInput.poll()
+    var message = monitorMessages.poll()
+    while message != null do
+      conversation.deliver(message)
+      ui.monitorMessage(message)
+      message = monitorMessages.poll()
+
+  /** Queue monitor `id`'s message. Unlike a correction it does not cut a model request short:
+    * the next request carries it, and between turns the application starts one for it. The
+    * oldest messages go when too many wait. */
+  def monitorMessage(id: Int, name: String, text: String): Unit =
+    while monitorMessages.size >= Agent.MaxMonitorMessages do monitorMessages.poll()
+    monitorMessages.add(AgentMessages.monitorMessage(id, name, text))
+
+  def monitorMessageCount: Int = monitorMessages.size()
 
   /** Everything spent on the model(s) since the last `clear()`. */
   def usage: TokenUsage = synchronized(usageBy.values.foldLeft(TokenUsage())(_ + _))
@@ -129,6 +146,8 @@ final class Agent(
     conversation.queueNote(AgentMessages.permissionRevoked(grant))
 
   def noteProcessesKilled(what: String): Unit = conversation.queueNote(AgentMessages.processesKilled(what))
+
+  def noteMonitorsStopped(what: String): Unit = conversation.queueNote(AgentMessages.monitorsStopped(what))
 
   /** Tell the model what the user ran in the shared REPL (`/run`) and what came
     * of it: the user's definitions are now part of the session the model
@@ -433,6 +452,9 @@ final class Agent(
       Done(TurnOutcome.Interrupted)
 
 object Agent:
+  /** Monitor messages kept while they wait for the model. */
+  val MaxMonitorMessages: Int = 50
+
   /** Purposes a model call is recorded under (`/cost`). */
   val Turns = "agent turns"
   val Chat = "chat()"

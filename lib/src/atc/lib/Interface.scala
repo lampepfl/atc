@@ -14,8 +14,7 @@ import caps.*
 //     machine-effect root. A full capability can be passed where a read-only
 //     one is wanted, never the other way round. `x.rd` names the read-only view
 //     of `x`: `val ro: FileSystem^{fs.rd} = fs` is a file system that provably
-//     cannot write (hand it to a helper, or read files with it inside
-//     `Classified.map`, where a full `fs` may not be captured).
+//     cannot write (hand it to a helper that must only read).
 //
 //   • `update def` marks a mutating operation (write, delete, …). It compiles
 //     only through a *full* capability; on a read-only one you get
@@ -27,7 +26,7 @@ import caps.*
  *
  *  `map` and `flatMap` accept functions that may capture only **read-only**
  *  capabilities. Within them, you can compute freely, use local `var`s and
- *  arrays, and read files where your `fs` is itself read-only. You can never
+ *  arrays, and read files. You can never
  *  write, run a command, use the network, `println`, normal-model `chat` or
  *  `ask`, because each of those needs a full capability. Whatever you compute
  *  stays classified; `toString` shows `Classified(***)`. Whatever the function
@@ -62,7 +61,10 @@ abstract class Classified[+T] private[atc] ():
 // ─── Capabilities ────────────────────────────────────────────────────────────
 
 @assumeSafe
-trait Cap extends caps.Stateful, caps.ExclusiveCapability
+trait Cap extends caps.Stateful, caps.ExclusiveCapability:
+  // The pinned compiler charges every use of a stateful class without an update method as
+  // read-only, even passing it to a full `T^` parameter; this member makes such uses count.
+  private[atc] update def chargedInFull(): Unit = ()
 
 /** Capture root for machine effects. It has no operations: use the `FileSystem`,
  *  `Exec` and `Network` givens supplied by the current mode. Holding `io` cannot
@@ -93,7 +95,8 @@ abstract class FileSystem private[atc] () extends Cap:
 
 /** A handle to a file or directory. Read operations work on any handle; the
  *  `update def`s (`write`, `writeBytes`, `append`, `delete`, `mkdir` and
- *  `writeClassified`) require one from a full `FileSystem^`. */
+ *  `writeClassified`) require one from a full `FileSystem^`, and a full
+ *  `FileSystem^` in scope. */
 @assumeSafe
 abstract class FileEntry private[atc] () extends Cap:
   /** Absolute, normalized path. Windows separators are rendered as `/`; pass
@@ -111,13 +114,13 @@ abstract class FileEntry private[atc] () extends Cap:
   /** Visit each line without loading the file into memory; `op` gets the line
    *  and its 1-based number. */
   def forEachLine(op: (String, Int) => Unit): Unit
-  update def write(content: String): Unit
-  update def writeBytes(content: Array[Byte]): Unit
-  update def append(content: String): Unit
+  update def write(content: String)(using FileSystem^): Unit
+  update def writeBytes(content: Array[Byte])(using FileSystem^): Unit
+  update def append(content: String)(using FileSystem^): Unit
   /** Delete this file or empty directory; a symlink is deleted itself, not its target. */
-  update def delete(): Unit
+  update def delete()(using FileSystem^): Unit
   /** Create this directory, including missing parents. */
-  update def mkdir(): Unit
+  update def mkdir()(using FileSystem^): Unit
   /** Immediate children of a (non-classified) directory; entries you cannot
    *  access are omitted. A symlink is listed under its own path and judged by
    *  what it reaches. */
@@ -128,7 +131,7 @@ abstract class FileEntry private[atc] () extends Cap:
   /** Read any readable file as `Classified`. */
   def readClassified(): Classified[String]
   /** Write classified content; the target must be a classified path. */
-  update def writeClassified(content: Classified[String]): Unit
+  update def writeClassified(content: Classified[String])(using FileSystem^): Unit
   /** Absolute paths of the children of a classified directory (`/` separators on Windows). */
   def childrenClassified: Classified[List[String]]
   /** All descendant paths, including inside classified directories (`/` separators on Windows). */
@@ -253,6 +256,27 @@ object TodoStatus
 case class Todo(text: String, status: TodoStatus = TodoStatus.Pending)
 @assumeSafe
 object Todo
+
+/** When a monitor runs: first `delayMs` after it is added, then `everyMs` after each run
+ *  ends, at most `maxRuns` times (0: until it is stopped). */
+@assumeSafe
+case class Schedule(everyMs: Long, delayMs: Long = 0, maxRuns: Int = 0)
+@assumeSafe
+object Schedule
+
+/** A running monitor: its number (`m1`, …), name, runs so far, and the error of its last
+ *  run if that run failed. */
+@assumeSafe
+case class MonitorInfo(id: Int, name: String, runs: Int, lastError: Option[String])
+@assumeSafe
+object MonitorInfo
+
+/** What a monitor does on each of its runs: `run` gets `send`, which reports to you. A
+ *  monitor keeps its state in what `addMonitor`'s `create` made for it; being a
+ *  single-method trait, it can be written as a lambda `send => ...`. */
+@assumeSafe
+trait Monitor:
+  def run(send: String => Unit): Unit
 
 /** Minimal JSON. `Json.parse(text)` reads it; navigate with `j("key")` and `j(i)`
  *  (a missing key or index gives `Json.Null`, so `j("a")(0)("b")` is safe to chain);
@@ -656,6 +680,47 @@ trait Interface:
    *  @keepWhole
    */
   def parallel[A, C^](tasks: Seq[() ->{C} A]): List[A]
+
+  // ── Monitors ────────────────────────────────────────────────────
+
+  /** Call `create` once to make a monitor, run it in the background on `schedule`, and
+   *  return its number; each run calls the monitor's `run(send)`. Each `send(text)` reaches
+   *  you as a message `[monitor mN "name"] text`: at your next step while you work, or in a
+   *  new turn when you are idle. Send only what needs your attention, since each message
+   *  costs a turn, and stop a monitor whose job is done with `stopMonitor`.
+   *
+   *  `create` may capture only `io` and what derives from it (`fs`, `ex`, `net`), so neither
+   *  it nor the monitor can print, ask, request permissions or use a capability from a
+   *  `request*` block. What a monitor keeps across runs (a `var`, an array, a spawned
+   *  process) is made inside `create`, and the monitor holds it; a `var` from outside cannot
+   *  be captured. A monitor runs with the configured permissions and those the user granted
+   *  for the session, so when it needs more, ask in a `request*` block first and have the
+   *  user allow it for the session. `create` runs at once, in your snippet; a failed run is
+   *  reported to you, and after three failed runs in a row the monitor stops. Monitors end
+   *  with the REPL (`/reset`, a mode change, `/new`). At most eight run at once, and
+   *  `everyMs` is at least 1000.
+   *
+   *  {{{
+   *  val notes = addMonitor("notes", Schedule(everyMs = 5_000)) { () =>
+   *    var last = read("notes.md")                 // kept across runs
+   *    send =>
+   *      val now = read("notes.md")
+   *      if now != last then
+   *        send(s"notes.md changed: ${now.linesIterator.size} lines now")
+   *        last = now
+   *  }
+   *  // once it has done its job: stopMonitor(notes)
+   *  }}}
+   *  @keepWhole
+   */
+  def addMonitor(name: String, schedule: Schedule)(using user: UserIO^, io: IOCap)
+                (create: () ->{io} Monitor^{fresh}): Int
+
+  /** The monitors that are running. */
+  def monitors(using UserIO): List[MonitorInfo]
+
+  /** Stop monitor `id`; a run in progress is interrupted, and one that has ended stays so. */
+  def stopMonitor(id: Int)(using UserIO^): Unit
 
   // ── Output ──────────────────────────────────────────────────────
 

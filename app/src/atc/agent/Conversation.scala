@@ -36,11 +36,19 @@ private[agent] final class Conversation:
   /** Add a user correction only after pending tool calls have matching results. */
   def steer(input: String): Unit =
     remember(input)
+    add(input, AgentMessages.pausedForUpdate)
+
+  /** Add a monitor's message as [[steer]] adds a correction, without taking it for a request
+    * of the user's. */
+  def deliver(message: String): Unit = add(message, AgentMessages.pausedForMonitor)
+
+  /** `pause` closes an exchange that the input interrupts. */
+  private def add(input: String, pause: String): Unit =
     messages.lastOption match
       case Some(Msg.User(text)) =>
         messages = messages.init :+ Msg.User(List(text, input).filter(_.nonEmpty).mkString("\n\n"))
       case Some(_: Msg.ToolResults | _: Msg.Continuation) =>
-        append(Msg.Assistant(AgentMessages.pausedForUpdate, Nil, None))
+        append(Msg.Assistant(pause, Nil, None))
         append(Msg.User(input))
       case _ => append(Msg.User(input))
 

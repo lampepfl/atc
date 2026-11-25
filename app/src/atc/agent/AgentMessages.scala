@@ -66,10 +66,17 @@ object AgentMessages:
 
   /** Closes the assistant side of an exchange that queued user input interrupts. */
   val pausedForUpdate: String = "[paused to apply the user's update]"
+  val pausedForMonitor: String = "[paused to read a monitor's message]"
 
   def sandboxRestarted(reason: String): String =
     s"[sandbox notice] The Scala REPL was restarted ($reason). Every `val`, `def` and `import` " +
-      "you defined earlier is gone, so re-create anything you still need. The conversation itself is unchanged."
+      "you defined earlier is gone, and every monitor you added has stopped, so re-create anything you still need. " +
+      "The conversation itself is unchanged."
+
+  /** A monitor's message, as the model reads it (the form `addMonitor`'s documentation gives). */
+  def monitorMessage(id: Int, name: String, text: String): String = s"[monitor m$id \"$name\"] $text"
+
+  def monitorsStopped(what: String): String = s"[monitors] The user $what with /monitors stop."
 
   /** Report a user's `/run` snippet to the model.
     *

@@ -26,6 +26,26 @@ trait HostOutput:
   def processStarted(id: Int, commandLine: String): Unit = ()
   def processInput(id: Int, text: String): Unit = ()
   def processExited(id: Int, exitCode: Int): Unit = ()
+  /** Monitor `id` (the `mN` the user sees) has `text` for the agent: its own `send`, or
+    * the report of a failed run. */
+  def monitorMessage(id: Int, name: String, text: String): Unit = ()
+  /** Something monitor `id` did that the user should see (a file it changed, its end).
+    * Shown only. */
+  def monitorEvent(id: Int, text: String): Unit = ()
+  /** How many spawned processes and monitors are live, after either number changed. The host
+    * reports it holding none of its own locks. */
+  def backgroundChanged(processes: Int, monitors: Int): Unit = ()
+
+/** The REPL whose code a monitor runs. Its stop flag is shared by every thread running that
+  * code, and an interrupt leaves it raised until the next evaluation. */
+trait MonitorRepl:
+  /** Before a run: lower a stop flag that no evaluation in progress raised. False once
+    * the REPL is closed, when the monitor must end. */
+  def readyForMonitor(): Boolean
+
+object MonitorRepl:
+  /** For a host used without a REPL (tests calling it directly). */
+  val Unattached: MonitorRepl = () => true
 
 /** One-shot LLM completions used by normal `chat` and trusted `classifiedChat`. */
 trait HostLlm:

@@ -40,6 +40,9 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
 
   /** Ctrl-O in a read: `Tui` switches between the compact and the expanded view. */
   @volatile var onToggle: () => Unit = () => ()
+  /** What [[whileReading]] hands its widget; set and cleared under `actionLock`. */
+  private var action: () => Unit = () => ()
+  private val actionLock = Object()
 
   /** The predicted next message (`suggest`), drawn as ghost text after what
     * is typed as long as that is a prefix of it, at the main prompt only. */
@@ -373,6 +376,24 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
     reader.setVariable(LineReader.DISABLE_HISTORY, true)
     try body
     finally reader.setVariable(LineReader.DISABLE_HISTORY, false)
+
+  reader.getWidgets.put("atc-run", (() => { action(); true }): Widget)
+
+  /** Run `body` under the reader's lock while it reads, where JLine's own redisplay cannot
+    * interleave with it; false, without running it, when it is not reading. */
+  def whileReading(body: => Unit): Boolean = actionLock.synchronized:
+    action = () => body
+    try
+      reader.callWidget("atc-run")
+      true
+    catch case _: IllegalStateException => false
+    finally action = () => ()
+
+  /** Whether the user has text at the prompt (read from another thread: a hint, not a lock). */
+  def typing: Boolean = reader.isReading && reader.getBuffer.length > 0
+
+  /** `line` with the text its paste placeholders stand for, as a read that ended returns it. */
+  def expandPastes(line: String): String = pasted.expand(line)
 
   /** Write `line` above the prompt while it reads, keeping the user's input; false when it is not reading. */
   def printAbove(line: String): Boolean = reader.isReading && { reader.printAbove(line); true }

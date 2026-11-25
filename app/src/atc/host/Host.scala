@@ -13,14 +13,25 @@ import scala.util.control.NonFatal
 final class Host(
   val policy: Policy,
   val cwd: Path,
-  private[host] val output: HostOutput,
+  /** The App's or a test's ports; host code reports through [[output]]. */
+  ports: HostOutput,
   private[host] val llm: HostLlm,
   private[host] val ui: HostUi,
   /** Paths git ignores are left out of listings (config `respectGitignore`). */
   private[host] val gitIgnore: GitIgnore = GitIgnore.Disabled,
   /** The environment variables holding provider keys, removed from every command's environment. */
   private[host] val keyVariables: () => Set[String] = () => Set.empty,
-) extends Interface, Derivations, HostPaths, HostFiles, HostProcesses, HostNetwork, HostInteraction:
+) extends Interface, Derivations, HostPaths, HostFiles, HostProcesses, HostNetwork, HostInteraction, HostMonitors:
+
+  /** Report how many spawned processes and monitors are live, after either changed. Never
+    * called holding a registry's lock: the port draws on the screen, whose lock is held while
+    * the footer is drawn. */
+  private[host] def reportBackground(): Unit = output.backgroundChanged(processCount, monitorCount)
+
+  /** The output port for the calling thread: a monitor's run reports through its own. */
+  private[host] def output: HostOutput = HostMonitors.current.get() match
+    case 0 => ports
+    case id => MonitorOutput(id, ports)
 
   /** The permission scope for a capability issued by this host. */
   private[host] def scopeOf(capability: AnyRef): ScopeId = capability match
@@ -74,8 +85,14 @@ final class Host(
       tasks.toList.map(task => Try(task())).map(_.get)
     else
       val pool = Executors.newFixedThreadPool(math.min(tasks.size, Host.MaxParallel), Host.parallelThreads)
+      // A monitor's tasks report through the monitor's port, as its run does.
+      val monitor = HostMonitors.current.get()
+      def inRun(task: () => A): A =
+        HostMonitors.current.set(monitor)
+        try task()
+        finally HostMonitors.current.remove()
       try
-        val futures = tasks.toList.map(task => pool.submit[A](() => task()))
+        val futures = tasks.toList.map(task => pool.submit[A](() => inRun(task)))
         val outcomes = futures.map(future => Try(future.get()))
         val failures = outcomes.collect:
           case Failure(wrapped: ExecutionException) => wrapped.getCause.nn
@@ -105,6 +122,14 @@ object Host:
   val ExecErrorTailChars: Int = 2000
   /** Live `spawn`ed processes per session; beyond it `spawn` asks to `kill()` one. */
   val MaxProcesses: Int = 8
+  /** Live monitors; beyond it `addMonitor` asks to stop one. */
+  val MaxMonitors: Int = 8
+  /** The shortest time between the runs of a monitor. */
+  val MinMonitorIntervalMs: Long = 1000L
+  /** Failed runs in a row after which a monitor stops. */
+  val MaxMonitorFailures: Int = 3
+  /** Whether the calling thread serves a monitor's run (for ports outside the host). */
+  private[atc] def inMonitor: Boolean = HostMonitors.current.get() != 0
   /** How much of an error body `httpGet`/`httpPost` quote. */
   val HttpErrorBodyChars: Int = 500
   /** Largest HTTP response body retained in memory. */

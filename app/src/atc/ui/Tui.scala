@@ -15,7 +15,7 @@ import java.io.{InputStream, OutputStream, PrintStream}
 import java.nio.charset.{Charset, StandardCharsets}
 import java.nio.file.Path
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import java.util.concurrent.locks.ReentrantLock
 import scala.collection.mutable
 import scala.util.control.NonFatal
@@ -129,6 +129,12 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   override def inputAccepted(text: String): Unit = frame:
     beginBlock()
     write(styled(s"${g.arrow} applying update: ${Ansi.sanitize(text)}", Cyan) + "\n")
+    statusLine.refresh()
+
+  override def monitorMessage(text: String): Unit = frame:
+    beginBlock()
+    val shown = if text.length <= Tui.MonitorShownChars then text else text.take(Tui.MonitorShownChars) + " …"
+    write(styled(s"${g.arrow} ${Ansi.sanitize(shown)}", Cyan) + "\n")
     statusLine.refresh()
 
   // ── turns ─────────────────────────────────────────────────────────
@@ -554,6 +560,49 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   /** Text the next prompt starts with, before any keys typed ahead. */
   @volatile private var nextDraft = ""
 
+  /** How many spawned processes and monitors are live, for the footer. While the prompt
+    * reads, the footer is redrawn under its reader's lock, as JLine redraws it itself; a key
+    * widget takes that lock before the screen's, so this does too. */
+  def backgroundChanged(processes: Int, monitors: Int): Unit =
+    statusLine.background = (processes, monitors)
+    if !prompt.whileReading(frame(statusLine.refresh())) then frame(statusLine.refresh())
+
+  /** Whether input waits that should end the main prompt's read (App: monitor messages). */
+  @volatile var wakeWanted: () => Boolean = () => false
+  /** Ctrl-C at the main prompt, where it otherwise only clears the line. */
+  @volatile var onPromptInterrupt: () => Unit = () => ()
+  /** The thread in the main prompt's read, which [[wake]] interrupts; guarded by itself, as is
+    * [[woken]]. */
+  private val reading = AtomicReference[Thread | Null](null)
+  /** Whether [[wake]], not the user, interrupted the read. */
+  private var woken = false
+
+  /** End the main prompt's read unless the user is typing in it: the read returns "" and the
+    * next prompt starts with any text that was there. JLine ends a read whose thread is
+    * interrupted with the partial line. */
+  def wake(): Unit = reading.synchronized:
+    val thread = reading.get()
+    if thread != null && !prompt.typing then
+      woken = true
+      thread.interrupt()
+
+  /** `prompt.read`, which [[wake]] can end: `Left` with the partial line when it did. */
+  private def readWakeable(text: String, typed: String): Either[String, String] =
+    val wakeable = !prompt.blockMode
+    reading.synchronized:
+      woken = false
+      if wakeable then reading.set(Thread.currentThread)
+    try
+      // Input that waited before the read began ends it at once, unless text is there.
+      if wakeable && typed.isEmpty && wakeWanted() then Left("")
+      else Right(prompt.read(text, typed))
+    catch case e: UserInterruptException if reading.synchronized(woken) => Left(Option(e.getPartialLine).getOrElse(""))
+    finally
+      reading.synchronized:
+        reading.set(null)
+        woken = false
+        Thread.interrupted() // a wake that came as the read returned
+
   /** Start the next prompt with `text`, for the user to edit or send. */
   def draft(text: String): Unit = nextDraft = text
 
@@ -566,11 +615,16 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
         val typed = List(nextDraft, keys.takeTypeAhead()).filter(_.nonEmpty).mkString("\n")
         nextDraft = ""
         frame { statusLine.draft = ""; statusLine.refresh() }
-        result = Some(prompt.read(styled(promptText, Cyan, Bold), typed))
+        result = readWakeable(styled(promptText, Cyan, Bold), typed) match
+          case Right(line) => Some(line)
+          case Left(partial) =>
+            nextDraft = prompt.expandPastes(partial)
+            Some("")
         again = false
       catch
         case _: UserInterruptException =>
           Thread.interrupted()
+          if !prompt.blockMode then onPromptInterrupt()
           again = !prompt.blockMode
         case e: EndOfFileException =>
           Debug.log(s"EOF on input: ${e.getMessage}")
@@ -608,6 +662,9 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     terminal.close()
 
 object Tui:
+  /** How much of a monitor's message the window shows; the model reads all of it. */
+  private val MonitorShownChars = 500
+
   /** A scripted `-p` run never needs console discovery or raw mode, and its terminal is its
     * standard error: standard output is kept for the answer ([[Screen.writeAnswer]]). Giving it
     * a known dumb UTF-8 terminal also avoids platform-specific null encodings

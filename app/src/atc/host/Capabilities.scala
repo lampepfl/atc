@@ -189,21 +189,21 @@ final class FileEntryImpl(fs: FileSystemImpl, at: Path) extends FileEntry:
           catch case _: UnsupportedOperationException | _: FileAlreadyExistsException => ()
         Using.resource(Files.newOutputStream(p).nn)(out => in.transferTo(out))
 
-  def write(content: String): Unit =
+  def write(content: String)(using FileSystem): Unit =
     host.writeFile(scope, canonicalPath, content, append = false)
 
-  def writeBytes(content: Array[Byte]): Unit =
+  def writeBytes(content: Array[Byte])(using FileSystem): Unit =
     host.writeFileBytes(scope, canonicalPath, content)
 
-  def append(content: String): Unit =
+  def append(content: String)(using FileSystem): Unit =
     host.writeFile(scope, canonicalPath, content, append = true)
 
-  def delete(): Unit =
+  def delete()(using FileSystem): Unit =
     val (p, permission) = checkedRemovable("delete")
     if permission.classified then Files.delete(p)
     else host.withFileChange(p, "deleted")(Files.delete(p))
 
-  def mkdir(): Unit =
+  def mkdir()(using FileSystem): Unit =
     val p = canonicalPath
     val permission = host.requireWrite(scope, p, "mkdir")
     if permission.classified then Files.createDirectories(p)
@@ -231,7 +231,7 @@ final class FileEntryImpl(fs: FileSystemImpl, at: Path) extends FileEntry:
   def walkClassified(): Classified[List[String]] =
     asClassified("walkClassified")(host.walkPaths(scope, _, intoClassified = true).map(PlatformPath.portable))
 
-  def writeClassified(content: Classified[String]): Unit =
+  def writeClassified(content: Classified[String])(using FileSystem): Unit =
     // Hand the raw `Try` to the host: it runs the permission and target checks before
     // it branches on success or failure, so neither the thrown exception nor the
     // target's existence can reveal a bit of the classified value.

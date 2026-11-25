@@ -62,6 +62,15 @@ final class Commands(app: App):
       tui.println(result.merge)
       // The agent's handles to those processes are dead now; it should hear why.
       result.foreach(agent.noteProcessesKilled)
+    // Model-written monitor names and errors: `println` strips terminal controls.
+    case Cmd.Monitors =>
+      arg.split("\\s+", 2).toList match
+        case List("") => tui.println(host.monitorSummary)
+        case "stop" :: rest =>
+          val result = host.stopMonitorsByUser(rest.headOption.getOrElse(""))
+          tui.println(result.merge)
+          result.foreach(agent.noteMonitorsStopped)
+        case _ => tui.println("/monitors lists the monitors; /monitors stop m<number>|all stops them")
     case Cmd.Cost => statusCommands.showCost()
     case Cmd.Output => statusCommands.output(arg)
     case Cmd.Task => statusCommands.showTask()
@@ -83,6 +92,7 @@ object Commands:
           case (Cmd.ClassifiedModel, _ :: Nil) => "none" +: labels
           case (Cmd.Mode, _ :: Nil) => Mode.values.toList.map(_.label)
           case (Cmd.Perms, _ :: Nil) => List("revoke")
+          case (Cmd.Monitors, _ :: Nil) => List("stop")
           case (Cmd.Config, _ :: Nil) => "show" :: ConfigCommands.Setting.values.toList.map(_.key)
           case (Cmd.Config, key :: _ :: Nil) => ConfigCommands.Setting.named(key).fold(Nil)(_.choices)
           case (Cmd.Config, key :: _ :: _ :: Nil) if ConfigCommands.Setting.named(key).isDefined =>

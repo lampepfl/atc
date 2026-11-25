@@ -185,7 +185,9 @@ object Prompts:
        |   by side, so never for tasks that write the same files or share mutable state (see its doc
        |   comment).
        |   Keep permission-dependent operations separate from later effects so user feedback can change
-       |   the plan. State persists between calls (vals, defs, imports).
+       |   the plan. State persists between calls (vals, defs, imports). To wait for something that
+       |   outlasts your turn (a CI run, a long build, a log), add a monitor with `addMonitor` instead of
+       |   polling in a loop, and stop it once it has done its job.
        |9. When done, report the result, verification and remaining blockers concisely (no tool call).
        |   Avoid narrating each snippet or repeating the same information in both prose and a table.
        |10. Web search (when available) is for facts you cannot get locally; use it sparingly and
@@ -208,8 +210,7 @@ object Prompts:
        |  threads are forbidden.
        |- Capability types carry a read/write mode (the API header explains `^`, `update def` and
        |  `.rd`): a helper that writes must say `(using fs: FileSystem^)`, and
-       |  `val ro: FileSystem^{fs.rd} = fs` is a read-only view for code that must not write (it can
-       |  also read files inside `Classified.map`, where the full `fs` may not be captured). A helper
+       |  `val ro: FileSystem^{fs.rd} = fs` is a read-only view for code that must not write. A helper
        |  that runs commands must require both `(using ex: Exec^, fs: FileSystem^)`.
        |- Prefer the path-based helpers (`read`, `write`, `ls`, `walk`, `exists`, ...) over
        |  `access(...)` handles. A top-level `val` holding a capturing value (`FileEntry`, `Process`)
@@ -224,8 +225,8 @@ object Prompts:
        |  of `InterruptedException`/`ThreadDeath` are rejected. Catch a specific type instead, e.g.
        |  `catch case _: Exception` (or a `RuntimeException` subtype); a fatal error aborts the run by design.
        |- Classified data (`readClassified`, `Classified[T]`): you never see the content; only `map`
-       |  with a pure function compiles (no effect, no capability, a read-only `fs` being the one
-       |  exception); the ways out are in the `Classified` doc below (`println` shows it to the user
+       |  with a pure function compiles (no effect and no capability, except that it may read files);
+       |  the ways out are in the `Classified` doc below (`println` shows it to the user
        |  only, `writeClassified`, `classifiedChat`). The classified model is assumed isolated and
        |  effect-free, so `classifiedChat(String)` is deliberately capability-free and may run inside
        |  `map`; `classifiedChat(Classified[String])` maps that operation while keeping the answer

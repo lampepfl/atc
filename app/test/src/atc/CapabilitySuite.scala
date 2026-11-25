@@ -113,12 +113,13 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
   // ── Deriving capabilities from `io` ─────────────────────────────
 
   test("the agent-facing API consumes leaf capabilities, never the io root directly"):
+    // `addMonitor` takes `io` only to name the bound of its callback's captures.
     val consumers = classOf[atc.lib.Interface].getMethods.toList
       .filter(_.getParameterTypes.contains(classOf[atc.lib.IOCap]))
       .map(_.getName)
       .distinct
       .sorted
-    assertEquals(consumers, Nil)
+    assertEquals(consumers, List("addMonitor"))
 
   test("the derivations are the sandbox's, not the agent's: unreachable from agent code"):
     // The preamble builds `fs`/`ex`/`net` from `io` through `Runtime`; agent code
@@ -154,7 +155,8 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
     assertOk(run("""val rofs: FileSystem^{fs.rd} = fs; rofs.access("a.txt").read().length"""))
     assertFails(run("""val rofs: FileSystem^{fs.rd} = fs; write("a.txt", "x")(using rofs)"""), "read-only")
     assertOk(run("""val rofs: FileSystem^{fs.rd} = fs; classify("a.txt").map(p => read(p)(using rofs)).toString"""))
-    assertFails(run("""classify("a.txt").map(p => read(p)).toString""")) // the full fs may not be captured
+    // A read through the full `fs` is charged as `fs.rd`, which the pure callback admits.
+    assertOk(run("""classify("a.txt").map(p => read(p)).toString"""))
 
   test("Exec and Network have no read-only view: a bare Exec is already full"):
     // They are plain exclusive capabilities (not `Stateful`), because there is no
@@ -279,6 +281,10 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
       "mark todo" -> """classify("s").map(s => { markTodo(s, TodoStatus.Done); s })""",
       "normal model" -> """classify("s").map(s => chat(s))""",
       "write a file" -> """classify("s").map(s => { write("leak.txt", s); s })""",
+      "write through a handle" -> """classify("s").map(s => { access("leak.txt").write(s); s })""",
+      "write through a handle of fs" -> """classify("s").map(s => { fs.access("leak.txt").write(s); s })""",
+      "write through a local handle" -> """classify("s").map(s => { val e = fs.access("leak.txt"); e.append(s); s })""",
+      "delete through a child handle" -> """classify("s").map(s => { access(".").children.foreach(_.delete()); s })""",
       "regex sed" -> """classify("s").map(s => { sed("a.txt", "content", s); s })""",
       "move a file" -> """classify("s").map(s => { move("a.txt", s); s })""",
       "copy a file" -> """classify("s").map(s => { copy("a.txt", s); s })""",
@@ -301,6 +307,78 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
     for (what, code) <- channels do
       val r = run(code)
       assert(!r.success, s"$what leaked into Classified.map:\n${r.output}")
+
+  test("a capability copied into a val is charged in full inside Classified.map"):
+    // A stateful class without an update method had every use charged read-only, so
+    // these compiled and leaked; `Cap`'s update member makes them count in full.
+    assertOk(run("""val u: UserIO^ = user"""))
+    assertOk(run("""val w: FileSystem^{io} = fs"""))
+    assertOk(run("""def viaU(s: String) = { println(s)(using u); s }"""))
+    val attacks = List(
+      """classify("s").map(s => { println(s)(using u); s })""",
+      """classify("s").map(s => ask(s)(using u))""",
+      """classify("s").map(s => { write("leak.txt", s)(using w); s })""",
+      """classify("s").map(s => { w.access("leak.txt").write(s)(using w); s })""",
+      """classify("s").map(viaU)""",
+    )
+    for code <- attacks do
+      val result = run(code)
+      assert(!result.success, s"leaked into Classified.map: $code\n${result.render}")
+    assertFails(run("""val g: () ->{w.rd} Unit = () => w.access("x.txt").write("y")(using w)"""))
+    assertFails(run("""val g: () ->{u.rd} Unit = () => println("y")(using u)"""))
+
+  test("a monitor may capture io and what derives from it, and what its create made, nothing else"):
+    // A monitor's runs act with the base scope: they have no `user` to print, ask or request
+    // with, and no capability of a `request*` block, whose scope ends with the block. Its
+    // state is what `create` made: the monitor's type admits that and nothing from outside.
+    val later = "Schedule(everyMs = 60000, delayMs = 60000)"
+    val echo = ujson.write(echoCommand)
+    try
+      assertOk(run(s"""addMonitor("files", $later) { () => send => if exists("a.txt") then send(read("a.txt")) }"""))
+      assertOk(run(s"""addMonitor("commands", $later) { () => send => send(execOutput($echo)) }"""))
+      assertOk(run(s"""addMonitor("network", $later) { () => send => send(httpGet("http://example.com")) }"""))
+      assertOk(
+        run(s"""addMonitor("tasks", $later) { () => send => parallel(List(() => send("a"), () => send("b"))); () }""")
+      )
+      assertOk(run(s"""addMonitor("counter", $later) { () => var n = 0; send => { n += 1; send(n.toString) } }"""))
+      assertOk(run(s"""addMonitor("array", $later) { () => val seen = Array(0); send => seen(0) += 1 }"""))
+      assertOk(run(
+        s"""addMonitor("class", $later) { () =>
+           |  var last = read("a.txt")
+           |  new Monitor:
+           |    def run(send: String => Unit): Unit =
+           |      if read("a.txt") != last then send("changed")
+           |}""".stripMargin
+      ))
+      assertOk(
+        run(s"""addMonitor("process", $later) { () => val p: Process^{ex} = spawn($echo); send => send(p.read()) }""")
+      )
+      assertOk(run("""val kept: UserIO^ = user"""))
+      val rejected = List(
+        s"""addMonitor("print", $later) { () => send => println("x") }""",
+        s"""addMonitor("print through a val", $later) { () => send => println("x")(using kept) }""",
+        s"""addMonitor("ask", $later) { () => send => ask("x"); () }""",
+        s"""addMonitor("ask in create", $later) { () => ask("x"); send => () }""",
+        s"""addMonitor("todos", $later) { () => send => setTodos(Nil) }""",
+        s"""addMonitor("chat", $later) { () => send => send(chat("x")) }""",
+        s"""addMonitor("request", $later) { () => send => requestExec(List($echo)) { () } }""",
+        s"""requestExec(List($echo)) { addMonitor("scoped exec", $later) { () => send => send(execOutput($echo)) } }""",
+        s"""requestExec(List($echo)) {
+           |  val e: Exec^ = summon[Exec^]
+           |  addMonitor("kept exec", $later) { () => send => send(execOutput($echo)(using e, fs)) }
+           |}""".stripMargin,
+        s"""requestFiles(".") { addMonitor("scoped files", $later) { () => send => send(read("a.txt")) } }""",
+        s"""def counting(): Int = { var n = 0; addMonitor("var", $later) { () => send => n += 1 } }""",
+        s"""addMonitor("send kept", $later) { () => var kept: (String => Unit) | Null = null; send => kept = send }""",
+        s"""addMonitor("secret sent", $later) { () => val s = readClassified("a.txt"); send => { s.map(send); () } }""",
+        s"""classify("s").map(s => addMonitor("in map", $later) { () => send => send(s) })""",
+        s"""addMonitor("send in map", $later) { () => send => classify("s").map(s => send(s)); () }""",
+        s"""addMonitor("send in flatMap", $later) { () => send => classify("s").flatMap(s => { send(s); classify(1) }); () }""",
+      )
+      for code <- rejected do
+        val result = run(code)
+        assert(!result.success, s"accepted: $code\n${result.render}")
+    finally env.host.stopMonitors()
 
   test("capability values cannot be smuggled into Classified.map as its argument"):
     // `classify` does not erase a value's capture provenance. Even though each
@@ -328,7 +406,7 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
       """def w4(s: String) = { println(s); s }""" -> "w4",
       """def w5(s: String) = ask(s)""" -> "w5",
       """def w6(s: String) = chat(s)""" -> "w6",
-      """def w7(s: String) = grepRecursive(".", s).size""" -> "w7",
+      """def w7(s: String) = { write("leak.txt", s); s }""" -> "w7",
     )
     for (definition, name) <- wrappers do
       assertOk(run(definition))

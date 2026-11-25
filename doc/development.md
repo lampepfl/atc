@@ -300,7 +300,7 @@ chooses the form: `compact` (the default) keeps every signature and cuts each do
 its first sentence, marking a cut with `…`, and drops code examples, method bodies,
 annotations and imports; `full` sends the source whole. A doc comment with a `@keepWhole`
 line stays whole in the compact form, for the few APIs where a guess causes a security slip or
-broken code (`Classified`, `exec`, `parallel`); neither form shows the marker. `help(name)`
+broken code (`Classified`, `exec`, `parallel`, `addMonitor`); neither form shows the marker. `help(name)`
 prints the whole documentation of a method with its overloads, of a type with its members, or
 of `Type.member`, and suggests names for an unknown one. On the current source the compact
 form is about two thirds of the full one.
@@ -320,10 +320,20 @@ Capability constructors are private to ATC. `Runtime` and `Derivations` provide 
 sandbox's internal bootstrap API and are marked `@rejectSafe`. Agent code cannot derive
 missing capabilities from a root it holds.
 
-The preamble loads each given in a separate REPL round. Each therefore occupies a separate
-wrapper class: a read-only operation capturing `fs` does not also capture the full `user`
-capability. Keep the givens at the top level; grouping them in an object changes capture
-checking behavior.
+The preamble defines each capability as a strict `implicit val` at the top level, each in a
+separate REPL round. A `given` would be a lazy val, and the checker charges a closure that uses
+a lazy val with the whole line wrapper that holds it, a reference no capture set names: a
+callback bounded by `{io}` could then use none of them. A strict val is the path
+`wrapper.fs`, charged as `fs` and covered by `io` through its type.
+
+Two behaviours of the pinned compiler need workarounds in `lib`, and `CapabilitySuite` holds
+the cases they close. A stateful class without an `update` method has every use charged as
+read-only, even passed to a full `T^` parameter, so `println(s)(using user)` and
+`write(p, s)(using fs)` would fit a pure `Classified.map`; `Cap` therefore declares a private
+`update` member, which makes such uses count in full. And an update through a handle that a
+non-update method returned, `fs.access(p).write(s)`, is charged only as the read that made
+the handle; the `update` methods of `FileEntry` therefore also take a full `FileSystem^`,
+whose use is charged in full. Remove both once the compiler charges these uses itself.
 
 ### Classified data
 
@@ -341,10 +351,11 @@ secret therefore keeps the Boolean classified too. Allowing `println`, a mutable
 handle, or an untrusted model callback inside `map` would expose information even if the
 callback returned a harmless value.
 
-An explicit read-only file system can be used to compute a classified result:
+A read uses only the read-only view of `fs`, so the callback can compute a classified result
+from files in every mode:
 
 ```scala
-classify("notes.txt").map(path => read(path)(using ro))
+classify("notes.txt").map(path => read(path))
 ```
 
 The `printer` callback defined above is rejected in the same position:
@@ -711,8 +722,8 @@ ordinary exceptions so that the REPL's stop signal reaches the evaluation thread
 instrumented REPL class checks the stop flag on every thread, so an interrupt or timeout
 stops busy tasks too, and interrupting the calling thread interrupts workers blocked in a
 host call. An interrupted call returns once its workers have ended, or after two seconds, so
-the stop flag is still raised while they finish and a later evaluation does not clear it
-under them. Shared host state is thread-safe: the TUI's output methods are synchronized,
+the stop flag is still raised while they finish: until then the evaluation holds the lock that
+a later evaluation, or a monitor's run, needs to lower it. Shared host state is thread-safe: the TUI's output methods are synchronized,
 `Policy`, the process registry and the TODO list lock their mutable state, and
 `Tui.popupBlock` shows questions and permission prompts from several tasks one at a time.
 
@@ -722,6 +733,77 @@ unboxed, which is inside the trusted host; with `Seq[() => A]`, a task could run
 secret inside `Classified.map`. The parameter charges the caller with `C`, so
 `Classified.map` keeps its rules and pure tasks still compile inside it. `CapabilitySuite`
 covers both cases.
+
+### Monitors
+
+`addMonitor(name, schedule)(using user: UserIO^, io: IOCap)(create: () ->{io} Monitor^{fresh})`
+calls `create` once, in the snippet, and runs the `Monitor` it returns in the background: each
+run calls `run(send)`. The bound `{io}` admits `io` and the preamble's `fs`, `ex` and `net`,
+whose types capture it, and nothing else: not `user`, so neither `create` nor a run can print,
+ask or open a `request*` block; not the capability a request block lends, whose capture set is
+its own; not a `var` from outside. `fresh` admits in the monitor what `create` makes for it,
+the state it keeps across runs: a `var`, an array, a spawned process. A bare `^` would not do:
+in a function type's result the pinned compiler reads it as the `any` of the scope around the
+call, which that state is not visible from. `Monitor` has a single abstract method, so
+`create` can return a lambda `send => ...`.
+
+`send` is a parameter of type `String => Unit`, which a pure `Classified.map` cannot capture
+and a `var` of the state cannot hold, so a secret cannot reach the agent through it, and
+`addMonitor` itself takes the full `user`, so it cannot run inside `map` either. `io` is taken
+as a read-only view so that one signature serves every mode: in read-only mode `fs` is
+`FileSystem^{io.rd}` and a monitor can only read. The bound works because the preamble's
+capabilities are strict vals ([the capability design](#the-capability-design)). The state is
+made on the evaluation thread and then used on the monitor's thread only; the executor orders
+the two.
+
+A run acts with the base scope: the configured rules and the session grants. A request
+allowed once has ended with its block, so a monitor that needs more is added after the user
+allows it for the session; a request scope's capability, could a run hold one, would be
+refused by its closed scope as well. `CapabilitySuite`, `ModeSuite` and `MonitorSuite` cover
+the typing and these permissions.
+
+Each monitor has a single-thread scheduled executor, with a fixed delay between runs, so a run
+that never returns holds up no other monitor. Stopping one shuts its executor down, which
+interrupts a run in progress; a loop in agent code ignores the interrupt and ends with the
+REPL's stop flag, which a closed REPL keeps raised. That flag belongs to the REPL's class loader
+and stops every thread running its code, and Ctrl-C raises it even between evaluations, where
+it stays until the next one lowers it. Before each run `ReplSession.readyForMonitor` therefore
+tries the evaluation lock: holding it shows that no evaluation runs, so a raised flag is stale
+and is lowered. While an evaluation runs the flag is that evaluation's, and a run it stops ends
+with it without counting as a failure. A run that throws is reported to the agent, the first
+of a series only, and three failed runs in a row stop the monitor. A message longer than 4000
+characters is cut.
+
+`Host.output` gives a monitor's run, and the `parallel` tasks it starts, a `MonitorOutput`.
+Host ports otherwise assume that the agent's evaluation is the caller: a file the run changes
+is reported as the monitor's event instead of a preview in the agent's open tool block, its
+commands are not shown live, and they do not pause the clock of an evaluation that runs
+meanwhile (`whileCommandRuns`; `SandboxRepl.withClockPaused` checks `Host.inMonitor` for
+`classifiedChat`). Process events are shown as for the agent.
+
+`HostOutput.monitorMessage` queues the message on the `Agent` (at most 50, the oldest
+dropped). The queue is drained where queued corrections are, before each model request, and
+`Conversation.deliver` adds it as a correction is added, except that it is not recorded as a
+request of the user's and the marker that closes an interrupted exchange names a monitor.
+Unlike a correction it does not cancel a model request, skip the rest of a batch of tool calls,
+or continue a turn whose answer is final. Between turns `App` starts a turn for it: `Tui.wake`
+interrupts the thread in the main prompt's read, JLine ends the read with the partial line,
+and that line becomes the next prompt's draft. It does not while the user has text at the
+prompt, which may be the `/monitors stop` that a chatty monitor calls for; the messages then
+go with what the user sends. After a turn that did not finish (interrupted, limited, blocked
+or failed), and after Ctrl-C at the prompt, the messages wait for the user's next message, so
+Ctrl-C stops a monitor that keeps the agent busy, and a failing model is not retried for every
+message. The wake is verified on macOS terminals; where interrupting the read does not end it,
+the messages wait for the next input. A `-p` run ends with its turn.
+
+A monitor's run is the first agent code that runs while no evaluation captures `System.err`,
+which is then the terminal, and `printStackTrace` writes there without a capability. A
+session therefore wraps the process's `System.err` once, under the evaluation lock, in a
+stream that drops what a monitor's thread writes, and the evaluation capture drops it too.
+
+`SandboxRepl.replace` (`/reset`, `/mode`, `/new`) and shutdown stop every monitor, and the
+restart notice tells the agent. `/monitors` lists them and `/monitors stop` stops them, which
+the agent hears about. At most eight run at once, at most once a second each.
 
 HTTP operations validate the scheme, host and headers (secret header names too; only their
 values stay inside the classified boundary), do not follow redirects, and cap response
@@ -1526,7 +1608,18 @@ not scroll the banner away. Its activity indicator replaces a separate spinner w
 terminal supports a status line: JLine draws one only with the scroll-region and cursor
 capabilities `StatusLine.FooterCapabilities` lists, and does not say when it cannot. Idle
 state shows a short mode, model and directory label; menus and answer fields replace it with
-the applicable keyboard controls.
+the applicable keyboard controls. After that label the footer counts the live spawned
+processes and monitors, when there are any (`· 2 processes · 1 monitor`), during a turn too.
+
+The host reports those counts through `HostOutput.backgroundChanged` whenever a process
+starts, exits or is killed and whenever a monitor is added or ends, and the footer draws the
+numbers it was given. It never asks the host: `spawn` reports its start to the TUI while it
+holds the process registry's lock, and a footer that read the registry under the screen's
+lock could deadlock with it; the host reports the counts holding none of its locks. A process
+can exit and a monitor end while the prompt reads, and JLine's line reader redraws the footer
+itself then, so `Tui.backgroundChanged` redraws it under the reader's lock
+(`PromptReader.whileReading`, a widget run through `callWidget`, as the ghost text is), taking
+that lock before the screen's as a key widget does.
 
 Every footer update goes through `StatusLine.draw`, which flushes the terminal writer after
 JLine's `Status.update`: JLine leaves the closing synchronized-output sequence

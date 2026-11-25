@@ -201,12 +201,12 @@ full `fs` under the same root.
 
 | Capability | What it authorises | Where one comes from |
 |---|---|---|
-| `IOCap` | nothing by itself; it is the root the others are derived from | the preamble (`given io`) |
+| `IOCap` | nothing by itself; it is the root the others are derived from | the preamble's `io` |
 | `FileSystem` | `read`, `ls`, `walk`, `grep`, …; `write`, `append`, `delete`, `mkdir` need a full one | the preamble's `fs` (derived from `io` by the sandbox; `val ro: FileSystem^{fs.rd} = fs` is a read-only view) |
 | `FileEntry` | a handle to one file or directory; as capable as the `FileSystem` it came from | `access(path)` |
 | `Exec` | running commands, together with a full `FileSystem^` | the preamble's `ex` (local and full mode) |
 | `Network` | HTTP requests | the preamble's `net` (full mode) |
-| `UserIO` | printing, questions, the TODO list, and normal-model `chat` | the preamble (`given user`), always full |
+| `UserIO` | printing, questions, the TODO list, and normal-model `chat` | the preamble's `user`, always full |
 
 `UserIO` is not derived from `IOCap`: reporting to the human is an effect on the
 conversation, not on the machine, so it survives when the agent may touch nothing at all.
@@ -246,6 +246,12 @@ hold which capability and refuses the ones that would outlive their scope. That 
 makes [`request*` blocks](#asking-for-more) safe: the wider file system lent to a block
 cannot be stashed in a `val` that survives it, returned from it, or captured by a closure
 that escapes it.
+
+The same typing confines a monitor, code the agent leaves running with `addMonitor` to watch
+a file, a build or a CI run and message it: it may capture only `io`, what derives from it and
+the state it made itself, so it cannot print, ask, request permissions or keep a capability
+lent to a block, and it acts with the configured permissions and those you allowed for the
+session.
 
 ### Classified data
 
@@ -304,12 +310,11 @@ file, a process, or the network:
   └ failed 88 ms
 ```
 
-`rs$line$3` is the REPL wrapper of the preamble line that holds the `user` given (see
+`rs$line$3` is the REPL wrapper of the preamble line that holds `user` (see
 [the capability design](doc/development.md#the-capability-design)). Reading inside the `map`
-cannot leak the secret, so it compiles through a read-only file system: in read-only mode,
-where `fs` is `FileSystem^{io.rd}`, and in the other modes as `read(path)(using ro)` with
-`val ro: FileSystem^{fs.rd} = fs`. The agent can always route a secret to an authorized
-channel: the terminal, a classified file, the classified model, or an allow-listed host.
+cannot leak the secret, so it compiles in every mode: a read uses only the read-only view of
+`fs`. The agent can always route a secret to an authorized channel: the terminal, a
+classified file, the classified model, or an allow-listed host.
 
 ### Runtime permissions
 
@@ -518,7 +523,9 @@ is working, type a correction and press Enter: it reaches the agent before its n
 call. A long paste shows as a placeholder such as `[Pasted text #1: 120 lines]` and is sent
 in full. Interactive sessions are saved after every turn, and the next start in the same
 directory offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
-reports whether it is working, waiting or done to terminals that track program status.
+reports whether it is working, waiting or done to terminals that track program status. A
+monitor's message starts a turn when the agent is idle and you are not typing, and
+`/monitors` lists and stops them; the footer counts the running processes and monitors.
 
 A `-p` run asks nothing: a permission the configuration does not grant fails instead of
 waiting. `--approve-all` approves such requests instead; use it only in a trusted setup. The

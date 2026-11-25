@@ -18,6 +18,8 @@ trait AgentUI:
   def warn(text: String): Unit
   /** A queued correction has entered the conversation at a tool boundary. */
   def inputAccepted(text: String): Unit = ()
+  /** A monitor's message was added to the conversation. */
+  def monitorMessage(text: String): Unit = ()
   /** Ask whether the turn may run another `budget` tool calls after using up its
     * budget. `used` is how many it has run, `budget` the configured allocation. */
   def confirmMoreToolCalls(used: Int, budget: Int): Boolean = false
