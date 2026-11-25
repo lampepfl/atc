@@ -23,6 +23,11 @@ final class Host(
   private[host] val keyVariables: () => Set[String] = () => Set.empty,
 ) extends Interface, Derivations, HostPaths, HostFiles, HostProcesses, HostNetwork, HostInteraction, HostMonitors:
 
+  /** Report how many spawned processes and monitors are live, after either changed. Never
+    * called holding a registry's lock: the port draws on the screen, whose lock is held while
+    * the footer is drawn. */
+  private[host] def reportBackground(): Unit = output.backgroundChanged(processCount, monitorCount)
+
   /** The output port for the calling thread: a monitor's run reports through its own. */
   private[host] def output: HostOutput = HostMonitors.current.get() match
     case 0 => ports

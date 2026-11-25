@@ -36,7 +36,7 @@ private[host] trait HostMonitors:
     checkRoom()
     // Agent code, run in the snippet that adds the monitor: what it throws reaches that snippet.
     val made = create()
-    monitorsById.synchronized:
+    val added = monitorsById.synchronized:
       checkRoom() // a `parallel` task may have added one meanwhile
       nextMonitorId += 1
       val monitor = HostMonitors.Scheduled(nextMonitorId, name, schedule.maxRuns, made, repl)
@@ -47,9 +47,13 @@ private[host] trait HostMonitors:
         schedule.everyMs,
         TimeUnit.MILLISECONDS
       )
-      monitor.id
+      monitor
+    reportBackground()
+    added.id
 
   def monitors(using UserIO): List[MonitorInfo] = monitorsById.synchronized(monitorsById.values.toList.map(_.info))
+
+  private[host] def monitorCount: Int = monitorsById.synchronized(monitorsById.size)
 
   def stopMonitor(id: Int)(using UserIO): Unit =
     val (monitor, added) = monitorsById.synchronized((monitorsById.get(id), id >= 1 && id <= nextMonitorId))
@@ -89,11 +93,11 @@ private[host] trait HostMonitors:
           case None => Left(s"no running monitor '$ref' (see /monitors)")
 
   private def end(m: HostMonitors.Scheduled): Unit =
-    monitorsById.synchronized(monitorsById.remove(m.id))
+    val removed = monitorsById.synchronized(monitorsById.remove(m.id)).isDefined
     m.stopped = true
     // Interrupts a run in progress; a loop in agent code ends only with the REPL's stop flag.
     m.executor.shutdownNow()
-    ()
+    if removed then reportBackground()
 
   /** One run. Nothing may escape: the executor would cancel the schedule without a word. */
   private def run(m: HostMonitors.Scheduled): Unit =
@@ -187,3 +191,4 @@ private[host] final class MonitorOutput(id: Int, ports: HostOutput) extends Host
   override def processExited(id: Int, exitCode: Int): Unit = ports.processExited(id, exitCode)
   override def monitorMessage(id: Int, name: String, text: String): Unit = ports.monitorMessage(id, name, text)
   override def monitorEvent(id: Int, text: String): Unit = ports.monitorEvent(id, text)
+  override def backgroundChanged(processes: Int, monitors: Int): Unit = ports.backgroundChanged(processes, monitors)

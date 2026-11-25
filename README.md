@@ -525,7 +525,7 @@ in full. Interactive sessions are saved after every turn, and the next start in 
 directory offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
 reports whether it is working, waiting or done to terminals that track program status. A
 monitor's message starts a turn when the agent is idle and you are not typing, and
-`/monitors` lists and stops them.
+`/monitors` lists and stops them; the footer counts the running processes and monitors.
 
 A `-p` run asks nothing: a permission the configuration does not grant fails instead of
 waiting. `--approve-all` approves such requests instead; use it only in a trusted setup. The

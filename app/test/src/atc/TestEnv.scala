@@ -59,6 +59,8 @@ final class TestEnv(
   /** What monitors sent the agent, as (id, name, text), and what they showed the user. */
   val monitorMessages: ListBuffer[(Int, String, String)] = ListBuffer()
   val monitorEvents: ListBuffer[(Int, String)] = ListBuffer()
+  /** The live (processes, monitors) the host reported, in order. */
+  val backgrounds: ListBuffer[(Int, Int)] = ListBuffer()
 
   val output: HostOutput = new HostOutput:
     def print(agentText: String, userText: String): Unit = agentOut.synchronized:
@@ -87,6 +89,8 @@ final class TestEnv(
     override def monitorMessage(id: Int, name: String, text: String): Unit =
       monitorMessages.synchronized(monitorMessages += ((id, name, text)))
     override def monitorEvent(id: Int, text: String): Unit = monitorEvents.synchronized(monitorEvents += ((id, text)))
+    override def backgroundChanged(processes: Int, monitors: Int): Unit =
+      backgrounds.synchronized(backgrounds += ((processes, monitors)))
 
   val llm: HostLlm = new HostLlm:
     def chat(m: String): String =

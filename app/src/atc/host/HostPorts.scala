@@ -32,6 +32,9 @@ trait HostOutput:
   /** Something monitor `id` did that the user should see (a file it changed, its end).
     * Shown only. */
   def monitorEvent(id: Int, text: String): Unit = ()
+  /** How many spawned processes and monitors are live, after either number changed. The host
+    * reports it holding none of its own locks. */
+  def backgroundChanged(processes: Int, monitors: Int): Unit = ()
 
 /** The REPL whose code a monitor runs. Its stop flag is shared by every thread running that
   * code, and an interrupt leaves it raised until the next evaluation. */

@@ -560,6 +560,13 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   /** Text the next prompt starts with, before any keys typed ahead. */
   @volatile private var nextDraft = ""
 
+  /** How many spawned processes and monitors are live, for the footer. While the prompt
+    * reads, the footer is redrawn under its reader's lock, as JLine redraws it itself; a key
+    * widget takes that lock before the screen's, so this does too. */
+  def backgroundChanged(processes: Int, monitors: Int): Unit =
+    statusLine.background = (processes, monitors)
+    if !prompt.whileReading(frame(statusLine.refresh())) then frame(statusLine.refresh())
+
   /** Whether input waits that should end the main prompt's read (App: monitor messages). */
   @volatile var wakeWanted: () => Boolean = () => false
   /** Ctrl-C at the main prompt, where it otherwise only clears the line. */

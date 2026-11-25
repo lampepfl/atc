@@ -10,7 +10,8 @@ import atc.sandbox.{ExecutionResult, ReplSession}
 class MonitorSuite extends munit.FunSuite, ReplAssertions:
   override val munitTimeout = scala.concurrent.duration.Duration(3, "min")
 
-  private val env = TestEnv(commands = List(ProcessFixture.pattern("echo")), prefix = "atc-monitor")
+  private val env =
+    TestEnv(commands = List(ProcessFixture.pattern("echo"), ProcessFixture.pattern("sleep")), prefix = "atc-monitor")
   private lazy val session: ReplSession = env.newSession(mode = Mode.Full)
   private def run(code: String): ExecutionResult = session.run(code)
 
@@ -200,6 +201,20 @@ class MonitorSuite extends munit.FunSuite, ReplAssertions:
       assert(written.contains("APP-LINE"), written)
       s.close()
     finally System.setErr(before)
+
+  test("the host reports how many processes and monitors are live as they change"):
+    def last: Option[(Int, Int)] = env.backgrounds.synchronized(env.backgrounds.lastOption)
+    env.host.killProcesses()
+    assertEquals(last, Some((0, 0)))
+    assertOk(run("""addMonitor("idle", Schedule(everyMs = 60000, delayMs = 60000)) { () => send => () }"""))
+    assertEquals(last, Some((0, 1)))
+    val sleep = env.scalaString(ProcessFixture.command("sleep", "60000"))
+    assertOk(run(s"""val sleeper: Process^{ex} = spawn($sleep)"""))
+    assertEquals(last, Some((1, 1)))
+    assertOk(run("""sleeper.kill()"""))
+    eventually("the process's exit")(last == Some((0, 1)))
+    env.host.stopMonitors()
+    assertEquals(last, Some((0, 0)))
 
   test("a monitor ends with the REPL that compiled it"):
     val e = TestEnv(prefix = "atc-monitor-close")

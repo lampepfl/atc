@@ -11,7 +11,8 @@ import scala.jdk.CollectionConverters.*
 
 /** The footer (JLine `Status`), the window title and the program status. The footer shows
   * what the turn is doing, an unsent correction, or the keys a pop-up takes; between turns
-  * it shows the mode, model and directory. The title is `atc · <directory>`, marked while a
+  * it shows the mode, model and directory, and after them how many spawned processes and
+  * monitors are live. The title is `atc · <directory>`, marked while a
   * turn runs (`●`) or a pop-up waits during one (`?`), so a tab that needs the user stands
   * out. The terminal's own title is saved first (xterm's title stack) and restored by
   * `close`. The program status (OSC 7501) says the same to terminals that track it:
@@ -48,6 +49,8 @@ private[ui] final class StatusLine(
   @volatile var draft = ""
   /** The keys the open menu or answer field takes; shown instead of everything else. */
   @volatile private var hint = ""
+  /** How many spawned processes and monitors are live. */
+  @volatile var background: (processes: Int, monitors: Int) = (0, 0)
   /** What the open pop-up waits for, as the program status `kind` and message. */
   @volatile var waitingFor: (kind: String, message: String) = ("question", "")
 
@@ -139,16 +142,21 @@ private[ui] final class StatusLine(
     lastFooter = ""
     refresh()
 
-  private def label: String =
+  private[ui] def label: String =
     val elapsed = if busy() then s" ${Format.duration((System.nanoTime() - turnStarted) / 1e9)}" else ""
     val queued = queuedInputs()
     val waiting = if queued > 0 then s" ${g.dot} ${Format.plural(queued, "message")} queued" else ""
+    val (processes, monitors) = background
+    val live = List(
+      Option.when(processes > 0)(if processes == 1 then "1 process" else s"$processes processes"),
+      Option.when(monitors > 0)(Format.plural(monitors, "monitor")),
+    ).flatten.map(count => s" ${g.dot} $count").mkString
     if hint.nonEmpty then hint
     else if draft.nonEmpty then s"Update: ${draft.takeRight((width - 30).max(10))} ${g.dot} Enter to send$waiting"
     else if busy() then
       val frame = g.spinner(((System.nanoTime() - turnStarted) / 100_000_000L % g.spinner.length).toInt)
-      s"$frame ${operation.take((width / 2).max(20))}$elapsed$waiting ${g.dot} $context"
-    else context
+      s"$frame ${operation.take((width / 2).max(20))}$elapsed$waiting ${g.dot} $context$live"
+    else context + live
 
   /** Restore the terminal's title, clear the program status and take the footer down;
     * later updates draw nothing. */

@@ -24,6 +24,17 @@ class StatusLineSuite extends munit.FunSuite:
     assert(!StatusLine(screen, () => false, () => false, () => 0).shown)
     assert(StatusLine(TestTerminal.screen(), () => false, () => false, () => 0).shown)
 
+  test("the footer names the live processes and monitors after the context, when there are any"):
+    val status = StatusLine(TestTerminal.screen(), () => false, () => false, () => 0)
+    status.setContext("full · echo · proj", "atc")
+    assertEquals(status.label, "full · echo · proj")
+    status.background = (2, 1)
+    assertEquals(status.label, "full · echo · proj · 2 processes · 1 monitor")
+    status.background = (1, 0)
+    assertEquals(status.label, "full · echo · proj · 1 process")
+    status.background = (0, 3)
+    assertEquals(status.label, "full · echo · proj · 3 monitors")
+
   test("a program status report encodes its message on one line"):
     val report = StatusLine.programStatus("blocked", "permission", "Run command\n(sbt test)")
     val msg = java.util.Base64.getEncoder.nn.encodeToString("Run command (sbt test)".getBytes(UTF_8))

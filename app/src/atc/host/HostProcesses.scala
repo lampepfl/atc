@@ -195,7 +195,7 @@ private[host] trait HostProcesses:
 
   def spawn(command: String, options: ExecOptions)(using ex: Exec, fs: FileSystem): Process =
     val prepared = prepare(command, Nil, options)
-    spawned.synchronized:
+    val started = spawned.synchronized:
       reapProcesses()
       if spawned.size >= Host.MaxProcesses then
         throw IllegalStateException(
@@ -211,12 +211,16 @@ private[host] trait HostProcesses:
         closeStdinAfter = false,
         live = None,
         keepHead = false,
-        onExit = code => output.processExited(id, code),
+        onExit = code =>
+          output.processExited(id, code)
+          reportBackground(),
       )
       val handle = ProcessImpl(id, managed, output, scopeOf(ex), policy)
       spawned(id) = handle
       output.processStarted(id, prepared.line)
       handle
+    reportBackground()
+    started
 
   /** Return the live processes visible from the caller's scope. */
   def runningProcesses(using ex: Exec): List[Process] = spawned.synchronized:
@@ -227,20 +231,37 @@ private[host] trait HostProcesses:
   private def reapProcesses(): Unit = spawned.filterInPlace((_, process) => process.managed.isAlive)
 
   /** Kill the processes owned by a closing `request*` scope. */
-  private[host] def killProcessesInScope(id: ScopeId): Unit = spawned.synchronized:
-    spawned.values.toList.filter(_.scope == id).foreach: process =>
-      try process.managed.kill()
-      catch case NonFatal(_) => ()
-    reapProcesses()
+  private[host] def killProcessesInScope(id: ScopeId): Unit =
+    val killed = spawned.synchronized:
+      val owned = spawned.values.toList.filter(_.scope == id)
+      owned.foreach: process =>
+        try process.managed.kill()
+        catch case NonFatal(_) => ()
+      reapProcesses()
+      owned.nonEmpty
+    if killed then reportBackground()
 
   /** Kill every spawned process at session end or for `/kill all`. */
-  private[atc] def killProcesses(): Unit = spawned.synchronized:
+  private[atc] def killProcesses(): Unit =
+    killAll()
+    reportBackground()
+
+  private def killAll(): Unit = spawned.synchronized:
     spawned.values.foreach(_.managed.kill())
     spawned.clear()
 
+  private[host] def processCount: Int = spawned.synchronized:
+    reapProcesses()
+    spawned.size
+
   /** `/kill`: `p3`, `3`, or `all`. A user-facing report: `Right` when processes were killed,
     * `Left` when there was none to kill. */
-  private[atc] def killProcess(ref: String): Either[String, String] = spawned.synchronized:
+  private[atc] def killProcess(ref: String): Either[String, String] =
+    val result = killProcessByUser(ref)
+    if result.isRight then reportBackground()
+    result
+
+  private def killProcessByUser(ref: String): Either[String, String] = spawned.synchronized:
     reapProcesses()
     ref.trim.toLowerCase(Locale.ROOT) match
       // Stopping everything takes the word: a bare `/kill`, which the command list also
@@ -248,7 +269,7 @@ private[host] trait HostProcesses:
       case "" => Left("/kill p<number> stops one process (see /ps); /kill all stops every one")
       case "all" =>
         val count = spawned.size
-        killProcesses()
+        killAll()
         if count == 0 then Left("no process is running")
         else Right(s"killed $count process${if count == 1 then "" else "es"}")
       case value =>

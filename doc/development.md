@@ -1608,7 +1608,18 @@ not scroll the banner away. Its activity indicator replaces a separate spinner w
 terminal supports a status line: JLine draws one only with the scroll-region and cursor
 capabilities `StatusLine.FooterCapabilities` lists, and does not say when it cannot. Idle
 state shows a short mode, model and directory label; menus and answer fields replace it with
-the applicable keyboard controls.
+the applicable keyboard controls. After that label the footer counts the live spawned
+processes and monitors, when there are any (`· 2 processes · 1 monitor`), during a turn too.
+
+The host reports those counts through `HostOutput.backgroundChanged` whenever a process
+starts, exits or is killed and whenever a monitor is added or ends, and the footer draws the
+numbers it was given. It never asks the host: `spawn` reports its start to the TUI while it
+holds the process registry's lock, and a footer that read the registry under the screen's
+lock could deadlock with it; the host reports the counts holding none of its locks. A process
+can exit and a monitor end while the prompt reads, and JLine's line reader redraws the footer
+itself then, so `Tui.backgroundChanged` redraws it under the reader's lock
+(`PromptReader.whileReading`, a widget run through `callWidget`, as the ghost text is), taking
+that lock before the screen's as a key widget does.
 
 Every footer update goes through `StatusLine.draw`, which flushes the terminal writer after
 JLine's `Status.update`: JLine leaves the closing synchronized-output sequence

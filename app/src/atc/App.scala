@@ -68,6 +68,7 @@ final class App(args: Cli.Args, val tui: Tui):
       agent.monitorMessage(id, name, text)
       if !monitorsHeld then tui.wake()
     override def monitorEvent(id: Int, text: String): Unit = tui.processEvent(s"[m$id $text]")
+    override def backgroundChanged(processes: Int, monitors: Int): Unit = tui.backgroundChanged(processes, monitors)
   private val llm: HostLlm = new HostLlm:
     def chat(message: String): String =
       val reply = withClockPaused(agent.model.simple(None, message))
