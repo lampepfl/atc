@@ -201,12 +201,12 @@ full `fs` under the same root.
 
 | Capability | What it authorises | Where one comes from |
 |---|---|---|
-| `IOCap` | nothing by itself; it is the root the others are derived from | the preamble (`given io`) |
+| `IOCap` | nothing by itself; it is the root the others are derived from | the preamble's `io` |
 | `FileSystem` | `read`, `ls`, `walk`, `grep`, …; `write`, `append`, `delete`, `mkdir` need a full one | the preamble's `fs` (derived from `io` by the sandbox; `val ro: FileSystem^{fs.rd} = fs` is a read-only view) |
 | `FileEntry` | a handle to one file or directory; as capable as the `FileSystem` it came from | `access(path)` |
 | `Exec` | running commands, together with a full `FileSystem^` | the preamble's `ex` (local and full mode) |
 | `Network` | HTTP requests | the preamble's `net` (full mode) |
-| `UserIO` | printing, questions, the TODO list, and normal-model `chat` | the preamble (`given user`), always full |
+| `UserIO` | printing, questions, the TODO list, and normal-model `chat` | the preamble's `user`, always full |
 
 `UserIO` is not derived from `IOCap`: reporting to the human is an effect on the
 conversation, not on the machine, so it survives when the agent may touch nothing at all.
@@ -304,12 +304,11 @@ file, a process, or the network:
   └ failed 88 ms
 ```
 
-`rs$line$3` is the REPL wrapper of the preamble line that holds the `user` given (see
+`rs$line$3` is the REPL wrapper of the preamble line that holds `user` (see
 [the capability design](doc/development.md#the-capability-design)). Reading inside the `map`
-cannot leak the secret, so it compiles through a read-only file system: in read-only mode,
-where `fs` is `FileSystem^{io.rd}`, and in the other modes as `read(path)(using ro)` with
-`val ro: FileSystem^{fs.rd} = fs`. The agent can always route a secret to an authorized
-channel: the terminal, a classified file, the classified model, or an allow-listed host.
+cannot leak the secret, so it compiles in every mode: a read uses only the read-only view of
+`fs`. The agent can always route a secret to an authorized channel: the terminal, a
+classified file, the classified model, or an allow-listed host.
 
 ### Runtime permissions
 

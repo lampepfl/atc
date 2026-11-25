@@ -123,15 +123,13 @@ class SandboxSuite extends munit.FunSuite, ReplAssertions:
     assert(env.userOut.toString.contains("TOSTRING-SECRET"), env.userOut.toString)
 
   test("the preamble gives each capability its own REPL round"):
-    // Separate rounds put each given in its own line wrapper, which is what lets
-    // a pure `Classified.map` capture the read-only `fs` without dragging in the
-    // separate `user`/`io` wrappers (see ModeSuite's read-in-map test).
+    // Separate rounds put each capability in its own line wrapper.
     for m <- Mode.values do
       val chunks = ReplSession.preambleChunks(m)
       assert(chunks.size >= 3, s"${m.label}: expected a base chunk plus one per given, got ${chunks.size}")
       assert(chunks.head.contains("object api"), s"${m.label}: the first chunk should define `api`")
       for g <- chunks.tail do
-        assertEquals(g.linesIterator.count(_.contains("given")), 1, s"${m.label}: one given per round, got `$g`")
+        assertEquals(g.linesIterator.count(_.contains("implicit val")), 1, s"${m.label}: one per round, got `$g`")
 
   // ── Class-loader isolation ──────────────────────────────────────
 

@@ -107,8 +107,8 @@ object ReplSession:
 
   /** Definitions in scope before any agent code runs, for `mode`.
     *
-    * `object api` holds the host privately; the preamble publishes as givens
-    * only the root view and the derived capabilities of the mode:
+    * `object api` holds the host privately; the preamble publishes as implicit
+    * values only the root view and the derived capabilities of the mode:
     *
     *  - full: `io: IOCap^` (the root itself) and `fs`/`ex`/`net` derived from it;
     *  - local: `io: IOCap^` (the root itself) and `fs`/`ex` derived from it,
@@ -123,14 +123,17 @@ object ReplSession:
     * compiled before the safe-mode import, agent code after it, so agent code
     * cannot name them (nor `api.host`/`api.root`, which are private).
     *
+    * They are strict `implicit val`s, not givens. A given is a lazy val, and the
+    * checker charges a closure that uses one with the whole line wrapper holding
+    * it, which no capture set names: a callback typed `->{io}` could then use
+    * none of them. A strict val is the path `wrapper.fs`, charged as `fs`, whose
+    * type says what it captures. That relies on `Cap`'s update member: without
+    * one the checker charged every use of `user` or `fs` as read-only, which a
+    * pure `Classified.map` admits.
+    *
     * The chunks are loaded as separate REPL rounds (`init`): the base
-    * (`object api` and imports) first, then each given in its own round. That
-    * isolation matters for capture checking: each given becomes a field of its
-    * own line-wrapper object, so a pure `Classified.map` that reads a file
-    * captures only the `fs` wrapper, not the separate `user`/`io` givens,
-    * which live in other wrappers. If all givens shared one wrapper, capturing
-    * `fs` would also pull in the full `user` capability and the read would be
-    * rejected. */
+    * (`object api` and imports) first, then each capability in its own round, a
+    * field of its own line wrapper. */
   def preambleChunks(mode: Mode): List[String] =
     val base =
       """|import language.experimental.captureChecking
@@ -143,24 +146,24 @@ object ReplSession:
     val givens = mode match
       case Mode.Full =>
         List(
-          "@assumeSafe given io: (IOCap^) = atc.lib.Runtime.rootIO",
-          "@assumeSafe given user: (UserIO^) = atc.lib.Runtime.rootUser",
-          "@assumeSafe given fs: (FileSystem^{io}) = atc.lib.Runtime.fileSystem",
-          "@assumeSafe given ex: (Exec^{io}) = atc.lib.Runtime.processes",
-          "@assumeSafe given net: (Network^{io}) = atc.lib.Runtime.network",
+          "@assumeSafe implicit val io: IOCap^ = atc.lib.Runtime.rootIO",
+          "@assumeSafe implicit val user: UserIO^ = atc.lib.Runtime.rootUser",
+          "@assumeSafe implicit val fs: FileSystem^{io} = atc.lib.Runtime.fileSystem",
+          "@assumeSafe implicit val ex: Exec^{io} = atc.lib.Runtime.processes",
+          "@assumeSafe implicit val net: Network^{io} = atc.lib.Runtime.network",
         )
       case Mode.Local =>
         List(
-          "@assumeSafe given io: (IOCap^) = atc.lib.Runtime.rootIO",
-          "@assumeSafe given user: (UserIO^) = atc.lib.Runtime.rootUser",
-          "@assumeSafe given fs: (FileSystem^{io}) = atc.lib.Runtime.fileSystem",
-          "@assumeSafe given ex: (Exec^{io}) = atc.lib.Runtime.processes",
+          "@assumeSafe implicit val io: IOCap^ = atc.lib.Runtime.rootIO",
+          "@assumeSafe implicit val user: UserIO^ = atc.lib.Runtime.rootUser",
+          "@assumeSafe implicit val fs: FileSystem^{io} = atc.lib.Runtime.fileSystem",
+          "@assumeSafe implicit val ex: Exec^{io} = atc.lib.Runtime.processes",
         )
       case Mode.ReadOnly =>
         List(
-          "@assumeSafe given io: IOCap = atc.lib.Runtime.rootIO",
-          "@assumeSafe given user: (UserIO^) = atc.lib.Runtime.rootUser",
-          "@assumeSafe given fs: (FileSystem^{io.rd}) = atc.lib.Runtime.readOnlyFileSystem",
+          "@assumeSafe implicit val io: IOCap = atc.lib.Runtime.rootIO",
+          "@assumeSafe implicit val user: UserIO^ = atc.lib.Runtime.rootUser",
+          "@assumeSafe implicit val fs: FileSystem^{io.rd} = atc.lib.Runtime.readOnlyFileSystem",
         )
     base :: givens
 
@@ -211,7 +214,7 @@ final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Opt
   @volatile private var closed: Boolean = false
 
   /** Load the preamble; errors here are programmer bugs and are thrown. Each
-    * chunk is a separate REPL round so that every given lands in its own
+    * chunk is a separate REPL round so that every capability lands in its own
     * line-wrapper (see `preambleChunks`); a `preambleOverride` runs as one round.
     * Each round installs this session's host under the evaluation lock; installing it
     * before would replace the host of a session that holds the lock. */
@@ -307,7 +310,7 @@ final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Opt
       driver.setStopFlag(false)
       if stopRequested then driver.setStopFlag(true)
       else
-        // A preamble object/given can be initialized lazily on the first agent
+        // The preamble's `object api` can be initialized lazily on the first agent
         // line, long after `init`. Re-select the owning host inside the global
         // evaluation lock so another session cannot supply its capabilities.
         Sandbox.installHost(host)

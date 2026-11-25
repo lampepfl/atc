@@ -320,10 +320,20 @@ Capability constructors are private to ATC. `Runtime` and `Derivations` provide 
 sandbox's internal bootstrap API and are marked `@rejectSafe`. Agent code cannot derive
 missing capabilities from a root it holds.
 
-The preamble loads each given in a separate REPL round. Each therefore occupies a separate
-wrapper class: a read-only operation capturing `fs` does not also capture the full `user`
-capability. Keep the givens at the top level; grouping them in an object changes capture
-checking behavior.
+The preamble defines each capability as a strict `implicit val` at the top level, each in a
+separate REPL round. A `given` would be a lazy val, and the checker charges a closure that uses
+a lazy val with the whole line wrapper that holds it, a reference no capture set names: a
+callback bounded by `{io}` could then use none of them. A strict val is the path
+`wrapper.fs`, charged as `fs` and covered by `io` through its type.
+
+Two behaviours of the pinned compiler need workarounds in `lib`, and `CapabilitySuite` holds
+the cases they close. A stateful class without an `update` method has every use charged as
+read-only, even passed to a full `T^` parameter, so `println(s)(using user)` and
+`write(p, s)(using fs)` would fit a pure `Classified.map`; `Cap` therefore declares a private
+`update` member, which makes such uses count in full. And an update through a handle that a
+non-update method returned, `fs.access(p).write(s)`, is charged only as the read that made
+the handle; the `update` methods of `FileEntry` therefore also take a full `FileSystem^`,
+whose use is charged in full. Remove both once the compiler charges these uses itself.
 
 ### Classified data
 
@@ -341,10 +351,11 @@ secret therefore keeps the Boolean classified too. Allowing `println`, a mutable
 handle, or an untrusted model callback inside `map` would expose information even if the
 callback returned a harmless value.
 
-An explicit read-only file system can be used to compute a classified result:
+A read uses only the read-only view of `fs`, so the callback can compute a classified result
+from files in every mode:
 
 ```scala
-classify("notes.txt").map(path => read(path)(using ro))
+classify("notes.txt").map(path => read(path))
 ```
 
 The `printer` callback defined above is rejected in the same position:

@@ -76,17 +76,17 @@ class ModeSuite extends munit.FunSuite, ReplAssertions:
     val readOnlyChunks = ReplSession.preambleChunks(Mode.ReadOnly)
 
     for chunks <- List(fullChunks, localChunks) do
-      assert(chunks.contains("@assumeSafe given io: (IOCap^) = atc.lib.Runtime.rootIO"))
-      assert(chunks.contains("@assumeSafe given fs: (FileSystem^{io}) = atc.lib.Runtime.fileSystem"))
-      assert(chunks.contains("@assumeSafe given ex: (Exec^{io}) = atc.lib.Runtime.processes"))
-    assert(fullChunks.contains("@assumeSafe given net: (Network^{io}) = atc.lib.Runtime.network"))
-    assert(!localChunks.exists(_.contains("given net:")))
+      assert(chunks.contains("@assumeSafe implicit val io: IOCap^ = atc.lib.Runtime.rootIO"))
+      assert(chunks.contains("@assumeSafe implicit val fs: FileSystem^{io} = atc.lib.Runtime.fileSystem"))
+      assert(chunks.contains("@assumeSafe implicit val ex: Exec^{io} = atc.lib.Runtime.processes"))
+    assert(fullChunks.contains("@assumeSafe implicit val net: Network^{io} = atc.lib.Runtime.network"))
+    assert(!localChunks.exists(_.contains("val net:")))
 
-    assert(readOnlyChunks.contains("@assumeSafe given io: IOCap = atc.lib.Runtime.rootIO"))
+    assert(readOnlyChunks.contains("@assumeSafe implicit val io: IOCap = atc.lib.Runtime.rootIO"))
     assert(readOnlyChunks.contains(
-      "@assumeSafe given fs: (FileSystem^{io.rd}) = atc.lib.Runtime.readOnlyFileSystem"
+      "@assumeSafe implicit val fs: FileSystem^{io.rd} = atc.lib.Runtime.readOnlyFileSystem"
     ))
-    assert(!readOnlyChunks.exists(chunk => chunk.contains("given ex:") || chunk.contains("given net:")))
+    assert(!readOnlyChunks.exists(chunk => chunk.contains("val ex:") || chunk.contains("val net:")))
 
   // ── Reading and reporting work everywhere ───────────────────────
 
@@ -224,13 +224,12 @@ class ModeSuite extends munit.FunSuite, ReplAssertions:
 
   // ── A pure Classified.map may still read ────────────────────────
 
-  test("only read-only mode may capture the ambient fs to read inside a pure map"):
-    // `Classified.map` admits read-only captures (`->{any.rd}`), and in read-only
-    // mode the ambient `fs` is itself read-only, so reading inside a map is
-    // allowed. Local/full retain full `fs: FileSystem^{io}`, so even a read
-    // through their ambient capability remains excluded from the pure callback.
-    onlyIn(Set(Mode.ReadOnly), """classify("x").map(s => read("a.txt").length + s.length)""")
-    onlyIn(Set(Mode.ReadOnly), """classify("x").map(s => ls(".").size)""")
+  test("every mode may read through the ambient fs inside a pure map, and none may write"):
+    // `Classified.map` admits read-only captures (`->{any.rd}`). A read through the
+    // ambient `fs` is charged as `fs.rd` in every mode; a write needs the full `fs`.
+    onlyIn(allModes.toSet, """classify("x").map(s => read("a.txt").length + s.length)""")
+    onlyIn(allModes.toSet, """classify("x").map(s => ls(".").size)""")
+    onlyIn(Set.empty, """classify("s").map(s => { write("leak.txt", s); s })""")
     assertFails(readOnly.run("""classify("s").map(s => { println(s); s })"""))
 
   // ── Mode plumbing: config and command line ──────────────────────
