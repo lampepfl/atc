@@ -40,14 +40,56 @@ class MonitorSuite extends munit.FunSuite, ReplAssertions:
     env.host.monitorSummary.linesIterator.find(_.contains(s"  $name  ")).fold("")(_.takeWhile(_ != ' '))
 
   test("a monitor runs on its schedule, and what it sends reaches the agent"):
-    assertOk(run("""addMonitor("reader", Schedule(everyMs = 1000, maxRuns = 2)) { send => send(read("a.txt")) }"""))
+    assertOk(
+      run("""addMonitor("reader", Schedule(everyMs = 1000, maxRuns = 2)) { () => send => send(read("a.txt")) }""")
+    )
     eventually("two messages")(messages().size == 2)
     assertEquals(messages().map((_, name, text) => (name, text)), List.fill(2)(("reader", "content")))
     eventually("the end of its runs")(events().exists(_._2 == "finished after 2 runs"))
     assertEquals(env.host.monitorSummary, "no monitor is running")
 
+  test("a monitor keeps the state its create made across runs"):
+    assertOk(run(
+      """addMonitor("counter", Schedule(everyMs = 1000, maxRuns = 3)) { () =>
+        |  var n = 0
+        |  send =>
+        |    n += 1
+        |    send(n.toString)
+        |}""".stripMargin
+    ))
+    eventually("three runs")(messages().size == 3)
+    assertEquals(messages().map(_._3), List("1", "2", "3"))
+
+  test("a monitor tracks a file over time and reports each change once"):
+    env.file("notes.md", "v1")
+    assertOk(run(
+      """addMonitor("notes", Schedule(everyMs = 1000)) { () =>
+        |  var last = read("notes.md")
+        |  send =>
+        |    val now = read("notes.md")
+        |    if now != last then
+        |      send(s"notes.md is now $now")
+        |      last = now
+        |}""".stripMargin
+    ))
+    env.file("notes.md", "v2")
+    eventually("the first change")(messages().nonEmpty)
+    env.file("notes.md", "v3")
+    eventually("the second change")(messages().size == 2)
+    Thread.sleep(2500) // two more runs that see no change
+    assertEquals(messages().map(_._3), List("notes.md is now v2", "notes.md is now v3"))
+
+  test("create runs in the snippet that adds the monitor: what it throws fails that snippet"):
+    assertFails(
+      run("""addMonitor("broken", Schedule(everyMs = 1000)) { () => throw IllegalStateException("cannot start") }"""),
+      "cannot start"
+    )
+    assertEquals(env.host.monitorSummary, "no monitor is running")
+
   test("a failed run is reported once, and three failed runs in a row stop the monitor"):
-    assertOk(run("""addMonitor("failing", Schedule(everyMs = 1000)) { send => throw IllegalStateException("boom") }"""))
+    assertOk(
+      run("""addMonitor("failing", Schedule(everyMs = 1000)) { () => send => throw IllegalStateException("boom") }""")
+    )
     eventually("the monitor to stop")(messages().size == 2)
     val texts = messages().map(_._3)
     assertEquals(texts.head, "[run 1 failed] java.lang.IllegalStateException: boom")
@@ -56,7 +98,7 @@ class MonitorSuite extends munit.FunSuite, ReplAssertions:
 
   test("a stop flag that an interrupt left raised between evaluations does not stop a monitor"):
     assertOk(run(
-      """addMonitor("loop", Schedule(everyMs = 1000, delayMs = 500, maxRuns = 1)) { send =>
+      """addMonitor("loop", Schedule(everyMs = 1000, delayMs = 500, maxRuns = 1)) { () => send =>
         |  var n = 0
         |  while n < 100000 do n += 1
         |  send(n.toString)
@@ -67,7 +109,7 @@ class MonitorSuite extends munit.FunSuite, ReplAssertions:
     assertEquals(messages().map(_._3), List("100000"))
 
   test("monitors lists the running monitors, and stopMonitor ends one"):
-    assertOk(run("""val slow = addMonitor("slow", Schedule(everyMs = 60000, delayMs = 60000)) { send => () }"""))
+    assertOk(run("""val slow = addMonitor("slow", Schedule(everyMs = 60000, delayMs = 60000)) { () => send => () }"""))
     assert(assertOk(run("""monitors.map(_.name)""")).output.contains("slow"))
     assert(env.host.monitorSummary.contains("slow  (0 runs)"), env.host.monitorSummary)
     assertOk(run("""stopMonitor(slow)"""))
@@ -76,17 +118,17 @@ class MonitorSuite extends munit.FunSuite, ReplAssertions:
     assertFails(run("""stopMonitor(999)"""), "there is no monitor m999")
 
   test("a monitor runs at most once a second, and at most eight run at once"):
-    assertFails(run("""addMonitor("fast", Schedule(everyMs = 100)) { send => () }"""), "at least 1000")
+    assertFails(run("""addMonitor("fast", Schedule(everyMs = 100)) { () => send => () }"""), "at least 1000")
     for i <- 1 to Host.MaxMonitors do
-      assertOk(run(s"""addMonitor("m$i", Schedule(everyMs = 60000, delayMs = 60000)) { send => () }"""))
+      assertOk(run(s"""addMonitor("m$i", Schedule(everyMs = 60000, delayMs = 60000)) { () => send => () }"""))
     assertFails(
-      run("""addMonitor("one more", Schedule(everyMs = 60000, delayMs = 60000)) { send => () }"""),
+      run("""addMonitor("one more", Schedule(everyMs = 60000, delayMs = 60000)) { () => send => () }"""),
       "already running",
     )
 
   test("the user stops a monitor by its number, or all of them"):
-    assertOk(run("""addMonitor("first", Schedule(everyMs = 60000, delayMs = 60000)) { send => () }"""))
-    assertOk(run("""addMonitor("second", Schedule(everyMs = 60000, delayMs = 60000)) { send => () }"""))
+    assertOk(run("""addMonitor("first", Schedule(everyMs = 60000, delayMs = 60000)) { () => send => () }"""))
+    assertOk(run("""addMonitor("second", Schedule(everyMs = 60000, delayMs = 60000)) { () => send => () }"""))
     assert(env.host.stopMonitorsByUser("").left.exists(_.contains("/monitors stop all")))
     assert(env.host.stopMonitorsByUser("m999").isLeft)
     val first = idOf("first")
@@ -100,7 +142,7 @@ class MonitorSuite extends munit.FunSuite, ReplAssertions:
     val previews = env.fileChanges.synchronized(env.fileChanges.size)
     val echo = env.scalaString(ProcessFixture.command("echo", "ran"))
     assertOk(run(
-      s"""addMonitor("writer", Schedule(everyMs = 1000, maxRuns = 1)) { send =>
+      s"""addMonitor("writer", Schedule(everyMs = 1000, maxRuns = 1)) { () => send =>
          |  write("by-monitor.txt", "x")
          |  send(execOutput($echo).trim)
          |}""".stripMargin
@@ -120,13 +162,15 @@ class MonitorSuite extends munit.FunSuite, ReplAssertions:
       e.decisions = List(Decision.AllowOnce, Decision.AllowSession)
       assertOk(s.run(s"""requestExec(List($pattern)) { execOutput($echo) }"""))
       assertOk(
-        s.run(s"""addMonitor("once", Schedule(everyMs = 1000, maxRuns = 1)) { send => send(execOutput($echo)) }""")
+        s.run(
+          s"""addMonitor("once", Schedule(everyMs = 1000, maxRuns = 1)) { () => send => send(execOutput($echo)) }"""
+        )
       )
       eventually("the refused run")(messages(e).nonEmpty)
       assert(messages(e).head._3.startsWith("[run 1 failed] java.lang.SecurityException"), messages(e).toString)
       assertOk(s.run(s"""requestExec(List($pattern)) { () }"""))
       assertOk(s.run(
-        s"""addMonitor("session", Schedule(everyMs = 1000, maxRuns = 1)) { send => send(execOutput($echo).trim) }"""
+        s"""addMonitor("session", Schedule(everyMs = 1000, maxRuns = 1)) { () => send => send(execOutput($echo).trim) }"""
       ))
       eventually("the permitted run")(messages(e).exists(_._2 == "session"))
       assertEquals(messages(e).filter(_._2 == "session").map(_._3), List("hi"))
@@ -144,7 +188,7 @@ class MonitorSuite extends munit.FunSuite, ReplAssertions:
     try
       val s = e.newSession(mode = Mode.Full)
       assertOk(s.run(
-        """addMonitor("trace", Schedule(everyMs = 1000, delayMs = 500, maxRuns = 1)) { send =>
+        """addMonitor("trace", Schedule(everyMs = 1000, delayMs = 500, maxRuns = 1)) { () => send =>
           |  RuntimeException("\u001b]0;title\u0007MONITOR-TRACE").printStackTrace()
           |  send("traced")
           |}""".stripMargin
@@ -160,7 +204,7 @@ class MonitorSuite extends munit.FunSuite, ReplAssertions:
   test("a monitor ends with the REPL that compiled it"):
     val e = TestEnv(prefix = "atc-monitor-close")
     val s = e.newSession(mode = Mode.Full)
-    assertOk(s.run("""addMonitor("orphan", Schedule(everyMs = 1000, delayMs = 500)) { send => send("tick") }"""))
+    assertOk(s.run("""addMonitor("orphan", Schedule(everyMs = 1000, delayMs = 500)) { () => send => send("tick") }"""))
     s.close()
     eventually("the monitor to end")(e.host.monitorSummary == "no monitor is running")
     assertEquals(messages(e), Nil)

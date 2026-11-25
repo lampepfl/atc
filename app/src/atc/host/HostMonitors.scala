@@ -7,34 +7,39 @@ import java.util.concurrent.{Executors, ScheduledExecutorService, TimeUnit}
 import scala.util.control.NonFatal
 
 /** Monitors: agent code that runs in the background on a schedule and reports to the agent.
-  * The callback's type allows only `io` and what derives from it, so it holds no `user` and no
-  * capability of a `request*` scope; it acts with the base scope, the configured permissions
-  * and the session grants. Each monitor has a thread of its own, so one that never returns
-  * holds up no other. */
+  * The type of `create` allows only `io` and what derives from it, so the monitor it makes
+  * holds no `user` and no capability of a `request*` scope, only what it made itself; it acts
+  * with the base scope, the configured permissions and the session grants. Each monitor has a
+  * thread of its own, so one that never returns holds up no other. */
 private[host] trait HostMonitors:
   self: Host =>
 
   /** The live monitors by id; ids are never reused within a host. */
-  private val monitorsById = scala.collection.mutable.LinkedHashMap[Int, HostMonitors.Monitor]()
+  private val monitorsById = scala.collection.mutable.LinkedHashMap[Int, HostMonitors.Scheduled]()
   private var nextMonitorId = 0
 
   /** The REPL evaluating agent code now, which a monitor added by that code keeps. */
   @volatile private[atc] var repl: MonitorRepl = MonitorRepl.Unattached
 
-  def addMonitor(name: String, schedule: Schedule)(using UserIO, IOCap)(op: (String => Unit) => Unit): Int =
+  def addMonitor(name: String, schedule: Schedule)(using UserIO, IOCap)(create: () => Monitor): Int =
     if schedule.everyMs < Host.MinMonitorIntervalMs then
       throw IllegalArgumentException(
         s"addMonitor: everyMs must be at least ${Host.MinMonitorIntervalMs} (got ${schedule.everyMs})"
       )
     if schedule.delayMs < 0 then throw IllegalArgumentException(s"addMonitor: delayMs must not be negative")
     if schedule.maxRuns < 0 then throw IllegalArgumentException(s"addMonitor: maxRuns must not be negative")
-    monitorsById.synchronized:
+    def checkRoom(): Unit = monitorsById.synchronized:
       if monitorsById.size >= Host.MaxMonitors then
         throw IllegalStateException(
           s"addMonitor: ${Host.MaxMonitors} monitors are already running (${monitorsById.keys.map(id => s"m$id").mkString(", ")}); stopMonitor one first"
         )
+    checkRoom()
+    // Agent code, run in the snippet that adds the monitor: what it throws reaches that snippet.
+    val made = create()
+    monitorsById.synchronized:
+      checkRoom() // a `parallel` task may have added one meanwhile
       nextMonitorId += 1
-      val monitor = HostMonitors.Monitor(nextMonitorId, name, schedule.maxRuns, op, repl)
+      val monitor = HostMonitors.Scheduled(nextMonitorId, name, schedule.maxRuns, made, repl)
       monitorsById(monitor.id) = monitor
       monitor.executor.scheduleWithFixedDelay(
         () => run(monitor),
@@ -83,7 +88,7 @@ private[host] trait HostMonitors:
             Right(s"stopped m${m.id} (${m.name})")
           case None => Left(s"no running monitor '$ref' (see /monitors)")
 
-  private def end(m: HostMonitors.Monitor): Unit =
+  private def end(m: HostMonitors.Scheduled): Unit =
     monitorsById.synchronized(monitorsById.remove(m.id))
     m.stopped = true
     // Interrupts a run in progress; a loop in agent code ends only with the REPL's stop flag.
@@ -91,7 +96,7 @@ private[host] trait HostMonitors:
     ()
 
   /** One run. Nothing may escape: the executor would cancel the schedule without a word. */
-  private def run(m: HostMonitors.Monitor): Unit =
+  private def run(m: HostMonitors.Scheduled): Unit =
     if !m.stopped then
       if !m.repl.readyForMonitor() then end(m)
       else
@@ -99,7 +104,7 @@ private[host] trait HostMonitors:
         // `None` when a stop signal cut the run short (the REPL's stop or `stopMonitor`): no failure.
         val outcome: Option[Option[Throwable]] =
           try
-            m.op(text => if !m.stopped then output.monitorMessage(m.id, m.name, HostMonitors.capped(text)))
+            m.monitor.run(text => if !m.stopped then output.monitorMessage(m.id, m.name, HostMonitors.capped(text)))
             Some(None)
           catch
             case _: ThreadDeath | _: InterruptedException => None
@@ -112,7 +117,7 @@ private[host] trait HostMonitors:
             try settle(m, failure)
             catch case NonFatal(e) => atc.Debug.trace(e)
 
-  private def settle(m: HostMonitors.Monitor, failure: Option[Throwable]): Unit =
+  private def settle(m: HostMonitors.Scheduled, failure: Option[Throwable]): Unit =
     m.runs += 1
     failure match
       case None =>
@@ -134,11 +139,12 @@ private[atc] object HostMonitors:
   /** The monitor whose run the current thread serves, 0 for none. `parallel` hands it to its workers. */
   private[host] val current: ThreadLocal[Int] = ThreadLocal.withInitial(() => 0).nn
 
-  private[host] final class Monitor(
+  /** An added monitor: the agent's `Monitor`, its thread and what its runs came to. */
+  private[host] final class Scheduled(
     val id: Int,
     val name: String,
     val maxRuns: Int,
-    val op: (String => Unit) => Unit,
+    val monitor: Monitor,
     val repl: MonitorRepl,
   ):
     val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor: runnable =>

@@ -248,9 +248,10 @@ cannot be stashed in a `val` that survives it, returned from it, or captured by 
 that escapes it.
 
 The same typing confines a monitor, code the agent leaves running with `addMonitor` to watch
-a build or a CI run and message it: it may capture only `io` and what derives from it, so it
-cannot print, ask, request permissions or keep a capability lent to a block, and it acts with
-the configured permissions and those you allowed for the session.
+a file, a build or a CI run and message it: it may capture only `io`, what derives from it and
+the state it made itself, so it cannot print, ask, request permissions or keep a capability
+lent to a block, and it acts with the configured permissions and those you allowed for the
+session.
 
 ### Classified data
 

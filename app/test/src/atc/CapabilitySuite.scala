@@ -327,34 +327,53 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
     assertFails(run("""val g: () ->{w.rd} Unit = () => w.access("x.txt").write("y")(using w)"""))
     assertFails(run("""val g: () ->{u.rd} Unit = () => println("y")(using u)"""))
 
-  test("a monitor may capture io and what derives from it, and nothing else"):
+  test("a monitor may capture io and what derives from it, and what its create made, nothing else"):
     // A monitor's runs act with the base scope: they have no `user` to print, ask or request
-    // with, and no capability of a `request*` block, whose scope ends with the block.
+    // with, and no capability of a `request*` block, whose scope ends with the block. Its
+    // state is what `create` made: the monitor's type admits that and nothing from outside.
     val later = "Schedule(everyMs = 60000, delayMs = 60000)"
     val echo = ujson.write(echoCommand)
     try
-      assertOk(run(s"""addMonitor("files", $later) { send => if exists("a.txt") then send(read("a.txt")) }"""))
-      assertOk(run(s"""addMonitor("commands", $later) { send => send(execOutput($echo)) }"""))
-      assertOk(run(s"""addMonitor("network", $later) { send => send(httpGet("http://example.com")) }"""))
-      assertOk(run(s"""addMonitor("tasks", $later) { send => parallel(List(() => send("a"), () => send("b"))); () }"""))
+      assertOk(run(s"""addMonitor("files", $later) { () => send => if exists("a.txt") then send(read("a.txt")) }"""))
+      assertOk(run(s"""addMonitor("commands", $later) { () => send => send(execOutput($echo)) }"""))
+      assertOk(run(s"""addMonitor("network", $later) { () => send => send(httpGet("http://example.com")) }"""))
+      assertOk(
+        run(s"""addMonitor("tasks", $later) { () => send => parallel(List(() => send("a"), () => send("b"))); () }""")
+      )
+      assertOk(run(s"""addMonitor("counter", $later) { () => var n = 0; send => { n += 1; send(n.toString) } }"""))
+      assertOk(run(s"""addMonitor("array", $later) { () => val seen = Array(0); send => seen(0) += 1 }"""))
+      assertOk(run(
+        s"""addMonitor("class", $later) { () =>
+           |  var last = read("a.txt")
+           |  new Monitor:
+           |    def run(send: String => Unit): Unit =
+           |      if read("a.txt") != last then send("changed")
+           |}""".stripMargin
+      ))
+      assertOk(
+        run(s"""addMonitor("process", $later) { () => val p: Process^{ex} = spawn($echo); send => send(p.read()) }""")
+      )
       assertOk(run("""val kept: UserIO^ = user"""))
       val rejected = List(
-        s"""addMonitor("print", $later) { send => println("x") }""",
-        s"""addMonitor("print through a val", $later) { send => println("x")(using kept) }""",
-        s"""addMonitor("ask", $later) { send => ask("x"); () }""",
-        s"""addMonitor("todos", $later) { send => setTodos(Nil) }""",
-        s"""addMonitor("chat", $later) { send => send(chat("x")) }""",
-        s"""addMonitor("request", $later) { send => requestExec(List($echo)) { () } }""",
-        s"""requestExec(List($echo)) { addMonitor("scoped exec", $later) { send => send(execOutput($echo)) } }""",
+        s"""addMonitor("print", $later) { () => send => println("x") }""",
+        s"""addMonitor("print through a val", $later) { () => send => println("x")(using kept) }""",
+        s"""addMonitor("ask", $later) { () => send => ask("x"); () }""",
+        s"""addMonitor("ask in create", $later) { () => ask("x"); send => () }""",
+        s"""addMonitor("todos", $later) { () => send => setTodos(Nil) }""",
+        s"""addMonitor("chat", $later) { () => send => send(chat("x")) }""",
+        s"""addMonitor("request", $later) { () => send => requestExec(List($echo)) { () } }""",
+        s"""requestExec(List($echo)) { addMonitor("scoped exec", $later) { () => send => send(execOutput($echo)) } }""",
         s"""requestExec(List($echo)) {
            |  val e: Exec^ = summon[Exec^]
-           |  addMonitor("kept exec", $later) { send => send(execOutput($echo)(using e, fs)) }
+           |  addMonitor("kept exec", $later) { () => send => send(execOutput($echo)(using e, fs)) }
            |}""".stripMargin,
-        s"""requestFiles(".") { addMonitor("scoped files", $later) { send => send(read("a.txt")) } }""",
-        s"""def counting(): Int = { var n = 0; addMonitor("var", $later) { send => n += 1 } }""",
-        s"""classify("s").map(s => addMonitor("in map", $later) { send => send(s) })""",
-        s"""addMonitor("send in map", $later) { send => classify("s").map(s => send(s)); () }""",
-        s"""addMonitor("send in flatMap", $later) { send => classify("s").flatMap(s => { send(s); classify(1) }); () }""",
+        s"""requestFiles(".") { addMonitor("scoped files", $later) { () => send => send(read("a.txt")) } }""",
+        s"""def counting(): Int = { var n = 0; addMonitor("var", $later) { () => send => n += 1 } }""",
+        s"""addMonitor("send kept", $later) { () => var kept: (String => Unit) | Null = null; send => kept = send }""",
+        s"""addMonitor("secret sent", $later) { () => val s = readClassified("a.txt"); send => { s.map(send); () } }""",
+        s"""classify("s").map(s => addMonitor("in map", $later) { () => send => send(s) })""",
+        s"""addMonitor("send in map", $later) { () => send => classify("s").map(s => send(s)); () }""",
+        s"""addMonitor("send in flatMap", $later) { () => send => classify("s").flatMap(s => { send(s); classify(1) }); () }""",
       )
       for code <- rejected do
         val result = run(code)

@@ -271,6 +271,13 @@ case class MonitorInfo(id: Int, name: String, runs: Int, lastError: Option[Strin
 @assumeSafe
 object MonitorInfo
 
+/** What a monitor does on each of its runs: `run` gets `send`, which reports to you. A
+ *  monitor keeps its state in what `addMonitor`'s `create` made for it; being a
+ *  single-method trait, it can be written as a lambda `send => ...`. */
+@assumeSafe
+trait Monitor:
+  def run(send: String => Unit): Unit
+
 /** Minimal JSON. `Json.parse(text)` reads it; navigate with `j("key")` and `j(i)`
  *  (a missing key or index gives `Json.Null`, so `j("a")(0)("b")` is safe to chain);
  *  read a leaf with `.str`/`.num`/`.int`/`.bool`/`.arr`/`.obj` (they throw with a clear
@@ -676,31 +683,38 @@ trait Interface:
 
   // ── Monitors ────────────────────────────────────────────────────
 
-  /** Run `op` in the background on `schedule` and return the monitor's number; `op`
-   *  reports to you by calling `send`. Each `send(text)` reaches you as a message
-   *  `[monitor mN "name"] text`: at your next step while you work, or in a new turn when
-   *  you are idle. Send only what needs your attention, since each message costs a turn,
-   *  and stop a monitor whose job is done with `stopMonitor`.
+  /** Call `create` once to make a monitor, run it in the background on `schedule`, and
+   *  return its number; each run calls the monitor's `run(send)`. Each `send(text)` reaches
+   *  you as a message `[monitor mN "name"] text`: at your next step while you work, or in a
+   *  new turn when you are idle. Send only what needs your attention, since each message
+   *  costs a turn, and stop a monitor whose job is done with `stopMonitor`.
    *
-   *  `op` may capture only `io` and what derives from it (`fs`, `ex`, `net`): it cannot
-   *  print, ask, request permissions, use a capability from a `request*` block or keep a
-   *  `var`. It runs with the configured permissions and those the user granted for the
-   *  session, so when it needs more, ask in a `request*` block first and have the user
-   *  allow it for the session. A failed run is reported to you, and after three failed
-   *  runs in a row the monitor stops. Monitors end with the REPL (`/reset`, a mode change,
-   *  `/new`). At most eight run at once, and `everyMs` is at least 1000.
+   *  `create` may capture only `io` and what derives from it (`fs`, `ex`, `net`), so neither
+   *  it nor the monitor can print, ask, request permissions or use a capability from a
+   *  `request*` block. What a monitor keeps across runs (a `var`, an array, a spawned
+   *  process) is made inside `create`, and the monitor holds it; a `var` from outside cannot
+   *  be captured. A monitor runs with the configured permissions and those the user granted
+   *  for the session, so when it needs more, ask in a `request*` block first and have the
+   *  user allow it for the session. `create` runs at once, in your snippet; a failed run is
+   *  reported to you, and after three failed runs in a row the monitor stops. Monitors end
+   *  with the REPL (`/reset`, a mode change, `/new`). At most eight run at once, and
+   *  `everyMs` is at least 1000.
    *
    *  {{{
-   *  val ci = addMonitor("ci", Schedule(everyMs = 60_000)) { send =>
-   *    val status = execOutput("gh run list --limit 1 --json status,conclusion")
-   *    if status.contains("\"completed\"") then send(s"CI finished: $status")
+   *  val notes = addMonitor("notes", Schedule(everyMs = 5_000)) { () =>
+   *    var last = read("notes.md")                 // kept across runs
+   *    send =>
+   *      val now = read("notes.md")
+   *      if now != last then
+   *        send(s"notes.md changed: ${now.linesIterator.size} lines now")
+   *        last = now
    *  }
-   *  // once it has reported: stopMonitor(ci)
+   *  // once it has done its job: stopMonitor(notes)
    *  }}}
    *  @keepWhole
    */
   def addMonitor(name: String, schedule: Schedule)(using user: UserIO^, io: IOCap)
-                (op: (String => Unit) ->{io} Unit): Int
+                (create: () ->{io} Monitor^{fresh}): Int
 
   /** The monitors that are running. */
   def monitors(using UserIO): List[MonitorInfo]

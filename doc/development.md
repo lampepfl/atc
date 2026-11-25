@@ -736,16 +736,25 @@ covers both cases.
 
 ### Monitors
 
-`addMonitor(name, schedule)(using user: UserIO^, io: IOCap)(op: (String => Unit) ->{io} Unit)`
-runs agent code in the background. The bound `{io}` admits `io` and the preamble's `fs`, `ex`
-and `net`, whose types capture it, and nothing else: not `user`, so a run cannot print, ask or
-open a `request*` block; not the capability a request block lends, whose capture set is its
-own; not a local `var`. `send` is a parameter of type `String => Unit`, which a pure
-`Classified.map` cannot capture, so a secret cannot reach the agent through it, and
-`addMonitor` itself takes the full `user`, so it cannot run inside one either. `io` is taken
+`addMonitor(name, schedule)(using user: UserIO^, io: IOCap)(create: () ->{io} Monitor^{fresh})`
+calls `create` once, in the snippet, and runs the `Monitor` it returns in the background: each
+run calls `run(send)`. The bound `{io}` admits `io` and the preamble's `fs`, `ex` and `net`,
+whose types capture it, and nothing else: not `user`, so neither `create` nor a run can print,
+ask or open a `request*` block; not the capability a request block lends, whose capture set is
+its own; not a `var` from outside. `fresh` admits in the monitor what `create` makes for it,
+the state it keeps across runs: a `var`, an array, a spawned process. A bare `^` would not do:
+in a function type's result the pinned compiler reads it as the `any` of the scope around the
+call, which that state is not visible from. `Monitor` has a single abstract method, so
+`create` can return a lambda `send => ...`.
+
+`send` is a parameter of type `String => Unit`, which a pure `Classified.map` cannot capture
+and a `var` of the state cannot hold, so a secret cannot reach the agent through it, and
+`addMonitor` itself takes the full `user`, so it cannot run inside `map` either. `io` is taken
 as a read-only view so that one signature serves every mode: in read-only mode `fs` is
-`FileSystem^{io.rd}` and a run can only read. The bound works because the preamble's
-capabilities are strict vals ([the capability design](#the-capability-design)).
+`FileSystem^{io.rd}` and a monitor can only read. The bound works because the preamble's
+capabilities are strict vals ([the capability design](#the-capability-design)). The state is
+made on the evaluation thread and then used on the monitor's thread only; the executor orders
+the two.
 
 A run acts with the base scope: the configured rules and the session grants. A request
 allowed once has ended with its block, so a monitor that needs more is added after the user
