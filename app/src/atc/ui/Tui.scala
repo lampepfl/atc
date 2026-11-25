@@ -562,27 +562,38 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   /** Whether input waits that should end the main prompt's read (App: monitor messages). */
   @volatile var wakeWanted: () => Boolean = () => false
-  /** The thread in the main prompt's read, which [[wake]] interrupts; guarded by itself. */
+  /** Ctrl-C at the main prompt, where it otherwise only clears the line. */
+  @volatile var onPromptInterrupt: () => Unit = () => ()
+  /** The thread in the main prompt's read, which [[wake]] interrupts; guarded by itself, as is
+    * [[woken]]. */
   private val reading = AtomicReference[Thread | Null](null)
+  /** Whether [[wake]], not the user, interrupted the read. */
+  private var woken = false
 
-  /** End the main prompt's read when [[wakeWanted]]: it returns "" and the next prompt
-    * starts with what the user had typed. JLine ends a read whose thread is interrupted
-    * with the partial line. */
+  /** End the main prompt's read unless the user is typing in it: the read returns "" and the
+    * next prompt starts with any text that was there. JLine ends a read whose thread is
+    * interrupted with the partial line. */
   def wake(): Unit = reading.synchronized:
     val thread = reading.get()
-    if thread != null then thread.interrupt()
+    if thread != null && !prompt.typing then
+      woken = true
+      thread.interrupt()
 
-  /** `prompt.read`, which [[wake]] can end. */
-  private def readWakeable(text: String, typed: String): String =
+  /** `prompt.read`, which [[wake]] can end: `Left` with the partial line when it did. */
+  private def readWakeable(text: String, typed: String): Either[String, String] =
     val wakeable = !prompt.blockMode
-    reading.synchronized(if wakeable then reading.set(Thread.currentThread))
+    reading.synchronized:
+      woken = false
+      if wakeable then reading.set(Thread.currentThread)
     try
-      // Woken before the read began: end it the same way.
-      if wakeable && wakeWanted() then throw UserInterruptException(typed)
-      prompt.read(text, typed)
+      // Input that waited before the read began ends it at once, unless text is there.
+      if wakeable && typed.isEmpty && wakeWanted() then Left("")
+      else Right(prompt.read(text, typed))
+    catch case e: UserInterruptException if reading.synchronized(woken) => Left(Option(e.getPartialLine).getOrElse(""))
     finally
       reading.synchronized:
         reading.set(null)
+        woken = false
         Thread.interrupted() // a wake that came as the read returned
 
   /** Start the next prompt with `text`, for the user to edit or send. */
@@ -597,16 +608,17 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
         val typed = List(nextDraft, keys.takeTypeAhead()).filter(_.nonEmpty).mkString("\n")
         nextDraft = ""
         frame { statusLine.draft = ""; statusLine.refresh() }
-        result = Some(readWakeable(styled(promptText, Cyan, Bold), typed))
+        result = readWakeable(styled(promptText, Cyan, Bold), typed) match
+          case Right(line) => Some(line)
+          case Left(partial) =>
+            nextDraft = prompt.expandPastes(partial)
+            Some("")
         again = false
       catch
-        case e: UserInterruptException =>
+        case _: UserInterruptException =>
           Thread.interrupted()
-          if !prompt.blockMode && wakeWanted() then
-            nextDraft = prompt.expandPastes(Option(e.getPartialLine).getOrElse(""))
-            result = Some("")
-            again = false
-          else again = !prompt.blockMode
+          if !prompt.blockMode then onPromptInterrupt()
+          again = !prompt.blockMode
         case e: EndOfFileException =>
           Debug.log(s"EOF on input: ${e.getMessage}")
           Debug.trace(e)

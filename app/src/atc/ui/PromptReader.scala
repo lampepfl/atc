@@ -374,6 +374,9 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
     try body
     finally reader.setVariable(LineReader.DISABLE_HISTORY, false)
 
+  /** Whether the user has text at the prompt (read from another thread: a hint, not a lock). */
+  def typing: Boolean = reader.isReading && reader.getBuffer.length > 0
+
   /** `line` with the text its paste placeholders stand for, as a read that ended returns it. */
   def expandPastes(line: String): String = pasted.expand(line)
 

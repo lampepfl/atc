@@ -231,9 +231,9 @@ final class App(args: Cli.Args, val tui: Tui):
       )))
       predictor.start()
 
-  /** Set when the user stops a turn: monitor messages then wait for the user's next message
-    * instead of starting turns of their own, so Ctrl-C also stops a monitor that keeps the
-    * agent busy. */
+  /** Set when a turn does not finish (the user stops it, for one) and by Ctrl-C at the
+    * prompt: monitor messages then wait for the user's next message instead of starting turns
+    * of their own, so Ctrl-C also stops a monitor that keeps the agent busy. */
   @volatile private var monitorsHeld = false
 
   /** Input that starts a turn without the user: corrections typed during the last one, and
@@ -243,6 +243,7 @@ final class App(args: Cli.Args, val tui: Tui):
 
   private def interactive(): Unit =
     tui.wakeWanted = () => pendingInput
+    tui.onPromptInterrupt = () => monitorsHeld = true
     var running = true
     while running do
       // A monitor message ends the read (`tui.wake`), which keeps what the user typed.
@@ -260,14 +261,15 @@ final class App(args: Cli.Args, val tui: Tui):
           monitorsHeld = false
           afterTurn(runTurn(line))
 
-  /** After Ctrl-C, a correction typed during the turn goes back to the prompt and monitor
-    * messages are held: starting another turn with them would contact the model right
-    * after the user stopped it.
+  /** After Ctrl-C, a correction typed during the turn goes back to the prompt: starting
+    * another turn with it would contact the model right after the user stopped it. Monitor
+    * messages are held after every turn that did not finish, so that a monitor starts no
+    * turns after the user stopped one, declined more tool calls, or the model failed.
     * The session is saved after every turn, so a closed terminal or a signal loses at
     * most the turn in progress. */
   private def afterTurn(outcome: TurnOutcome): Unit =
+    if outcome != TurnOutcome.Finished then monitorsHeld = true
     if outcome == TurnOutcome.Interrupted then
-      monitorsHeld = true
       val queued = agent.takeQueuedInput()
       if queued.nonEmpty then tui.draft(queued.mkString("\n"))
     if tui.menusAvailable then commands.sessionCommands.checkpoint()

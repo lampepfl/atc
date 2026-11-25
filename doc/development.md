@@ -722,8 +722,8 @@ ordinary exceptions so that the REPL's stop signal reaches the evaluation thread
 instrumented REPL class checks the stop flag on every thread, so an interrupt or timeout
 stops busy tasks too, and interrupting the calling thread interrupts workers blocked in a
 host call. An interrupted call returns once its workers have ended, or after two seconds, so
-the stop flag is still raised while they finish and a later evaluation does not clear it
-under them. Shared host state is thread-safe: the TUI's output methods are synchronized,
+the stop flag is still raised while they finish: until then the evaluation holds the lock that
+a later evaluation, or a monitor's run, needs to lower it. Shared host state is thread-safe: the TUI's output methods are synchronized,
 `Policy`, the process registry and the TODO list lock their mutable state, and
 `Tui.popupBlock` shows questions and permission prompts from several tasks one at a time.
 
@@ -779,9 +779,13 @@ request of the user's and the marker that closes an interrupted exchange names a
 Unlike a correction it does not cancel a model request, skip the rest of a batch of tool calls,
 or continue a turn whose answer is final. Between turns `App` starts a turn for it: `Tui.wake`
 interrupts the thread in the main prompt's read, JLine ends the read with the partial line,
-and that line becomes the next prompt's draft. After an interrupted turn the messages wait for
-the user's next message, so Ctrl-C also stops a monitor that keeps the agent busy. A `-p` run
-ends with its turn.
+and that line becomes the next prompt's draft. It does not while the user has text at the
+prompt, which may be the `/monitors stop` that a chatty monitor calls for; the messages then
+go with what the user sends. After a turn that did not finish (interrupted, limited, blocked
+or failed), and after Ctrl-C at the prompt, the messages wait for the user's next message, so
+Ctrl-C stops a monitor that keeps the agent busy, and a failing model is not retried for every
+message. The wake is verified on macOS terminals; where interrupting the read does not end it,
+the messages wait for the next input. A `-p` run ends with its turn.
 
 A monitor's run is the first agent code that runs while no evaluation captures `System.err`,
 which is then the terminal, and `printStackTrace` writes there without a capability. A
