@@ -232,6 +232,17 @@ class ModeSuite extends munit.FunSuite, ReplAssertions:
     onlyIn(Set.empty, """classify("s").map(s => { write("leak.txt", s); s })""")
     assertFails(readOnly.run("""classify("s").map(s => { println(s); s })"""))
 
+  // ── Monitors ────────────────────────────────────────────────────
+
+  test("a monitor has the capabilities of its mode"):
+    val later = "Schedule(everyMs = 60000, delayMs = 60000)"
+    try
+      onlyIn(allModes.toSet, s"""addMonitor("reads", $later) { send => send(read("a.txt")) }""")
+      onlyIn(Set(Mode.Local, Mode.Full), s"""addMonitor("writes", $later) { send => write("b.txt", "x") }""")
+      onlyIn(Set(Mode.Local, Mode.Full), s"""addMonitor("runs", $later) { send => send(execOutput("echo")) }""")
+      onlyIn(Set(Mode.Full), s"""addMonitor("fetches", $later) { send => send(httpGet("http://example.com")) }""")
+    finally allModes.foreach(of(_).env.host.stopMonitors())
+
   // ── Mode plumbing: config and command line ──────────────────────
 
   test("the mode can be set in the config and is validated"):

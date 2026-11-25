@@ -64,6 +64,10 @@ final class App(args: Cli.Args, val tui: Tui):
       tui.processEvent(s"$$ $commandLine  [p$id started]")
     override def processInput(id: Int, text: String): Unit = tui.processEvent(s"p$id > ${text.stripSuffix("\n")}")
     override def processExited(id: Int, exitCode: Int): Unit = tui.processEvent(s"[p$id exited $exitCode]")
+    override def monitorMessage(id: Int, name: String, text: String): Unit =
+      agent.monitorMessage(id, name, text)
+      if !monitorsHeld then tui.wake()
+    override def monitorEvent(id: Int, text: String): Unit = tui.processEvent(s"[m$id $text]")
   private val llm: HostLlm = new HostLlm:
     def chat(message: String): String =
       val reply = withClockPaused(agent.model.simple(None, message))
@@ -182,6 +186,7 @@ final class App(args: Cli.Args, val tui: Tui):
     finally
       predictor.invalidate()
       host.killProcesses()
+      host.stopMonitors()
       sandbox.close()
       models.close()
 
@@ -226,12 +231,24 @@ final class App(args: Cli.Args, val tui: Tui):
       )))
       predictor.start()
 
+  /** Set when the user stops a turn: monitor messages then wait for the user's next message
+    * instead of starting turns of their own, so Ctrl-C also stops a monitor that keeps the
+    * agent busy. */
+  @volatile private var monitorsHeld = false
+
+  /** Input that starts a turn without the user: corrections typed during the last one, and
+    * monitor messages unless they are held. */
+  private def pendingInput: Boolean =
+    agent.queuedInputCount > 0 || (!monitorsHeld && agent.monitorMessageCount > 0)
+
   private def interactive(): Unit =
+    tui.wakeWanted = () => pendingInput
     var running = true
     while running do
-      val next = if agent.queuedInputCount > 0 then Some("") else tui.readLine(prompt)
+      // A monitor message ends the read (`tui.wake`), which keeps what the user typed.
+      val next = if pendingInput then Some("") else tui.readLine(prompt)
       next match
-        case Some("") if agent.queuedInputCount > 0 => afterTurn(runTurn(""))
+        case Some("") if pendingInput => afterTurn(runTurn(""))
         case None =>
           Debug.log("input closed, exiting")
           running = false
@@ -239,14 +256,18 @@ final class App(args: Cli.Args, val tui: Tui):
         // Typed out of habit; not listed in /help.
         case Some(line) if App.QuitWords.contains(line.trim.toLowerCase(Locale.ROOT)) => running = false
         case Some(line) if SlashCommand.isCommandLine(line) => running = commands.run(line.trim)
-        case Some(line) => afterTurn(runTurn(line))
+        case Some(line) =>
+          monitorsHeld = false
+          afterTurn(runTurn(line))
 
-  /** After Ctrl-C, a correction typed during the turn goes back to the prompt: starting
-    * another turn with it would contact the model right after the user stopped it.
+  /** After Ctrl-C, a correction typed during the turn goes back to the prompt and monitor
+    * messages are held: starting another turn with them would contact the model right
+    * after the user stopped it.
     * The session is saved after every turn, so a closed terminal or a signal loses at
     * most the turn in progress. */
   private def afterTurn(outcome: TurnOutcome): Unit =
     if outcome == TurnOutcome.Interrupted then
+      monitorsHeld = true
       val queued = agent.takeQueuedInput()
       if queued.nonEmpty then tui.draft(queued.mkString("\n"))
     if tui.menusAvailable then commands.sessionCommands.checkpoint()

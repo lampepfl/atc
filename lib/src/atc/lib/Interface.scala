@@ -257,6 +257,20 @@ case class Todo(text: String, status: TodoStatus = TodoStatus.Pending)
 @assumeSafe
 object Todo
 
+/** When a monitor runs: first `delayMs` after it is added, then `everyMs` after each run
+ *  ends, at most `maxRuns` times (0: until it is stopped). */
+@assumeSafe
+case class Schedule(everyMs: Long, delayMs: Long = 0, maxRuns: Int = 0)
+@assumeSafe
+object Schedule
+
+/** A running monitor: its number (`m1`, …), name, runs so far, and the error of its last
+ *  run if that run failed. */
+@assumeSafe
+case class MonitorInfo(id: Int, name: String, runs: Int, lastError: Option[String])
+@assumeSafe
+object MonitorInfo
+
 /** Minimal JSON. `Json.parse(text)` reads it; navigate with `j("key")` and `j(i)`
  *  (a missing key or index gives `Json.Null`, so `j("a")(0)("b")` is safe to chain);
  *  read a leaf with `.str`/`.num`/`.int`/`.bool`/`.arr`/`.obj` (they throw with a clear
@@ -659,6 +673,40 @@ trait Interface:
    *  @keepWhole
    */
   def parallel[A, C^](tasks: Seq[() ->{C} A]): List[A]
+
+  // ── Monitors ────────────────────────────────────────────────────
+
+  /** Run `op` in the background on `schedule` and return the monitor's number; `op`
+   *  reports to you by calling `send`. Each `send(text)` reaches you as a message
+   *  `[monitor mN "name"] text`: at your next step while you work, or in a new turn when
+   *  you are idle. Send only what needs your attention, since each message costs a turn,
+   *  and stop a monitor whose job is done with `stopMonitor`.
+   *
+   *  `op` may capture only `io` and what derives from it (`fs`, `ex`, `net`): it cannot
+   *  print, ask, request permissions, use a capability from a `request*` block or keep a
+   *  `var`. It runs with the configured permissions and those the user granted for the
+   *  session, so when it needs more, ask in a `request*` block first and have the user
+   *  allow it for the session. A failed run is reported to you, and after three failed
+   *  runs in a row the monitor stops. Monitors end with the REPL (`/reset`, a mode change,
+   *  `/new`). At most eight run at once, and `everyMs` is at least 1000.
+   *
+   *  {{{
+   *  val ci = addMonitor("ci", Schedule(everyMs = 60_000)) { send =>
+   *    val status = execOutput("gh run list --limit 1 --json status,conclusion")
+   *    if status.contains("\"completed\"") then send(s"CI finished: $status")
+   *  }
+   *  // once it has reported: stopMonitor(ci)
+   *  }}}
+   *  @keepWhole
+   */
+  def addMonitor(name: String, schedule: Schedule)(using user: UserIO^, io: IOCap)
+                (op: (String => Unit) ->{io} Unit): Int
+
+  /** The monitors that are running. */
+  def monitors(using UserIO): List[MonitorInfo]
+
+  /** Stop monitor `id`; a run in progress is interrupted, and one that has ended stays so. */
+  def stopMonitor(id: Int)(using UserIO^): Unit
 
   // ── Output ──────────────────────────────────────────────────────
 

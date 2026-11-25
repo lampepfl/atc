@@ -24,11 +24,14 @@ final class SandboxRepl(config: Config, policy: => Policy, host: => Host, tui: T
   /** The session in use, if one has started. */
   def session: Option[ReplSession] = live
 
-  /** Exclude user input and operations with their own timeout from the snippet clock. */
+  /** Exclude user input and operations with their own timeout from the snippet clock. A
+    * monitor's run is not part of the snippet that runs meanwhile, so it pauses nothing. */
   def withClockPaused[T](body: => T): T =
-    live.foreach(_.clock.pause())
-    try body
-    finally live.foreach(_.clock.resume())
+    if Host.inMonitor then body
+    else
+      live.foreach(_.clock.pause())
+      try body
+      finally live.foreach(_.clock.resume())
 
   def interrupt(): Unit = live.foreach(_.interrupt())
 
@@ -69,12 +72,13 @@ final class SandboxRepl(config: Config, policy: => Policy, host: => Host, tui: T
     live = Some(created)
     created
 
-  /** Discard the REPL (live or still warming) and its processes, and start warming the
-    * next one, so a mode switch or `/new` costs the first tool call nothing either.
-    * `false`, with `failure` reported, when that failed. */
+  /** Discard the REPL (live or still warming) with its processes and monitors, and start
+    * warming the next one, so a mode switch or `/new` costs the first tool call nothing
+    * either. `false`, with `failure` reported, when that failed. */
   def replace(failure: String): Boolean =
     try
       host.killProcesses()
+      host.stopMonitors()
       close()
       warm()
       true

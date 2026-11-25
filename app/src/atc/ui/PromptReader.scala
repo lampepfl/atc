@@ -374,6 +374,9 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
     try body
     finally reader.setVariable(LineReader.DISABLE_HISTORY, false)
 
+  /** `line` with the text its paste placeholders stand for, as a read that ended returns it. */
+  def expandPastes(line: String): String = pasted.expand(line)
+
   /** Write `line` above the prompt while it reads, keeping the user's input; false when it is not reading. */
   def printAbove(line: String): Boolean = reader.isReading && { reader.printAbove(line); true }
 

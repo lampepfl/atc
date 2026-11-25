@@ -226,6 +226,28 @@ class AgentCoreLoopSuite extends munit.FunSuite:
     assertEquals(agent.history.last, Msg.Assistant("done", Nil, None))
     assertEquals(agent.queuedInputCount, 0)
 
+  test("a monitor message reaches the next request as the monitor's, not as a request of the user's"):
+    val (model, _, agent) = setup(Seq(toolStep("first"), ScriptedModel.Reply("done")))
+    val runner = RecordingRunner: call =>
+      agent.monitorMessage(2, "ci", "green")
+      ToolResult(call.id, "ok", isError = false)
+    assertEquals(agent.runTurn(runner, "deploy", () => false), TurnOutcome.Finished)
+    assertEquals(
+      model.seenHistories(1).takeRight(2),
+      List(Msg.Assistant(AgentMessages.pausedForMonitor, Nil, None), Msg.User("[monitor m2 \"ci\"] green")),
+    )
+    assertEquals(agent.snapshot.userRequests, List("deploy"))
+    assertEquals(agent.monitorMessageCount, 0)
+
+  test("a monitor message does not cut a request short: after the final answer it waits for a turn of its own"):
+    val (model, ui, agent) = setup(Seq(ScriptedModel.Reply("answer"), ScriptedModel.Reply("noted")))
+    ui.onDelta = text => if text == "answer" then agent.monitorMessage(1, "ci", "red")
+    assertEquals(agent.runTurn(RecordingRunner(), "watch ci", () => false), TurnOutcome.Finished)
+    assertEquals(model.i, 1)
+    assertEquals(agent.monitorMessageCount, 1)
+    agent.runTurn(RecordingRunner(), "", () => false)
+    assertEquals(model.seenHistories(1).last, Msg.User("[monitor m1 \"ci\"] red"))
+
   test("a turn carrying only queued input sends it without empty leading text"):
     // The TUI starts such a turn with an empty request so that input typed during
     // the previous one is answered; the model must see the text alone.

@@ -113,12 +113,13 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
   // ── Deriving capabilities from `io` ─────────────────────────────
 
   test("the agent-facing API consumes leaf capabilities, never the io root directly"):
+    // `addMonitor` takes `io` only to name the bound of its callback's captures.
     val consumers = classOf[atc.lib.Interface].getMethods.toList
       .filter(_.getParameterTypes.contains(classOf[atc.lib.IOCap]))
       .map(_.getName)
       .distinct
       .sorted
-    assertEquals(consumers, Nil)
+    assertEquals(consumers, List("addMonitor"))
 
   test("the derivations are the sandbox's, not the agent's: unreachable from agent code"):
     // The preamble builds `fs`/`ex`/`net` from `io` through `Runtime`; agent code
@@ -325,6 +326,40 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
       assert(!result.success, s"leaked into Classified.map: $code\n${result.render}")
     assertFails(run("""val g: () ->{w.rd} Unit = () => w.access("x.txt").write("y")(using w)"""))
     assertFails(run("""val g: () ->{u.rd} Unit = () => println("y")(using u)"""))
+
+  test("a monitor may capture io and what derives from it, and nothing else"):
+    // A monitor's runs act with the base scope: they have no `user` to print, ask or request
+    // with, and no capability of a `request*` block, whose scope ends with the block.
+    val later = "Schedule(everyMs = 60000, delayMs = 60000)"
+    val echo = ujson.write(echoCommand)
+    try
+      assertOk(run(s"""addMonitor("files", $later) { send => if exists("a.txt") then send(read("a.txt")) }"""))
+      assertOk(run(s"""addMonitor("commands", $later) { send => send(execOutput($echo)) }"""))
+      assertOk(run(s"""addMonitor("network", $later) { send => send(httpGet("http://example.com")) }"""))
+      assertOk(run(s"""addMonitor("tasks", $later) { send => parallel(List(() => send("a"), () => send("b"))); () }"""))
+      assertOk(run("""val kept: UserIO^ = user"""))
+      val rejected = List(
+        s"""addMonitor("print", $later) { send => println("x") }""",
+        s"""addMonitor("print through a val", $later) { send => println("x")(using kept) }""",
+        s"""addMonitor("ask", $later) { send => ask("x"); () }""",
+        s"""addMonitor("todos", $later) { send => setTodos(Nil) }""",
+        s"""addMonitor("chat", $later) { send => send(chat("x")) }""",
+        s"""addMonitor("request", $later) { send => requestExec(List($echo)) { () } }""",
+        s"""requestExec(List($echo)) { addMonitor("scoped exec", $later) { send => send(execOutput($echo)) } }""",
+        s"""requestExec(List($echo)) {
+           |  val e: Exec^ = summon[Exec^]
+           |  addMonitor("kept exec", $later) { send => send(execOutput($echo)(using e, fs)) }
+           |}""".stripMargin,
+        s"""requestFiles(".") { addMonitor("scoped files", $later) { send => send(read("a.txt")) } }""",
+        s"""def counting(): Int = { var n = 0; addMonitor("var", $later) { send => n += 1 } }""",
+        s"""classify("s").map(s => addMonitor("in map", $later) { send => send(s) })""",
+        s"""addMonitor("send in map", $later) { send => classify("s").map(s => send(s)); () }""",
+        s"""addMonitor("send in flatMap", $later) { send => classify("s").flatMap(s => { send(s); classify(1) }); () }""",
+      )
+      for code <- rejected do
+        val result = run(code)
+        assert(!result.success, s"accepted: $code\n${result.render}")
+    finally env.host.stopMonitors()
 
   test("capability values cannot be smuggled into Classified.map as its argument"):
     // `classify` does not erase a value's capture provenance. Even though each

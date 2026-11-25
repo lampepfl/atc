@@ -185,7 +185,9 @@ object Prompts:
        |   by side, so never for tasks that write the same files or share mutable state (see its doc
        |   comment).
        |   Keep permission-dependent operations separate from later effects so user feedback can change
-       |   the plan. State persists between calls (vals, defs, imports).
+       |   the plan. State persists between calls (vals, defs, imports). To wait for something that
+       |   outlasts your turn (a CI run, a long build, a log), add a monitor with `addMonitor` instead of
+       |   polling in a loop, and stop it once it has done its job.
        |9. When done, report the result, verification and remaining blockers concisely (no tool call).
        |   Avoid narrating each snippet or repeating the same information in both prose and a table.
        |10. Web search (when available) is for facts you cannot get locally; use it sparingly and

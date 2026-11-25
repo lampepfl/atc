@@ -21,7 +21,7 @@ class ApiReferenceSuite extends munit.FunSuite:
   test("the compact reference drops examples, bodies, annotations and imports, and is much smaller"):
     for noise <- List("@assumeSafe", "import ", "this match", "private[atc] ()", "private def") do
       assert(!compact.contains(noise), noise)
-    assertEquals(compact.split("\\{\\{\\{").length - 1, 2, "only the docs kept whole keep their examples")
+    assertEquals(compact.split("\\{\\{\\{").length - 1, 3, "only the docs kept whole keep their examples")
     assert(compact.length * 10 < full.length * 7, s"${compact.length} of ${full.length}")
     assert(compact.contains("case class ProcessResult(exitCode: Int, stdout: String, stderr: String)\n"))
     assert(compact.contains("def zip[B](that: Classified[B]): Classified[(T, B)]\n"))

@@ -300,7 +300,7 @@ chooses the form: `compact` (the default) keeps every signature and cuts each do
 its first sentence, marking a cut with `…`, and drops code examples, method bodies,
 annotations and imports; `full` sends the source whole. A doc comment with a `@keepWhole`
 line stays whole in the compact form, for the few APIs where a guess causes a security slip or
-broken code (`Classified`, `exec`, `parallel`); neither form shows the marker. `help(name)`
+broken code (`Classified`, `exec`, `parallel`, `addMonitor`); neither form shows the marker. `help(name)`
 prints the whole documentation of a method with its overloads, of a type with its members, or
 of `Type.member`, and suggests names for an unknown one. On the current source the compact
 form is about two thirds of the full one.
@@ -733,6 +733,59 @@ unboxed, which is inside the trusted host; with `Seq[() => A]`, a task could run
 secret inside `Classified.map`. The parameter charges the caller with `C`, so
 `Classified.map` keeps its rules and pure tasks still compile inside it. `CapabilitySuite`
 covers both cases.
+
+### Monitors
+
+`addMonitor(name, schedule)(using user: UserIO^, io: IOCap)(op: (String => Unit) ->{io} Unit)`
+runs agent code in the background. The bound `{io}` admits `io` and the preamble's `fs`, `ex`
+and `net`, whose types capture it, and nothing else: not `user`, so a run cannot print, ask or
+open a `request*` block; not the capability a request block lends, whose capture set is its
+own; not a local `var`. `send` is a parameter of type `String => Unit`, which a pure
+`Classified.map` cannot capture, so a secret cannot reach the agent through it, and
+`addMonitor` itself takes the full `user`, so it cannot run inside one either. `io` is taken
+as a read-only view so that one signature serves every mode: in read-only mode `fs` is
+`FileSystem^{io.rd}` and a run can only read. The bound works because the preamble's
+capabilities are strict vals ([the capability design](#the-capability-design)).
+
+A run acts with the base scope: the configured rules and the session grants. A request
+allowed once has ended with its block, so a monitor that needs more is added after the user
+allows it for the session; a request scope's capability, could a run hold one, would be
+refused by its closed scope as well. `CapabilitySuite`, `ModeSuite` and `MonitorSuite` cover
+the typing and these permissions.
+
+Each monitor has a single-thread scheduled executor, with a fixed delay between runs, so a run
+that never returns holds up no other monitor. Stopping one shuts its executor down, which
+interrupts a run in progress; a loop in agent code ignores the interrupt and ends with the
+REPL's stop flag, which a closed REPL keeps raised. That flag belongs to the REPL's class loader
+and stops every thread running its code, and Ctrl-C raises it even between evaluations, where
+it stays until the next one lowers it. Before each run `ReplSession.readyForMonitor` therefore
+tries the evaluation lock: holding it shows that no evaluation runs, so a raised flag is stale
+and is lowered. While an evaluation runs the flag is that evaluation's, and a run it stops ends
+with it without counting as a failure. A run that throws is reported to the agent, the first
+of a series only, and three failed runs in a row stop the monitor. A message longer than 4000
+characters is cut.
+
+`Host.output` gives a monitor's run, and the `parallel` tasks it starts, a `MonitorOutput`.
+Host ports otherwise assume that the agent's evaluation is the caller: a file the run changes
+is reported as the monitor's event instead of a preview in the agent's open tool block, its
+commands are not shown live, and they do not pause the clock of an evaluation that runs
+meanwhile (`whileCommandRuns`; `SandboxRepl.withClockPaused` checks `Host.inMonitor` for
+`classifiedChat`). Process events are shown as for the agent.
+
+`HostOutput.monitorMessage` queues the message on the `Agent` (at most 50, the oldest
+dropped). The queue is drained where queued corrections are, before each model request, and
+`Conversation.deliver` adds it as a correction is added, except that it is not recorded as a
+request of the user's and the marker that closes an interrupted exchange names a monitor.
+Unlike a correction it does not cancel a model request, skip the rest of a batch of tool calls,
+or continue a turn whose answer is final. Between turns `App` starts a turn for it: `Tui.wake`
+interrupts the thread in the main prompt's read, JLine ends the read with the partial line,
+and that line becomes the next prompt's draft. After an interrupted turn the messages wait for
+the user's next message, so Ctrl-C also stops a monitor that keeps the agent busy. A `-p` run
+ends with its turn.
+
+`SandboxRepl.replace` (`/reset`, `/mode`, `/new`) and shutdown stop every monitor, and the
+restart notice tells the agent. `/monitors` lists them and `/monitors stop` stops them, which
+the agent hears about. At most eight run at once, at most once a second each.
 
 HTTP operations validate the scheme, host and headers (secret header names too; only their
 values stay inside the classified boundary), do not follow redirects, and cap response

@@ -247,6 +247,11 @@ makes [`request*` blocks](#asking-for-more) safe: the wider file system lent to 
 cannot be stashed in a `val` that survives it, returned from it, or captured by a closure
 that escapes it.
 
+The same typing confines a monitor, code the agent leaves running in the background with
+`addMonitor` to watch a build or a CI run and message it. Its code may capture only `io` and
+what derives from it, so it cannot print, ask, request permissions or keep a capability lent
+to a block; it acts with the configured permissions and those you allowed for the session.
+
 ### Classified data
 
 Capabilities constrain *effects*. Confidential content follows a second, independent set
@@ -517,7 +522,9 @@ is working, type a correction and press Enter: it reaches the agent before its n
 call. A long paste shows as a placeholder such as `[Pasted text #1: 120 lines]` and is sent
 in full. Interactive sessions are saved after every turn, and the next start in the same
 directory offers to resume. ATC notifies you when a turn ends or the agent waits for you, and
-reports whether it is working, waiting or done to terminals that track program status.
+reports whether it is working, waiting or done to terminals that track program status. A
+monitor's message starts a turn when the agent is idle (after Ctrl-C, not until your next
+message); `/monitors` lists the monitors and stops them.
 
 A `-p` run asks nothing: a permission the configuration does not grant fails instead of
 waiting. `--approve-all` approves such requests instead; use it only in a trusted setup. The

@@ -1,7 +1,7 @@
 package atc.sandbox
 
 import atc.Threads
-import atc.host.{ClassifiedImpl, Host}
+import atc.host.{ClassifiedImpl, Host, MonitorRepl}
 import atc.perms.Mode
 import atc.platform.Platform
 
@@ -195,7 +195,8 @@ object ReplSession:
     "The code nests too deeply for the compiler to parse (stack overflow); split the expression into smaller definitions."
 
 /** One persistent REPL with its own sandbox class loader and host. */
-final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Option[String] = None):
+final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Option[String] = None)
+    extends MonitorRepl:
   import ReplSession.*
 
   private val outputCapture = BoundedOutputStream(MaxOutputBytes)
@@ -231,6 +232,7 @@ final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Opt
       // than one session, so select this session's host while holding the same
       // process-wide lock that serializes evaluation and lazy wrapper loading.
       Sandbox.installHost(host)
+      host.repl = this
       state = driver.run(code)(using state)
     }
     thrown.foreach(throw _)
@@ -253,6 +255,16 @@ final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Opt
     driver.setStopFlag(true)
     val t = evalThread
     if t != null then t.interrupt()
+
+  /** A monitor runs this REPL's code outside evaluations, under the same stop flag. Holding
+    * the evaluation lock shows that no evaluation runs, so a raised flag is one an interrupt
+    * left behind (Ctrl-C raises it even between runs) and is lowered. While an evaluation
+    * runs, the flag is that evaluation's: a run it stops ends with it. */
+  def readyForMonitor(): Boolean =
+    if !closed && outputLock.tryLock() then
+      try if !closed then driver.setStopFlag(false)
+      finally outputLock.unlock()
+    !closed
 
   def run(code: String): ExecutionResult = run(code, () => false)
 
@@ -314,6 +326,7 @@ final class ReplSession(config: SandboxConfig, host: Host, preambleOverride: Opt
         // line, long after `init`. Re-select the owning host inside the global
         // evaluation lock so another session cannot supply its capabilities.
         Sandbox.installHost(host)
+        host.repl = this // a monitor this code adds runs code of this REPL
         driver.resetEvaluationThrew()
         newState = driver.runParseResult(res)(using state)
     }

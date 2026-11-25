@@ -15,7 +15,7 @@ import java.io.{InputStream, OutputStream, PrintStream}
 import java.nio.charset.{Charset, StandardCharsets}
 import java.nio.file.Path
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import java.util.concurrent.locks.ReentrantLock
 import scala.collection.mutable
 import scala.util.control.NonFatal
@@ -129,6 +129,12 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   override def inputAccepted(text: String): Unit = frame:
     beginBlock()
     write(styled(s"${g.arrow} applying update: ${Ansi.sanitize(text)}", Cyan) + "\n")
+    statusLine.refresh()
+
+  override def monitorMessage(text: String): Unit = frame:
+    beginBlock()
+    val shown = if text.length <= Tui.MonitorShownChars then text else text.take(Tui.MonitorShownChars) + " …"
+    write(styled(s"${g.arrow} ${Ansi.sanitize(shown)}", Cyan) + "\n")
     statusLine.refresh()
 
   // ── turns ─────────────────────────────────────────────────────────
@@ -554,6 +560,31 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
   /** Text the next prompt starts with, before any keys typed ahead. */
   @volatile private var nextDraft = ""
 
+  /** Whether input waits that should end the main prompt's read (App: monitor messages). */
+  @volatile var wakeWanted: () => Boolean = () => false
+  /** The thread in the main prompt's read, which [[wake]] interrupts; guarded by itself. */
+  private val reading = AtomicReference[Thread | Null](null)
+
+  /** End the main prompt's read when [[wakeWanted]]: it returns "" and the next prompt
+    * starts with what the user had typed. JLine ends a read whose thread is interrupted
+    * with the partial line. */
+  def wake(): Unit = reading.synchronized:
+    val thread = reading.get()
+    if thread != null then thread.interrupt()
+
+  /** `prompt.read`, which [[wake]] can end. */
+  private def readWakeable(text: String, typed: String): String =
+    val wakeable = !prompt.blockMode
+    reading.synchronized(if wakeable then reading.set(Thread.currentThread))
+    try
+      // Woken before the read began: end it the same way.
+      if wakeable && wakeWanted() then throw UserInterruptException(typed)
+      prompt.read(text, typed)
+    finally
+      reading.synchronized:
+        reading.set(null)
+        Thread.interrupted() // a wake that came as the read returned
+
   /** Start the next prompt with `text`, for the user to edit or send. */
   def draft(text: String): Unit = nextDraft = text
 
@@ -566,12 +597,16 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
         val typed = List(nextDraft, keys.takeTypeAhead()).filter(_.nonEmpty).mkString("\n")
         nextDraft = ""
         frame { statusLine.draft = ""; statusLine.refresh() }
-        result = Some(prompt.read(styled(promptText, Cyan, Bold), typed))
+        result = Some(readWakeable(styled(promptText, Cyan, Bold), typed))
         again = false
       catch
-        case _: UserInterruptException =>
+        case e: UserInterruptException =>
           Thread.interrupted()
-          again = !prompt.blockMode
+          if !prompt.blockMode && wakeWanted() then
+            nextDraft = prompt.expandPastes(Option(e.getPartialLine).getOrElse(""))
+            result = Some("")
+            again = false
+          else again = !prompt.blockMode
         case e: EndOfFileException =>
           Debug.log(s"EOF on input: ${e.getMessage}")
           Debug.trace(e)
@@ -608,6 +643,9 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
     terminal.close()
 
 object Tui:
+  /** How much of a monitor's message the window shows; the model reads all of it. */
+  private val MonitorShownChars = 500
+
   /** A scripted `-p` run never needs console discovery or raw mode, and its terminal is its
     * standard error: standard output is kept for the answer ([[Screen.writeAnswer]]). Giving it
     * a known dumb UTF-8 terminal also avoids platform-specific null encodings
