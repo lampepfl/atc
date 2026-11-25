@@ -102,8 +102,8 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
 
   /** The slash commands as `/help` lists them (usage, description). While the
     * main prompt holds a partial command name (`/`, `/mo`), the matching ones
-    * are listed under it with one selected: ↑/↓ move the selection, Tab fills
-    * it in and Enter runs it. */
+    * are listed under it with one selected: Tab fills in the next one each time
+    * it is pressed, ↑/↓ move the selection and Enter runs it. */
   @volatile var commandList: List[(String, String)] = Nil
   /** The main prompt is reading, not an answer, a secret or a block: it lists commands and shows ghost text. */
   private var mainPrompt = false
@@ -112,15 +112,20 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
   private var selected = 0
   /** ↑/↓ recalled the buffer from history: it is not listed until edited, so they keep browsing. */
   private var recalled = false
+  /** Tab is going through the list: what was typed before the first Tab. The list stays
+    * the one for that text while the buffer holds the selected name, until another edit. */
+  private var cycleBase: Option[String] = None
 
   /** The listed commands for the current buffer, and the selected index. */
   private def listState(): (List[(String, String)], Int) =
     val buffer = reader.getBuffer.toString
-    val rows = if mainPrompt then PromptReader.matchingCommands(buffer, commandList) else Nil
-    if buffer != listedFor then
+    val edited = buffer != listedFor
+    if edited then
       listedFor = buffer
       recalled = false
-      selected = rows.indexWhere(row => PromptReader.commandName(row._1) == buffer.toLowerCase(Locale.ROOT)).max(0)
+      cycleBase = None
+    val rows = if mainPrompt then PromptReader.matchingCommands(cycleBase.getOrElse(buffer), commandList) else Nil
+    if edited then selected = rows.indexWhere(row => PromptReader.names(row._1, buffer)).max(0)
     (if recalled then Nil else rows, selected)
 
   /** The selected command's usage while the list is shown. */
@@ -128,18 +133,46 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
     val (rows, index) = listState()
     rows.lift(index).map(_._1)
 
+  /** Replace the buffer with `text`, as part of the selection made for the buffer it replaces. */
+  private def fill(text: String): Unit =
+    val buf = reader.getBuffer
+    buf.clear()
+    buf.write(text)
+    if cycleBase.isDefined then listedFor = text
+
+  /** ↑/↓: move the selection, and while Tab goes through the list fill it in as Tab does. */
   private def moveSelection(delta: Int): Boolean =
     val (rows, index) = listState()
-    rows.nonEmpty && { selected = Math.floorMod(index + delta, rows.size); true }
+    rows.nonEmpty && {
+      selected = Math.floorMod(index + delta, rows.size)
+      if cycleBase.isDefined then fill(PromptReader.commandName(rows(selected)._1))
+      true
+    }
+
+  /** Tab (`delta` 1) and Shift-Tab (-1) on the list. The only match is filled in with the
+    * space its arguments follow. Among several, the first Tab fills in the selected name
+    * and each further one the next, around the list, as a shell's menu completion does.
+    * The names get no space, which would read as a choice made; typing one makes it.
+    * A first Tab on a name already typed in full, and a first Shift-Tab, move at once. */
+  private def cycleSelection(delta: Int): Boolean =
+    val (rows, index) = listState()
+    rows match
+      case Nil => false
+      case _ :: Nil if cycleBase.isEmpty => fillSelected(withSpace = true)
+      case _ =>
+        val buffer = reader.getBuffer.toString
+        val moves = cycleBase.isDefined || delta < 0 || PromptReader.names(rows(index)._1, buffer)
+        if cycleBase.isEmpty then cycleBase = Some(buffer)
+        if moves then selected = Math.floorMod(index + delta, rows.size)
+        fill(PromptReader.commandName(rows(selected)._1))
+        true
 
   /** Replace the buffer with the selected command's name, plus a space when it takes arguments. */
   private def fillSelected(withSpace: Boolean): Boolean =
     selectedCommand() match
       case Some(usage) =>
         val name = PromptReader.commandName(usage)
-        val buf = reader.getBuffer
-        buf.clear()
-        buf.write(if withSpace && usage != name then name + " " else name)
+        fill(if withSpace && usage != name then name + " " else name)
         true
       case None => false
 
@@ -202,10 +235,12 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
   if !plain && keyMap != null then
     // At the main prompt only: the key map is shared with answers and secrets, where the
     // line this submits would be taken as the answer, the instructions or the key.
+    // On the command list the key goes back through it instead, as Tab goes forward.
     val cycle: Widget = () =>
       if mainPrompt && reader.getBuffer.length == 0 then
         reader.getBuffer.write(PromptReader.CycleModeLine)
         reader.callWidget(LineReader.ACCEPT_LINE)
+      else cycleSelection(-1)
       true
     reader.getWidgets.put("atc-cycle-mode", cycle)
     // JLine binds Ctrl-O to accept-line-and-down-history, which would send a half-typed
@@ -224,16 +259,16 @@ private[ui] final class PromptReader(screen: Screen, historyPath: Path, alerts: 
     def intercept(name: String, keys: List[String], previous: Binding | Null)(action: () => Boolean): Unit =
       reader.getWidgets.put(name, (() => action() || fallback(previous)): Widget)
       keyMap.bind(Reference(name), keys*)
-    // Tab fills in the selected command while the command list is shown;
-    // Tab and → accept the ghost text (when the cursor is at the end and
-    // there is some); otherwise they do what they did before.
+    // Tab goes through the command list while it is shown; Tab and → accept
+    // the ghost text (when the cursor is at the end and there is some);
+    // otherwise they do what they did before.
     def acceptGhost(): Boolean =
       val buf = reader.getBuffer
       ghost(buf.toString) match
         case Some(rest) if buf.cursor == buf.length => buf.write(rest); true
         case _ => false
     intercept("atc-accept-suggestion-tab", List("\t"), keyMap.getBound("\t")): () =>
-      fillSelected(withSpace = true) || acceptGhost()
+      cycleSelection(1) || acceptGhost()
     intercept(
       "atc-accept-suggestion-right",
       key(InfoCmp.Capability.key_right, "\u001b[C", "\u001bOC"),
@@ -361,6 +396,9 @@ private[ui] object PromptReader:
 
   /** The command a usage line names: `/model` for `/model [ref]`. */
   private[ui] def commandName(usage: String): String = usage.takeWhile(_ != ' ')
+
+  /** Whether `typed` is the name of the command with this usage line, in any case. */
+  private def names(usage: String, typed: String): Boolean = commandName(usage) == typed.toLowerCase(Locale.ROOT)
 
   /** The rows of `commands` (usage, description) to list under a prompt holding
     * `buffer`: those whose name starts with it, while it is a single word

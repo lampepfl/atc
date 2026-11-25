@@ -510,8 +510,8 @@ and the configured permissions.
 
 ## The terminal
 
-`/help` lists the slash commands, and typing `/` lists them under the prompt (↑/↓ select,
-Tab fills in, Enter runs). Ctrl-C interrupts the turn, Shift-Tab cycles the mode, and
+`/help` lists the slash commands, and typing `/` lists them under the prompt (Tab goes
+through them, ↑/↓ select, Enter runs). Ctrl-C interrupts the turn, Shift-Tab cycles the mode, and
 Shift-Enter adds a line. Finished code runs fold to a summary, and `/output <n>` shows one
 in full. Ctrl-O switches to writing code, output and reasoning out in full. While the agent
 is working, type a correction and press Enter: it reaches the agent before its next tool
