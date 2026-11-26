@@ -97,6 +97,8 @@ private[host] trait HostInteraction:
 
   private[atc] def currentTodos: List[Todo] = todoList
 
+  def setTitle(title: String)(using UserIO): Unit = ui.setTitle(title)
+
   private[atc] def clearTodos(): Unit = todoLock.synchronized:
     todoList = Nil
     notes = TaskNotes()

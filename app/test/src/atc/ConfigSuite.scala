@@ -781,6 +781,10 @@ class ConfigSuite extends munit.FunSuite:
     val error = intercept[IllegalArgumentException](ConfigValidation.validate(Config(notifications = "popup")))
     assert(error.getMessage.nn.contains("notifications"), error.getMessage)
 
+  test("terminalTitle is on unless a config turns it off"):
+    assertEquals(upickle.default.read[Config]("{}").terminalTitle, true)
+    assertEquals(upickle.default.read[Config]("""{ "terminalTitle": false }""").terminalTitle, false)
+
   test("compactKeepRatio validates fractions and follows layer precedence"):
     assertEquals(upickle.default.read[Config]("{}").compactKeepRatio, 0.2)
     List(0.0, 0.3, 1.0).foreach: ratio =>

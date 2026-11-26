@@ -33,6 +33,7 @@ object Scratch:
     val hostUi = new HostUi:
       def askUser(question: String, options: List[String], multiple: Boolean): Option[String] = Some("yes")
       def showTodos(items: List[Todo]): Unit = println(s"[todos] $items")
+      def setTitle(title: String): Unit = println(s"[title] $title")
     val host = Host(policy, root, output, llm, hostUi)
     val safe = args.length < 2 || args(1) != "nosafe"
     val third = if args.length >= 3 then Some(args(2)) else None

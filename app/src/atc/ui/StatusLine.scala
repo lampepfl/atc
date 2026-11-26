@@ -12,10 +12,11 @@ import scala.jdk.CollectionConverters.*
 /** The footer (JLine `Status`), the window title and the program status. The footer shows
   * what the turn is doing, an unsent correction, or the keys a pop-up takes; between turns
   * it shows the mode, model and directory, and after them how many spawned processes and
-  * monitors are live. The title is `atc · <directory>`, marked while a
-  * turn runs (`●`) or a pop-up waits during one (`?`), so a tab that needs the user stands
-  * out. The terminal's own title is saved first (xterm's title stack) and restored by
-  * `close`. The program status (OSC 7501) says the same to terminals that track it:
+  * monitors are live. The title is `atc · <directory>`, or the name `/title` gave the tab,
+  * marked while a turn runs (`●`) or a pop-up waits during one (`?`), so a tab that needs
+  * the user stands out. The terminal's own title is saved first (xterm's title stack) and
+  * restored by `close`. Inside tmux the title also names the `window`, which is what tmux
+  * shows. The program status (OSC 7501) says the same to terminals that track it:
   * `working`, `blocked` on a pop-up, then `done`, `error` or `idle` when the turn ends.
   *
   * Updates run with the screen's lock held and redraw only what changed. */
@@ -24,6 +25,7 @@ private[ui] final class StatusLine(
   busy: () => Boolean,
   popupOpen: () => Boolean,
   queuedInputs: () => Int,
+  window: Option[TmuxWindow] = None,
 ):
   import screen.{g, plain, terminal, width}
 
@@ -36,7 +38,8 @@ private[ui] final class StatusLine(
   private var footerSize = (0, 0)
   private var lastFooter = ""
   private var context = ""
-  private var titleBase = "atc"
+  /** The tab's name; `None` leaves the title alone (config `terminalTitle`, and before it is read). */
+  private var titleBase: Option[String] = None
   private var lastTitle = ""
   /** The program status between turns: `idle` until a turn ends. */
   private var resting: StatusLine.Program = ("idle", "", "")
@@ -63,8 +66,13 @@ private[ui] final class StatusLine(
   /** Whether there is a footer to show progress in (otherwise a spinner line shows it). */
   def shown: Boolean = footer.isDefined
 
-  def setContext(label: String, title: String): Unit =
+  /** What the footer shows between turns: the mode, model and directory. */
+  def setContext(label: String): Unit =
     context = label
+    refresh()
+
+  /** Name the tab `title`; `None` leaves the terminal's title and the tmux window's name alone. */
+  def setTitle(title: Option[String]): Unit =
     titleBase = title
     refresh()
 
@@ -96,16 +104,20 @@ private[ui] final class StatusLine(
   def refreshTitle(): Unit = if !plain && !closed then
     val waiting = busy() && popupOpen()
     val marker = if waiting then "? " else if busy() then s"${g.bullet} " else ""
-    val title = Ansi.sanitize(marker + titleBase).replace('\n', ' ').replace('\t', ' ')
+    val title = titleBase
+      .map(base => Ansi.sanitize(marker + base).replace('\n', ' ').replace('\t', ' '))
+      .filter(_ != lastTitle)
     val status: StatusLine.Program =
       if waiting then ("blocked", waitingFor.kind, waitingFor.message)
       else if busy() then ("working", "", operation)
       else resting
-    if title != lastTitle || status != lastStatus then
-      if title != lastTitle then screen.writeStyle(s"${Ansi.Esc}]0;$title${Ansi.Bel}")
+    if title.isDefined || status != lastStatus then
+      title.foreach: name =>
+        screen.writeStyle(s"${Ansi.Esc}]0;$name${Ansi.Bel}")
+        window.foreach(_.rename(name))
+        lastTitle = name
       if status != lastStatus then
         screen.writeStyle(StatusLine.programStatus(status.state, status.kind, status.message))
-      lastTitle = title
       lastStatus = status
       screen.flush()
 
@@ -158,10 +170,11 @@ private[ui] final class StatusLine(
       s"$frame ${operation.take((width / 2).max(20))}$elapsed$waiting ${g.dot} $context$live"
     else context + live
 
-  /** Restore the terminal's title, clear the program status and take the footer down;
-    * later updates draw nothing. */
+  /** Restore the terminal's title and the tmux window's name, clear the program status and
+    * take the footer down; later updates draw nothing. */
   def close(): Unit =
     closed = true
+    window.foreach(_.restore())
     if !plain then screen.synchronized(screen.writeStyle(s"${Ansi.Esc}[23;0t${Ansi.Esc}]7501;state=clear${Ansi.Bel}"))
     screen.synchronized(screen.flush())
     footer.foreach(_.close())

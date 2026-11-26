@@ -19,14 +19,20 @@ enum Notifier:
   /** `osascript` on macOS, a PowerShell toast on Windows, `notify-send` elsewhere. */
   case System
 
-  /** Notify with `title` and `body`. `emit` writes raw control text to the terminal. */
-  def send(title: String, body: String, emit: String => Unit): Unit =
+  /** Notify with `title` and `body`. `emit` writes raw control text to the terminal, which
+    * `env` says is inside tmux or not. */
+  def send(
+    title: String,
+    body: String,
+    emit: String => Unit,
+    env: String => Option[String] = ProcessEnvironment.get,
+  ): Unit =
     val t = Notifier.clean(title)
     val b = Notifier.clean(body)
     this match
       case Off => ()
       case Bell => emit(Bel)
-      case Terminal(osc) => emit(Notifier.passThrough(osc.format(t, b)))
+      case Terminal(osc) => emit(Notifier.passThrough(osc.format(t, b), env))
       case System =>
         val command = Notifier.systemCommand(t, b)
         val show: Runnable = () =>
@@ -109,8 +115,8 @@ object Notifier:
 
   /** tmux drops unknown OSC sequences unless they are wrapped for passthrough
     * (which also needs `set -g allow-passthrough on`). */
-  private def passThrough(sequence: String): String =
-    if ProcessEnvironment.get("TMUX").isEmpty then sequence
+  private def passThrough(sequence: String, env: String => Option[String]): String =
+    if env("TMUX").isEmpty then sequence
     else s"${Esc}Ptmux;" + sequence.replace(Esc, Esc + Esc) + s"$Esc\\"
 
   /** The command that shows a system notification. The text travels as

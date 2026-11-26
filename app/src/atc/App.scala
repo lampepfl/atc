@@ -90,6 +90,7 @@ final class App(args: Cli.Args, val tui: Tui):
     def askUser(question: String, options: List[String], multiple: Boolean): Option[String] =
       if args.prompt.isDefined then None else withClockPaused(tui.askUser(question, options, multiple))
     def showTodos(items: List[Todo]): Unit = tui.showTodos(items)
+    def setTitle(title: String): Unit = tui.nameTab(title)
   /** Listings hide what git ignores unless the config turns that off. */
   private val gitIgnore: GitIgnore = if config.respectGitignore then GitIgnore(cwd, policy) else GitIgnore.Disabled
   val host: Host = Host(policy, cwd, output, llm, hostUi, gitIgnore, () => models.configuration.keyVariables)
@@ -114,6 +115,7 @@ final class App(args: Cli.Args, val tui: Tui):
       tui.info(s"$command was not run: commands run between turns. Ctrl-C stops this turn.")
     else agent.submit(line)
   if args.prompt.isEmpty then tui.notifier = Notifier.fromSetting(config.notifications)
+  tui.terminalTitle = config.terminalTitle
   tui.queuedInputs = () => agent.queuedInputCount
   tui.onInterrupt = () =>
     agent.interrupt()

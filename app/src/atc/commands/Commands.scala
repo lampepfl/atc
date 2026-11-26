@@ -55,6 +55,8 @@ final class Commands(app: App):
     case Cmd.Reset => sessionCommands.reset()
     case Cmd.Compact => sessionCommands.compact(arg)
     case Cmd.Todos => tui.showTodosNow(host.currentTodos)
+    case Cmd.Title =>
+      tui.info(tui.nameTab(arg).fold("The terminal tab is not named here (see `terminalTitle`).")("tab title: " + _))
     // Model-generated process names: `println` strips terminal controls.
     case Cmd.Ps => tui.println(host.processSummary)
     case Cmd.Kill =>

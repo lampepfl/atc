@@ -57,3 +57,5 @@ trait HostUi:
   /** `None` if the user declines/cancels. */
   def askUser(question: String, options: List[String], multiple: Boolean): Option[String]
   def showTodos(items: List[Todo]): Unit
+  /** Name the terminal tab for the session; empty gives it back its default name. */
+  def setTitle(title: String): Unit

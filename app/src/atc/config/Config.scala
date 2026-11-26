@@ -248,6 +248,10 @@ final case class Config(
     * focused: `auto`, `system` (a desktop notification),
     * `terminal` (the terminal's own notification sequence), `bell` or `off`. */
   notifications: String = "auto",
+  /** Name the terminal tab `atc · <directory>`, marked while a turn runs or waits for the
+    * user, and inside tmux also the window, unless the user named it. `false` leaves both
+    * alone. `/title` gives the tab another name for the session. */
+  terminalTitle: Boolean = true,
 ) derives ReadWriter
 
 /** Where the configuration files are, and how they are created, loaded and edited in place.
