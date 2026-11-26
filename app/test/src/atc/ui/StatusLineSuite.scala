@@ -57,7 +57,7 @@ class StatusLineSuite extends munit.FunSuite:
 
   test("the footer names the live processes and monitors after the context, when there are any"):
     val status = StatusLine(TestTerminal.screen(), () => false, () => false, () => 0)
-    status.setContext("full · echo · proj", "atc")
+    status.setContext("full · echo · proj")
     assertEquals(status.label, "full · echo · proj")
     status.background = (2, 1)
     assertEquals(status.label, "full · echo · proj · 2 processes · 1 monitor")
