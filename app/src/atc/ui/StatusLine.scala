@@ -12,11 +12,11 @@ import scala.jdk.CollectionConverters.*
 /** The footer (JLine `Status`), the window title and the program status. The footer shows
   * what the turn is doing, an unsent correction, or the keys a pop-up takes; between turns
   * it shows the mode, model and directory, and after them how many spawned processes and
-  * monitors are live. The title is `atc · <directory>`, marked while a
-  * turn runs (`●`) or a pop-up waits during one (`?`), so a tab that needs the user stands
-  * out; `/title` gives it another name. The terminal's own title is saved first (xterm's
-  * title stack) and restored by `close`. Inside tmux the title is also the name of the
-  * `window`, which is what tmux shows. The program status (OSC 7501) says the same to terminals that track it:
+  * monitors are live. The title is `atc · <directory>`, or the name `/title` gave the tab,
+  * marked while a turn runs (`●`) or a pop-up waits during one (`?`), so a tab that needs
+  * the user stands out. The terminal's own title is saved first (xterm's title stack) and
+  * restored by `close`. Inside tmux the title also names the `window`, which is what tmux
+  * shows. The program status (OSC 7501) says the same to terminals that track it:
   * `working`, `blocked` on a pop-up, then `done`, `error` or `idle` when the turn ends.
   *
   * Updates run with the screen's lock held and redraw only what changed. */
@@ -38,10 +38,9 @@ private[ui] final class StatusLine(
   private var footerSize = (0, 0)
   private var lastFooter = ""
   private var context = ""
-  private var titleBase = "atc"
+  /** The tab's name; `None` leaves the title alone (config `terminalTitle`, and before it is read). */
+  private var titleBase: Option[String] = None
   private var lastTitle = ""
-  /** Whether the title is set at all (config `terminalTitle`): not before the config is read. */
-  @volatile private var titled = false
   /** The program status between turns: `idle` until a turn ends. */
   private var resting: StatusLine.Program = ("idle", "", "")
   private var lastStatus: StatusLine.Program = ("", "", "")
@@ -74,8 +73,7 @@ private[ui] final class StatusLine(
 
   /** Name the tab `title`; `None` leaves the terminal's title and the tmux window's name alone. */
   def setTitle(title: Option[String]): Unit =
-    titled = title.isDefined
-    title.foreach(titleBase = _)
+    titleBase = title
     refresh()
 
   /** A turn starts: the elapsed time counts from now. */
@@ -106,17 +104,18 @@ private[ui] final class StatusLine(
   def refreshTitle(): Unit = if !plain && !closed then
     val waiting = busy() && popupOpen()
     val marker = if waiting then "? " else if busy() then s"${g.bullet} " else ""
-    val title = Ansi.sanitize(marker + titleBase).replace('\n', ' ').replace('\t', ' ')
+    val title = titleBase
+      .map(base => Ansi.sanitize(marker + base).replace('\n', ' ').replace('\t', ' '))
+      .filter(_ != lastTitle)
     val status: StatusLine.Program =
       if waiting then ("blocked", waitingFor.kind, waitingFor.message)
       else if busy() then ("working", "", operation)
       else resting
-    val retitled = titled && title != lastTitle
-    if retitled || status != lastStatus then
-      if retitled then
-        screen.writeStyle(s"${Ansi.Esc}]0;$title${Ansi.Bel}")
-        window.foreach(_.rename(title))
-        lastTitle = title
+    if title.isDefined || status != lastStatus then
+      title.foreach: name =>
+        screen.writeStyle(s"${Ansi.Esc}]0;$name${Ansi.Bel}")
+        window.foreach(_.rename(name))
+        lastTitle = name
       if status != lastStatus then
         screen.writeStyle(StatusLine.programStatus(status.state, status.kind, status.message))
       lastStatus = status
