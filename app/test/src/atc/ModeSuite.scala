@@ -104,6 +104,7 @@ class ModeSuite extends munit.FunSuite, ReplAssertions:
     // `user: UserIO^` is handed out by every mode, so the agent can always report.
     onlyIn(allModes.toSet, """println("reporting"); print(""); printf("%d", 1); 1""")
     onlyIn(allModes.toSet, """setTodos(List(Todo("t"))); markTodo("t", TodoStatus.Done); todos.size""")
+    onlyIn(allModes.toSet, """setTitle("t"); 1""")
     onlyIn(allModes.toSet, """ask("q?", List("a", "b")).isDefined""")
     onlyIn(allModes.toSet, """chat("hello").length""")
 

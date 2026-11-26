@@ -753,6 +753,11 @@ trait Interface:
   def setTaskNotes(notes: TaskNotes)(using UserIO^): Unit
   def taskNotes(using UserIO): TaskNotes
 
+  /** Name the user's terminal tab `title` (a few words) for the session, as `/title` does;
+   *  `""` gives it back its default name. Inside tmux it names the window too. Nothing
+   *  changes where atc does not name the tab (a `-p` run, `terminalTitle` off). */
+  def setTitle(title: String)(using UserIO^): Unit
+
   // ── Classified ──────────────────────────────────────────────────
 
   /** Wrap a value as `Classified`. */

@@ -528,7 +528,7 @@ monitor's message starts a turn when the agent is idle and you are not typing, a
 `/monitors` lists and stops them; the footer counts the running processes and monitors.
 
 The terminal tab, and inside tmux the window, is named `atc · <directory>` and marked while
-the agent works or waits for you; `/title <name>` renames it.
+the agent works or waits for you; `/title <name>`, or the agent, renames it.
 
 A `-p` run asks nothing: a permission the configuration does not grant fails instead of
 waiting. `--approve-all` approves such requests instead; use it only in a trusted setup. The

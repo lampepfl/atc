@@ -90,6 +90,7 @@ final class App(args: Cli.Args, val tui: Tui):
     def askUser(question: String, options: List[String], multiple: Boolean): Option[String] =
       if args.prompt.isDefined then None else withClockPaused(tui.askUser(question, options, multiple))
     def showTodos(items: List[Todo]): Unit = tui.showTodos(items)
+    def setTitle(title: String): Unit = tui.nameTab(title)
   /** Listings hide what git ignores unless the config turns that off. */
   private val gitIgnore: GitIgnore = if config.respectGitignore then GitIgnore(cwd, policy) else GitIgnore.Disabled
   val host: Host = Host(policy, cwd, output, llm, hostUi, gitIgnore, () => models.configuration.keyVariables)

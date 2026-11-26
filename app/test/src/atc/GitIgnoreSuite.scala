@@ -137,6 +137,7 @@ class GitIgnoreSuite extends munit.FunSuite:
     val ui = new HostUi:
       def askUser(question: String, options: List[String], multiple: Boolean): Option[String] = None
       def showTodos(items: List[atc.lib.Todo]): Unit = ()
+      def setTitle(title: String): Unit = ()
     Host(policy, root, output, llm, ui, gitIgnore)
 
   test("ls/walk/find/grepRecursive skip ignored paths; read and write still work"):

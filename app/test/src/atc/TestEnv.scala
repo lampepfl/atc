@@ -44,6 +44,8 @@ final class TestEnv(
   val questions: ListBuffer[(String, List[String], Boolean)] = ListBuffer()
   var answers: List[Option[String]] = Nil
   var shownTodos: List[Todo] = Nil
+  /** The tab titles the agent set, in order. */
+  val titles: ListBuffer[String] = ListBuffer()
 
   @volatile var session: Option[ReplSession] = None
 
@@ -109,6 +111,7 @@ final class TestEnv(
           a
         case Nil => None
     def showTodos(items: List[Todo]): Unit = shownTodos = items
+    def setTitle(title: String): Unit = titles += title
 
   val host: Host = Host(policy, root, output, llm, ui)
 

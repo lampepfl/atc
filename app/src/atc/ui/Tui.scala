@@ -136,14 +136,15 @@ final class Tui(historyFile: Path, nonInteractive: Boolean = false) extends Agen
 
   /** Whether atc names the terminal tab, and the tmux window (config `terminalTitle`). */
   @volatile var terminalTitle: Boolean = true
-  /** The tab's name unless `/title` gave it one: `atc · <directory>`. */
+  /** The tab's name unless `/title` or the agent gave it one: `atc · <directory>`. */
   private var directoryTitle = "atc"
   private var givenTitle: Option[String] = None
 
   private def showTitle(): Unit = statusLine.setTitle(Option.when(terminalTitle)(givenTitle.getOrElse(directoryTitle)))
 
-  /** `/title`: name the terminal tab `name` until the session ends, or give it its own name
-    * back (empty). The name in use, on one line; `None` when this terminal's tab is not named. */
+  /** `/title` and the agent's `setTitle`: name the terminal tab `name` until the session ends,
+    * or give it its own name back (empty). The name in use, on one line; `None` when this
+    * terminal's tab is not named. */
   def nameTab(name: String): Option[String] = screen.synchronized:
     givenTitle = Some(Notifier.clean(name)).filter(_.nonEmpty)
     showTitle()

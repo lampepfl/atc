@@ -1680,9 +1680,11 @@ the bell if the command cannot start. Alert text is sanitized, put on one line a
 whenever the status refreshes, on one line, writing only changes. The previous title is
 pushed on xterm's title stack (`CSI 22;0t`) at start and popped (`CSI 23;0t`) by `close`;
 terminals without the stack keep ATC's title until the shell sets its own. The title is
-`atc · <directory>`, or the name `/title <name>` gave the tab for the session (`/title` alone
-gives the directory's back). `"terminalTitle": false` leaves the title alone; it is not set
-before the config is read.
+`atc · <directory>`, or the name that `/title <name>` or the agent's `setTitle` gave the tab
+for the session, whichever came last (an empty name gives the directory's back).
+`setTitle` needs the full `UserIO^`, so no classified data reaches the title, which a
+command can read back from tmux. `"terminalTitle": false` leaves the title alone; it is not
+set before the config is read.
 
 Inside tmux (`TMUX` and `TMUX_PANE`) the title only becomes the pane's title, and what tmux
 shows as a window's tab is its name, which `automatic-rename` takes from the pane's command:

@@ -45,6 +45,12 @@ class CapabilitySuite extends munit.FunSuite, ReplAssertions:
     assertOk(run("""setTaskNotes(TaskNotes(goal = "finish", constraints = List("keep the API")))"""))
     assertFails(run("""classify("secret").map(s => setTaskNotes(TaskNotes(goal = s)))"""))
 
+  test("the agent names the tab, with no classified data"):
+    // The tmux window's name can be read back with a command.
+    assertOk(run("""setTitle("fix the parser")"""))
+    assertFails(run("""classify("secret").map(s => setTitle(s))"""))
+    assertEquals(env.titles.toList, List("fix the parser"))
+
   test("a full capability widens to its read-only view"):
     assertOk(run("""val ro: IOCap^{io.rd} = io; val rofs: FileSystem^{fs.rd} = fs; 1"""))
 
