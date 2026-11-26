@@ -249,8 +249,8 @@ final case class Config(
     * `terminal` (the terminal's own notification sequence), `bell` or `off`. */
   notifications: String = "auto",
   /** Name the terminal tab `atc · <directory>`, marked while a turn runs or waits for the
-    * user, and inside tmux name the window so unless the user named it. `false` leaves
-    * both alone. `/title` gives the tab another name for the session. */
+    * user, and inside tmux also the window, unless the user named it. `false` leaves both
+    * alone. `/title` gives the tab another name for the session. */
   terminalTitle: Boolean = true,
 ) derives ReadWriter
 

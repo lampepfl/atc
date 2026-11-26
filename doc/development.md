@@ -1031,7 +1031,7 @@ permission request, thirty for a finished turn.
 
 **Terminal title.** `terminalTitle` (on by default) names the terminal tab `atc · <directory>`,
 with `●` in front while a turn runs and `?` while it waits for an answer, and inside tmux
-names the window so unless the user named it (see [The terminal](#the-terminal)). `false`
+also the window, unless the user named it (see [The terminal](#the-terminal)). `false`
 leaves both alone.
 
 ### File rules and command patterns
@@ -1694,10 +1694,11 @@ window had one of its own. The escape sequence for a window name (`ESC k`) is no
 ignores it unless `allow-rename` is on, which it is not by default. The commands run on one
 daemon thread, with two seconds each, so the screen's lock never waits for tmux.
 
-The refresh of the title also sends the program status (OSC 7501, the Program Status Protocol) when it changes: `idle` at
-start, `working` with the footer's operation during a turn, `blocked` with `permission`,
-`question` or `auth` while a pop-up waits during one, then `done` or `error` with the turn's
-alert text, or `idle` after an interruption, until the next turn. `close` clears it. ATC
+The refresh of the title also sends the program status (OSC 7501, the Program Status
+Protocol) when it changes: `idle` at start, `working` with the footer's operation during a
+turn, `blocked` with `permission`, `question` or `auth` while a pop-up waits during one,
+then `done` or `error` with the turn's alert text, or `idle` after an interruption, until
+the next turn. `close` clears it. ATC
 sends it without querying for support, since terminals ignore an OSC they do not know, and
 does not wrap it for tmux, where the status would belong to the pane rather than the window.
 
